@@ -1,0 +1,21 @@
+# Equipment app
+equipment/pb_data/
+equipment/pocketbase
+equipment/pb_public/
+equipment/frontend/node_modules/
+equipment/frontend/dist/
+equipment/frontend/dev-dist/
+
+# Soundboard
+soundboard/node_modules/
+soundboard/dist/
+soundboard/midi-mapping.json
+soundboard/library.json
+soundboard/global.json
+
+# Audio library (large, user-provided)
+soundboard/syrinscape/
+
+# Misc
+*.log
+.DS_Store
