@@ -191,6 +191,19 @@ export function parseSoundsetXml(xmlString, files) {
       const maxTW = num(child(el, 'MaxTriggerWait'))
       const startMin = num(child(el, 'MinStartDelay'))
       const startMax = num(child(el, 'MaxStartDelay'))
+      const reverb = text(child(el, 'ReverbPreset'))
+      const bypassPosition = text(child(el, 'BypassPosition')) === 'true'
+      const hasPosition =
+        !bypassPosition &&
+        (child(el, 'MinAngle') || child(el, 'MaxAngle') || child(el, 'MinDistance') || child(el, 'MaxDistance'))
+      const position = hasPosition
+        ? {
+            minAngle: num(child(el, 'MinAngle'), -180),
+            maxAngle: num(child(el, 'MaxAngle'), 180),
+            minDistance: num(child(el, 'MinDistance'), 0),
+            maxDistance: num(child(el, 'MaxDistance'), 0),
+          }
+        : null
 
       const entries = childrenOf(child(el, 'Playlist'), 'PlaylistEntry')
       const resolved = []
@@ -214,6 +227,8 @@ export function parseSoundsetXml(xmlString, files) {
         kind,
         gain,
         randomise,
+        reverb,
+        position,
         files: resolved,
         trigger: { min: minTW, max: maxTW, startMin, startMax },
       })
