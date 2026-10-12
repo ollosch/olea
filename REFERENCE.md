@@ -44,13 +44,16 @@ olea/
   soundboard/          # soundboard (Express server.js + Vue source + built dist/)
     start.sh
     server.js
-    xml.js             # dependency-free XML parser + Syrinscape chapter parse/generate
-    generate-xml.js    # standalone script: generate XML for soundsets missing one
-    midi-mapping.json  # MIDI mapping (gitignored, created at runtime)
-    library.json       # user edits overlay: renames/hidden/groups/custom soundsets (gitignored)
+    xml.js             # dependency-free XML parser (Syrinscape chapter -> element model)
+    import.js          # CLI: Syrinscape pack folder -> config.json (XML is import-only)
+    SCHEMA.md          # the config.json / global.json schema doc
+    lib/
+      schema.js        # schema + normalization/validation helpers (shared server + frontend)
+    global.json        # app-level state: buses + global MIDI (gitignored, runtime-created)
     src/
     dist/              # built (gitignored)
-    syrinscape/        # audio library (gitignored, ~292MB, user-provided)
+    syrinscape/        # audio library (gitignored, ~292MB, user-provided); one folder (or
+                       #   chapter subfolder) per soundscape, each holding a config.json
 ```
 
 ---
@@ -173,71 +176,109 @@ cd equipment/frontend && npm run dev             # dev server, proxies /api
 
 ## 4. Soundboard app (Express + Vue)
 
-Fully separate from PocketBase (no DB — it only serves files + a tiny mapping JSON). Port **8091**.
+Fully separate from PocketBase (no DB — it only serves JSON state files + audio). Port **8091**.
+State is JSON only: one `config.json` per soundscape folder + a single `global.json`. The schema and
+its normalizers live in `soundboard/lib/schema.js` (shared by server and frontend) and are documented
+in `soundboard/SCHEMA.md`. Syrinscape XML is an **import format only** (read by `soundboard/import.js`).
 
 ### 4.1 `soundboard/server.js` (Express, ESM, port 8091)
 
-- `GET /api/library` — scans `OLEA_AUDIO_DIR` (default `soundboard/syrinscape`) → `{soundsets:[...], overlay}`.
-- `GET /api/files` — full file index for the editor's picker → `{folders:[{dir,name,files:[{name,file}]}]}`.
-- `POST /api/library` — save the user overlay (`OLEA_LIBRARY_FILE`, default `soundboard/library.json`).
-- `GET /api/mapping` / `POST /api/mapping` — MIDI mapping JSON (`OLEA_MAPPING_FILE`, default `soundboard/midi-mapping.json`).
-- `GET /audio/{soundset}/{file}` — `express.static(AUDIO_DIR)` (native Range support).
+- `GET /api/library` — recursively scans `OLEA_AUDIO_DIR` (default `soundboard/syrinscape`) for
+  `config.json` files → `{ soundsets: [...], global }`. Each soundset is the normalized config plus a
+  `dir` field (folder path relative to the audio root, `/`-separated; may contain a `/` for chapter
+  subfolders). Sorted by name. Cached in-process; invalidated on any write.
+- `GET /api/files` — editor picker index: top-level folders + their audio files →
+  `{ folders: [{ dir, name, files: [{name,file}] }] }`.
+- `GET /api/soundset/:id` — one soundset (`{ ...config, dir: id }`); `:id` = the soundscape's `dir`
+  (URL-encoded). 404 if missing.
+- `POST /api/soundset/:id` — write a full config (body = config object; normalized via
+  `normalizeConfig`); creates the folder if missing; invalidates cache; → `{ ok, soundset }`.
+- `DELETE /api/soundset/:id` — recursively delete the folder (config.json + audio); → `{ ok }`.
+- `GET /api/global` / `POST /api/global` — read/write `global.json` (normalized via `normalizeGlobal`).
+- `GET /audio/*` — `express.static(AUDIO_DIR)` (native Range support for seeking).
 - Serves `soundboard/dist/` (built frontend) with SPA fallback for non-`/api`/`/audio` GETs.
+- `resolveSoundsetDir(id)` rejects any `:id` that is empty, absolute, or normalizes outside
+  `OLEA_AUDIO_DIR` (path-traversal guard) for GET/POST/DELETE.
 
-Audio model (differs from older versions): each top-level folder is scanned for `.ogg`/`.mp3`/`.wav`
-files plus `.xml` files. Each XML → one soundset (`id = "<folder>::<xmlBasename>"`); a folder with no
-XML → one soundset generated from filename heuristics (`id = "<folder>"`), and a `<folder>.generated.xml`
-is written to disk if missing. `soundboard/xml.js` holds the parser (`parseXml`, `parseSoundsetXml`) and the
-generator (`generateSoundsetXml`, `elementsFromFiles`).
+Env: `OLEA_AUDIO_DIR` (default `soundboard/syrinscape`), `OLEA_GLOBAL_FILE` (default
+`soundboard/global.json`), `PORT` (default 8091).
 
-Soundset shape:
-```
-{ id, dir, name, gain, hasXml, elements: [{ id, name, kind: 'loop'|'random'|'oneshot',
-  gain, randomise, files: [{name, file}], trigger: {min,max,startMin,startMax} }], moods: [...] }
-```
-Classification: MusicElements/LoopElements and any element with `MaxTriggerWait<=0` or negative trigger
-wait → `loop`; SfxElements/MusicElements with positive trigger wait → `random`; OneshotElements →
-`oneshot`. The library is cached in-process for 5s.
+### 4.2 Data model
 
-### 4.2 Frontend modules (`soundboard/src/`)
+Soundscape `config.json` (lives in each soundscape folder under `soundboard/syrinscape/`):
 
-- `engine.js` — Web Audio. Reactive `state = { activeLoops:Set, loading:Set, activeOneshots:Set }`
-  keyed by element id (a `Set` of live instances; one-shots are tracked so they can be stopped).
-  Loop elements with a multi-file playlist cycle through samples, crossfading on each advance.
-  API: `playLoopElement(id,{files,gain,randomise})`, `stopLoopElement(id,{fadeOut})`,
-  `setLoopGain(id,v)`, `isLoopPlaying(id)`, `playOneShot(id,url,{gain})`, `stopOneShot(id)`,
-  `stopAllOneshots()`, `stopAllLoops()`, `isOneShotPlaying(id)`, `setMasterGain(v)`, `stopAll()`.
-- `midi.js` — unchanged Web MIDI wrapper (`connectMidi`, `onMidiMessage`).
-- `store.js` — the single `reactive` state + all actions + MIDI dispatch. State: `rawSoundsets`,
-  `overlay` (`{renames,hidden,addedElements,customSoundsets}`), `files`, `activeId`, `playing`,
-  `masterVolume`, `elementGains` (keyed `${soundsetId}::${elementId}`), `mapping`, `learning`,
-  `midiConnected`, `midiError`. `mergedSoundsets` (computed) layers the overlay over the raw scan.
-  Actions: `startSoundset` (sets activeId then starts loops + randoms), `startLoops`/`stopLoops` and
-  `startRandoms`/`stopRandoms` (independent sets, tracked by `store.loopsPlaying`/`randomsPlaying`),
-  `stopSoundset`, `stopEffects` (`engine.stopAllOneshots`), `leaveSoundset`, `toggleSoundset`,
-  `toggleLoopElement`, `playOneshotElement`, `stopOneshotElement`, `toggleRandomElement`,
-  `setElementVolume`/`resetElementVolume`/`resetSectionVolume`/`isVolumeOverridden`, `setMaster`,
-  `applyMood`, plus learn/`connectMidi`.
-  Editor actions: `renameElement`, `hideElement`/`unhideElement`, `addElement`/`updateElement`/
-  `deleteElement`, `createSoundset`/`renameSoundset`/`deleteSoundset`, `elementSource`,
-  `saveOverlay`, `loadFiles`. Random elements are driven by `setTimeout` schedulers (first fire
-  after `startMin..startMax`, then every `min..max` seconds).
-- `App.vue` + `components/LibraryPanel.vue`, `SoundsetPanel.vue`, `ElementRow.vue`, `GroupEditor.vue`.
-
-### 4.3 MIDI mapping format (`soundboard/midi-mapping.json`)
-
-```json
+```jsonc
 {
-  "notes": { "9:36": { "type": "oneshot", "soundsetId": "<folder>::<xml>", "elementId": "slug" } },
-  "ccs":    { "1:74": { "type": "master" } }
+  "version": 1,
+  "id": "uuid",                 // stable; renames/disable never change it
+  "name": "Car Chase 2017",
+  "disabled": false,            // hidden from the main library list
+  "elements": [ { "id": "uuid", "name", "kind": "loop|random|oneshot", "gain",
+    "randomise": "shuffle|random|null", "reverb": "preset|null", "position": null,
+    "files": ["Foo.ogg"], "trigger": {"min","max","startMin","startMax"} } ],
+  "hidden": ["elementUuid"],    // elements hidden from this soundscape
+  "moods": [ { "id": "uuid", "name", "params": { "<elementId>": {"plays", "volume"} } } ],
+  "midi": { "notes": {}, "ccs": {} }
 }
 ```
 
-Note actions: `{type:'oneshot'|'loop'|'random'|'soundset', soundsetId, elementId?}`. CC controls:
-`{type:'master'}` or `{type:'element', soundsetId, elementId}` (element volume). The old `{type:'effect'}`
-CC action is no longer used (per-element volume replaced the single global effect gain) — re-learn it.
+- `files[]` are relative to the config's own folder: bare `"Foo.ogg"` for own files, `"../Other/Foo.ogg"`
+  for a sibling folder. The frontend resolves them to `/audio/<path>` (`store.js` `resolvePath`/`audioUrl`).
+- `kind`: `loop` = continuous; `random` = auto-triggered at `trigger` interval; `oneshot` = manual.
+- `reverb` = a preset from `REVERB_PRESETS` in `lib/schema.js` (or `null`). `position` (3D/pan) is
+  stored but not rendered (future feature).
 
-### 4.4 Web MIDI caveats
+`global.json` (gitignored, at `soundboard/global.json`):
+`{ "version": 1, "buses": {"loop","random","effects"}, "midi": {"notes","ccs"} }`. `master` volume is
+session-only (in-memory, default 0.8), never persisted.
+
+Import: `node soundboard/import.js [folder]` reads a Syrinscape pack (XML + audio) and writes
+`config.json`; no arg imports every folder lacking one. A folder with a single XML → one soundscape;
+a folder with multiple chapter XMLs → a container whose chapters each get a subfolder + `config.json`
+with `../` file references. Never overwrites an existing `config.json`. Reuses `xml.js`
+(`parseSoundsetXml` now also returns `reverb` + `position`; `elementsFromFiles` for XML-less folders).
+
+### 4.3 Frontend modules (`soundboard/src/`)
+
+- `engine.js` — Web Audio. Reactive `state = { activeLoops:Set, loading:Set, activeOneshots:Set }`.
+  Loop elements cycle a multi-file playlist with crossfade; one-shots are tracked so they can be
+  stopped. Three bus gains + master, plus a **reverb send**: a lazily-created `ConvolverNode` per
+  preset, a shared return gain, and per-element dry/wet. Impulse responses are generated
+  programmatically (exponentially-decaying noise) for `REVERB_PRESETS`. `playLoopElement`/`playOneShot`
+  take optional `reverb` + `bus`.
+- `store.js` — single `reactive` state + actions + MIDI dispatch (no overlay/merge). State:
+  `soundsets`, `global`, `files`, `activeId`, `activeMoodId`, `masterVolume` (session-only),
+  `volumeOverrides` (keyed `${soundsetId}::${elementId}`), `learning`, `loopsPlaying`,
+  `randomsPlaying`, `midiConnected`, `midiError`. Volume baseline = active mood's `params[el].volume`
+  ?? `el.gain`; `resetElementVolume` clears an override back to that baseline. Actions: transport
+  (`startLoops/stopLoops/startRandoms/stopRandoms/stopEffects/stopEverything`, `startSoundset`),
+  element play/stop (`toggleLoopElement`, `playOneshotElement`, `toggleRandomElement`,
+  `playRandomOnce`), volume (`setElementVolume/resetElementVolume/resetSectionVolume`, `setMaster`,
+  `setLoopsVolume/.../setEffectsVolume` → persisted to `global.buses`), moods (`applyMood` + CRUD),
+  editor (`renameElement`, `hideElement`/`unhideElement`, `addElement`/`updateElement`/`deleteElement`,
+  `createSoundset`/`renameSoundset`/`disableSoundset`/`enableSoundset`/`deleteSoundset`), MIDI learn +
+  dispatch (local soundscape bindings override global). Persists via `POST /api/soundset/:dir` and
+  `POST /api/global`. Random elements use `setTimeout` schedulers (first fire after
+  `startMin..startMax`, then every `min..max` seconds).
+- `midi.js` — unchanged Web MIDI wrapper (`connectMidi`, `onMidiMessage`).
+- `App.vue` + `components/{LibraryPanel,SoundsetPanel,ElementRow,GroupEditor,MoodEditor}.vue`.
+  LibraryPanel lists enabled soundsets + a "Disabled" section (enable/delete, `window.confirm` before
+  delete). SoundsetPanel has transport, per-bus volume sliders, moods, and Loops/Random/Effects lists.
+  GroupEditor edits name/kind/interval/volume/reverb + file picker. MoodEditor edits per-element
+  plays/volume.
+
+### 4.4 MIDI mapping (stored in `config.json.midi` + `global.json.midi`)
+
+Keys are `"channel:note"` / `"channel:cc"` strings. Local bindings live in a soundscape's
+`config.json.midi` (scoped to that soundscape); global bindings live in `global.json.midi`. Local
+overrides global when both bind the same key.
+
+- Local notes: `{type:'oneshot'|'loop'|'random', elementId}`, `{type:'mood', moodId}`,
+  `{type:'soundset'}` (toggle this soundscape). Local CCs: `{type:'element', elementId}` (volume).
+- Global notes: `{type:'stop'}`, `{type:'soundset', soundsetId}`. Global CCs: `{type:'master'}`,
+  `{type:'bus', bus:'loop'|'random'|'effects'}`.
+
+### 4.5 Web MIDI caveats
 
 - Requires a **secure context**: open via `http://localhost:8091` (not the LAN IP) or HTTPS.
   `connectMidi()` checks `window.isSecureContext` and surfaces a hint.
@@ -246,11 +287,12 @@ CC action is no longer used (per-element volume replaced the single global effec
 - MPK Mini: pads send notes on channel 10, keys on channel 1, knobs send CC. "Learn mode"
   captures whatever channel/note/CC arrives, so no hardcoding needed.
 
-### 4.5 Soundboard build/run
+### 4.6 Soundboard build/run
 
 ```bash
 ./soundboard/start.sh                 # node soundboard/server.js on 8091 (or PORT env)
 OLEA_AUDIO_DIR=/other/folder ./soundboard/start.sh
+node soundboard/import.js             # import Syrinscape packs -> config.json (first run)
 cd soundboard && npm install && npm run dev   # Vite dev, proxies /api + /audio → 8091
 cd soundboard && npm run build                # → soundboard/dist/
 ```
@@ -261,12 +303,13 @@ cd soundboard && npm run build                # → soundboard/dist/
 
 - **Done:** equipment manager (roles, multi-game, per-game currencies, items catalog + instances,
   give/use/drop, money transfers, optimized totals, realtime, print), soundboard (library, loop +
-  one-shot + random elements, per-element volumes from Syrinscape XML, moods, fades, playlist
-  cycling, Web MIDI learn + mapping persistence, per-element stop, stop-loops vs stop-effects), and a
-  **soundset editor** (rename/hide/add/remove elements, custom groups with editable loop/random/
-  one-shot kind + random interval, create/rename/delete custom soundsets — persisted in
-  `soundboard/library.json` and merged over the scan client-side).
-- **Not done / planned:** knob → LED color/brightness (needs a Zigbee/Hue bridge).
+  one-shot + random elements, moods, fades, playlist cycling, per-element volume + reverb presets,
+  Web MIDI learn + persistence, per-element stop, stop-loops vs stop-effects), and a **soundscape
+  editor** (rename/hide/add/remove elements, custom groups with editable loop/random/one-shot kind +
+  random interval + reverb, mood create/edit/delete, create/rename/disable/enable/delete soundsets —
+  all persisted in each soundscape's own `config.json` / `global.json`).
+- **Not done / planned:** stereo panning from the stored `position` data; knob → LED
+  color/brightness (needs a Zigbee/Hue bridge).
 
 ---
 
@@ -281,7 +324,7 @@ cd soundboard && npm run build                # → soundboard/dist/
 - The equipment frontend build uses `emptyOutDir` — note: `equipment/frontend/vite.config.js` writes to
   `../pb_public`. The soundboard builds to its own `soundboard/dist` (no conflict).
 - `soundboard/syrinscape/` (~292MB) and runtime dirs (`equipment/pb_data/`, `soundboard/dist/`,
-  `soundboard/node_modules/`, `soundboard/midi-mapping.json`, `equipment/pocketbase`) are gitignored.
-- The soundboard auto-writes `<folder>.generated.xml` into any soundset folder lacking an XML file;
-  these live inside `soundboard/syrinscape/` and are also gitignored. `node soundboard/generate-xml.js` does the same
-  thing manually.
+  `soundboard/node_modules/`, `soundboard/global.json`, `equipment/pocketbase`) are gitignored.
+  Imported `config.json` files live inside `soundboard/syrinscape/` (also gitignored).
+- The soundboard no longer auto-generates XML. Run `node soundboard/import.js` (once) to turn
+  existing Syrinscape packs into `config.json` files; it is idempotent (never overwrites).

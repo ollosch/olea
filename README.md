@@ -45,20 +45,24 @@ Open `http://localhost:8090` / `http://localhost:8091` on the host, or
 
 ## Soundboard
 
-Serves the `soundboard/syrinscape/` folder. Each subfolder is a **soundset**; `.ogg`/`.mp3`/`.wav`
-files in it are grouped into **elements** — a loop (continuous ambience), a random effect
-(auto-triggered at bounded intervals), or a one-shot. If a soundset has a Syrinscape `.xml` file, its
-element names, volumes and random-trigger intervals are read from it; otherwise a minimal XML is
-generated automatically on first run.
+Serves the `soundboard/syrinscape/` folder. Each **soundscape** is a folder containing a `config.json`
+(the soundboard's own JSON — see `soundboard/SCHEMA.md`); the audio files it references are grouped
+into **elements** — a loop (continuous ambience), a random effect (auto-triggered at bounded
+intervals), or a one-shot. On first run, import existing Syrinscape packs with
+`node soundboard/import.js` (it reads each pack's `.xml` and writes a `config.json`; campaign packs
+with multiple chapters are split into a subfolder per chapter).
 
 - Set the audio folder with `OLEA_AUDIO_DIR=/path/to/folder ./soundboard/start.sh`.
-- MIDI mappings are stored in `soundboard/midi-mapping.json` (create one by assigning controls in the UI).
-- **Edit** (button on a soundset): rename, hide, add or remove elements; build **custom groups**
-  (pick files from anywhere in the library, choose loop / random / one-shot, and set the random
-  interval). **+ New soundscape** creates your own soundset. Edits live in `soundboard/library.json`.
+- MIDI mappings live in each soundscape's `config.json` (per-soundscape) and in
+  `soundboard/global.json` (app-level). Assign them in the UI via "learn" mode.
+- **Edit** (button on a soundscape): rename, hide, add or remove elements; build **custom groups**
+  (pick files from anywhere in the library, choose loop / random / one-shot, set the random interval
+  and a reverb preset); create/edit **moods** (per-element volume + play presets). **+ New soundscape**
+  creates your own (its audio can come from any pack).
+- Any soundscape can be **disabled** (hidden from the main list; re-enabled from the "Disabled"
+  section) or **deleted** (removes the folder and its files).
 - **Web MIDI** works in Chrome/Edge out of the box. In Firefox, enable `dom.webmidi.enabled` in
   `about:config` or install a Web MIDI add-on.
-- Regenerate XMLs for soundsets that don't have one with `node soundboard/generate-xml.js`.
 
 ## Development
 
@@ -90,6 +94,9 @@ equipment/       # equipment manager (PocketBase + Vue 3)
   pb_data/       #   runtime database + storage (gitignored)
 soundboard/      # soundboard (Express server.js + Vue 3 frontend)
   src/           #   Vue 3 source
+  lib/           #   schema + validation helpers (shared server/frontend)
+  import.js      #   Syrinscape XML -> config.json importer
+  SCHEMA.md      #   the config.json / global.json schema
   syrinscape/    #   audio library (gitignored, user-provided)
   server.js      #   Express backend
 start.sh         # starts both apps
