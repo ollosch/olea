@@ -8,14 +8,12 @@ import {
   connectMidi,
   loadLibrary,
   loadFiles,
-  loadMapping,
 } from './store'
 import LibraryPanel from './components/LibraryPanel.vue'
 import SoundsetPanel from './components/SoundsetPanel.vue'
 
 onMounted(async () => {
   await loadLibrary()
-  await loadMapping()
   loadFiles()
   connectMidi()
 })

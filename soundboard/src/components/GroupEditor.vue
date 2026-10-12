@@ -1,8 +1,10 @@
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
-import { store } from '../store'
+import { store, fileLocation } from '../store'
+import { REVERB_PRESETS } from '../../lib/schema.js'
 
 const props = defineProps({
+  soundset: { type: Object, required: true },
   element: { type: Object, default: null },
 })
 
@@ -13,6 +15,7 @@ const kind = ref('oneshot')
 const gain = ref(1)
 const min = ref(10)
 const max = ref(30)
+const reverb = ref('')
 const search = ref('')
 const expanded = ref(null)
 const selected = reactive(new Map()) // "dir::file" -> { dir, file, name }
@@ -26,8 +29,12 @@ watch(
     gain.value = el?.gain ?? 1
     min.value = el?.trigger?.min ?? 10
     max.value = el?.trigger?.max ?? 30
+    reverb.value = el?.reverb || ''
     if (el?.files) {
-      for (const f of el.files) selected.set(key(f), { dir: f.dir, file: f.file, name: f.name })
+      for (const f of el.files) {
+        const loc = fileLocation(props.soundset, f)
+        selected.set(key(loc), loc)
+      }
     }
   },
   { immediate: true }
@@ -81,14 +88,14 @@ const selectedList = computed(() => Array.from(selected.values()))
 
 function save() {
   if (!name.value.trim() || !selected.size) return
-  const files = Array.from(selected.values())
   emit('save', {
     name: name.value.trim(),
     kind: kind.value,
     gain: Number(gain.value) || 1,
     randomise: 'random',
-    files,
+    reverb: reverb.value || null,
     trigger: { min: Number(min.value) || 0, max: Number(max.value) || 0, startMin: 0, startMax: 0 },
+    files: Array.from(selected.values()).map((f) => ({ dir: f.dir, file: f.file })),
   })
 }
 </script>
@@ -127,6 +134,14 @@ function save() {
           <label>Every (max s)</label>
           <input v-model.number="max" type="number" min="0" step="1" class="text-input" />
         </div>
+      </div>
+
+      <div class="field">
+        <label>Reverb</label>
+        <select v-model="reverb" class="text-input">
+          <option value="">None</option>
+          <option v-for="p in REVERB_PRESETS" :key="p" :value="p">{{ p }}</option>
+        </select>
       </div>
 
       <div class="field">

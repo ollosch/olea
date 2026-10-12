@@ -1,12 +1,13 @@
 <script setup>
 import { ref } from 'vue'
 import {
-  store,
-  mergedSoundsets,
+  enabledSoundsets,
+  disabledSoundsets,
   startSoundset,
   createSoundset,
   deleteSoundset,
-  isCustomSoundset,
+  disableSoundset,
+  enableSoundset,
 } from '../store'
 
 const creating = ref(false)
@@ -15,7 +16,7 @@ const newName = ref('')
 function counts(ss) {
   let loops = 0
   let effects = 0
-  for (const el of ss.elements) {
+  for (const el of ss.elements || []) {
     if (el.kind === 'loop' || el.kind === 'random') loops++
     else effects++
   }
@@ -27,11 +28,17 @@ function beginCreate() {
   creating.value = true
 }
 
-function confirmCreate() {
+async function confirmCreate() {
   const name = newName.value.trim() || 'New soundscape'
-  const id = createSoundset(name)
   creating.value = false
-  startSoundset(id)
+  const id = await createSoundset(name)
+  if (id) startSoundset(id)
+}
+
+function confirmDelete(ss) {
+  if (window.confirm('Delete this soundscape and all its audio files?')) {
+    deleteSoundset(ss.id)
+  }
 }
 </script>
 
@@ -54,11 +61,11 @@ function confirmCreate() {
       <button v-else @click="beginCreate">+ New soundscape</button>
     </div>
 
-    <p v-if="!mergedSoundsets.length" class="muted">No soundsets found</p>
+    <p v-if="!enabledSoundsets.length && !disabledSoundsets.length" class="muted">No soundsets found</p>
 
-    <div v-else class="grid">
+    <div v-if="enabledSoundsets.length" class="grid">
       <div
-        v-for="ss in mergedSoundsets"
+        v-for="ss in enabledSoundsets"
         :key="ss.id"
         class="card soundset-card"
         role="button"
@@ -66,23 +73,37 @@ function confirmCreate() {
         @click="startSoundset(ss.id)"
         @keydown.enter="startSoundset(ss.id)"
       >
-        <span class="name">
-          {{ ss.name }}
-          <span v-if="isCustomSoundset(ss.id)" class="tag">custom</span>
-        </span>
+        <span class="name">{{ ss.name }}</span>
         <span class="small muted">
           {{ counts(ss).loops }} loops · {{ counts(ss).effects }} effects
         </span>
-        <button
-          v-if="isCustomSoundset(ss.id)"
-          class="danger del"
-          title="Delete soundscape"
-          @click.stop="deleteSoundset(ss.id)"
-        >
-          delete
-        </button>
+        <div class="row card-actions">
+          <button
+            class="learn"
+            title="Disable soundscape"
+            @click.stop="disableSoundset(ss.id)"
+          >
+            disable
+          </button>
+          <button
+            class="learn danger"
+            title="Delete soundscape"
+            @click.stop="confirmDelete(ss)"
+          >
+            delete
+          </button>
+        </div>
       </div>
     </div>
+
+    <section v-if="disabledSoundsets.length" class="disabled-section">
+      <h3>Disabled</h3>
+      <div v-for="ss in disabledSoundsets" :key="ss.id" class="row disabled-row">
+        <span class="grow">{{ ss.name }}</span>
+        <button class="learn" @click="enableSoundset(ss.id)">enable</button>
+        <button class="learn danger" @click="confirmDelete(ss)">delete</button>
+      </div>
+    </section>
   </section>
 </template>
 
@@ -124,22 +145,26 @@ function confirmCreate() {
   font-weight: 600;
 }
 
-.tag {
-  font-size: 0.7rem;
-  font-weight: 500;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  padding: 0 0.3rem;
-  margin-left: 0.4rem;
-  vertical-align: middle;
+.card-actions {
+  margin-top: auto;
 }
 
-.del {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  padding: 0.2rem 0.4rem;
-  font-size: 0.7rem;
+.learn {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.learn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.disabled-section {
+  margin-top: 1.25rem;
+}
+
+.disabled-row {
+  padding: 0.25rem 0;
 }
 </style>

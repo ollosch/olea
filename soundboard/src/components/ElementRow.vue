@@ -20,7 +20,6 @@ import {
   renameElement,
   hideElement,
   deleteElement,
-  elementSource,
 } from '../store'
 
 const props = defineProps({
@@ -33,12 +32,7 @@ const emit = defineEmits(['edit'])
 
 const renaming = ref(null)
 
-const source = computed(() => elementSource(props.soundset.id, props.element.id))
-const isScanned = computed(() => source.value === 'scanned')
-const isEditable = computed(() => source.value !== 'scanned')
-
 const kind = computed(() => props.element.kind)
-
 const displayName = computed(() => props.element.name)
 const count = computed(() => props.element.files?.length || 0)
 const interval = computed(() =>
@@ -48,10 +42,10 @@ const interval = computed(() =>
 const kindLabel = computed(() => (kind.value === 'loop' ? 'loop' : kind.value === 'random' ? 'random' : 'effect'))
 
 function noteAction() {
-  return { type: kind.value, soundsetId: props.soundset.id, elementId: props.element.id }
+  return { type: kind.value, elementId: props.element.id, scope: 'local' }
 }
 function volAction() {
-  return { type: 'element', soundsetId: props.soundset.id, elementId: props.element.id }
+  return { type: 'element', elementId: props.element.id, scope: 'local' }
 }
 
 function isLearningNote(action) {
@@ -60,8 +54,8 @@ function isLearningNote(action) {
     !!l &&
     l.mode === 'note' &&
     l.action.type === action.type &&
-    l.action.soundsetId === action.soundsetId &&
-    (l.action.elementId ?? null) === (action.elementId ?? null)
+    (l.action.elementId ?? null) === (action.elementId ?? null) &&
+    (l.action.scope ?? null) === (action.scope ?? null)
   )
 }
 function isLearningCC(action) {
@@ -70,8 +64,8 @@ function isLearningCC(action) {
     !!l &&
     l.mode === 'cc' &&
     l.action.type === action.type &&
-    l.action.soundsetId === action.soundsetId &&
-    (l.action.elementId ?? null) === (action.elementId ?? null)
+    (l.action.elementId ?? null) === (action.elementId ?? null) &&
+    (l.action.scope ?? null) === (action.scope ?? null)
   )
 }
 
@@ -186,13 +180,11 @@ const showStop = computed(() => kind.value === 'oneshot' && isOneshotPlaying(pro
     </button>
 
     <template v-if="editing">
-      <button v-if="isScanned" class="learn" title="Hide from this soundset" @click="hideElement(soundset.id, element.id)">
+      <button class="learn" title="Hide from this soundset" @click="hideElement(soundset.id, element.id)">
         hide
       </button>
-      <template v-else>
-        <button class="learn" title="Edit group" @click="emit('edit', element)">edit</button>
-        <button class="learn danger" title="Delete group" @click="deleteElement(soundset.id, element.id)">delete</button>
-      </template>
+      <button class="learn" title="Edit group" @click="emit('edit', element)">edit</button>
+      <button class="learn danger" title="Delete group" @click="deleteElement(soundset.id, element.id)">delete</button>
     </template>
   </div>
 </template>

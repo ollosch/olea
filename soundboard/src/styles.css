@@ -79,6 +79,26 @@ input[type='range'] {
   accent-color: var(--accent);
 }
 
+select {
+  font: inherit;
+  color: var(--text);
+}
+
+select option {
+  background: var(--bg-2);
+  color: var(--text);
+}
+
+.disabled-section {
+  margin-top: 1.25rem;
+  border-top: 1px dashed var(--border);
+  padding-top: 1rem;
+}
+
+.disabled-section h3 {
+  color: var(--text-dim);
+}
+
 h1,
 h2,
 h3 {

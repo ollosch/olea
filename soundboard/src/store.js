@@ -465,10 +465,12 @@ export function applyMood(ssId, moodId) {
   store.randomsPlaying = randoms.some((el) => randomTimers.has(elKey(ss.id, el.id)))
 }
 
-export function createMood(ssId, name) {
+export function createMood(ssId, name, params = {}) {
   const ss = store.soundsets.find((s) => s.id === ssId)
   if (!ss) return
-  ss.moods.push(newMood(name))
+  const mood = newMood(name)
+  mood.params = params
+  ss.moods.push(mood)
   persistSoundset(ss)
 }
 

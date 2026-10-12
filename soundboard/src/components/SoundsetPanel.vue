@@ -13,19 +13,21 @@ import {
   leaveSoundset,
   soundsetElements,
   applyMood,
+  createMood,
+  updateMood,
+  deleteMood,
   learnNote,
   learnCC,
   cancelLearn,
-  clearMapping,
   addElement,
   updateElement,
   unhideElement,
-  isCustomSoundset,
   renameSoundset,
   resetSectionVolume,
 } from '../store'
 import ElementRow from './ElementRow.vue'
 import GroupEditor from './GroupEditor.vue'
+import MoodEditor from './MoodEditor.vue'
 
 const props = defineProps({
   soundset: { type: Object, required: true },
@@ -34,33 +36,44 @@ const props = defineProps({
 const editing = ref(false)
 const showGroupEditor = ref(false)
 const groupBeingEdited = ref(null)
+const showMoodEditor = ref(false)
+const moodBeingEdited = ref(null)
 const renamingSoundset = ref(null)
 
 const loops = computed(() => soundsetElements(props.soundset).loops)
 const oneshots = computed(() => soundsetElements(props.soundset).oneshots)
 const randoms = computed(() => soundsetElements(props.soundset).randoms)
 const moods = computed(() => props.soundset.moods || [])
-const custom = computed(() => isCustomSoundset(props.soundset.id))
 
 const hiddenElements = computed(() => {
-  const raw = store.rawSoundsets.find((s) => s.id === props.soundset.id)
-  if (!raw) return []
-  const hiddenIds = new Set(store.overlay.hidden[props.soundset.id] || [])
-  return raw.elements.filter((el) => hiddenIds.has(el.id))
+  const hiddenIds = new Set(props.soundset.hidden || [])
+  return (props.soundset.elements || []).filter((el) => hiddenIds.has(el.id))
 })
 
-function soundsetAction() {
-  return { type: 'soundset', soundsetId: props.soundset.id }
+function sameAction(a, b) {
+  return (
+    a.type === b.type &&
+    (a.elementId ?? null) === (b.elementId ?? null) &&
+    (a.scope ?? null) === (b.scope ?? null)
+  )
 }
 
 function isLearningNote(action) {
   const l = store.learning
-  return !!l && l.mode === 'note' && l.action.type === action.type && l.action.soundsetId === action.soundsetId
+  return !!l && l.mode === 'note' && sameAction(l.action, action)
 }
 
 function isLearningCC(action) {
   const l = store.learning
-  return !!l && l.mode === 'cc' && l.action.type === action.type
+  return !!l && l.mode === 'cc' && sameAction(l.action, action)
+}
+
+function soundsetAction() {
+  return { type: 'soundset', scope: 'local' }
+}
+
+function masterAction() {
+  return { type: 'master', scope: 'global' }
 }
 
 function openNewGroup() {
@@ -78,6 +91,26 @@ function saveGroup(def) {
   else addElement(props.soundset.id, def)
   showGroupEditor.value = false
   groupBeingEdited.value = null
+}
+
+function openNewMood() {
+  moodBeingEdited.value = null
+  showMoodEditor.value = true
+}
+
+function openEditMood(m) {
+  moodBeingEdited.value = m
+  showMoodEditor.value = true
+}
+
+function saveMood(def) {
+  if (moodBeingEdited.value) {
+    updateMood(props.soundset.id, moodBeingEdited.value.id, def)
+  } else {
+    createMood(props.soundset.id, def.name, def.params)
+  }
+  showMoodEditor.value = false
+  moodBeingEdited.value = null
 }
 
 function beginRenameSoundset() {
@@ -104,13 +137,10 @@ function commitRenameSoundset() {
         @keydown.esc="renamingSoundset = null"
         @blur="commitRenameSoundset"
       />
-      <h2 v-else class="soundset-name">
-        {{ soundset.name }}
-        <span v-if="custom" class="tag">custom</span>
-      </h2>
+      <h2 v-else class="soundset-name">{{ soundset.name }}</h2>
 
       <button
-        v-if="custom && editing"
+        v-if="!renamingSoundset"
         class="learn"
         title="Rename soundscape"
         @click="beginRenameSoundset"
@@ -121,7 +151,7 @@ function commitRenameSoundset() {
       <button
         class="learn"
         :class="{ active: isLearningNote(soundsetAction()) }"
-        title="Assign pad/key"
+        title="Assign pad/key to toggle this soundscape"
         @click="learnNote(soundsetAction())"
       >
         learn
@@ -151,15 +181,25 @@ function commitRenameSoundset() {
 
     <div v-if="editing" class="editbar">
       <button class="primary" @click="openNewGroup">+ Add group</button>
+      <button class="primary" @click="openNewMood">+ New mood</button>
       <span class="small muted">Rename, hide, add or remove elements. Hiding keeps the original files.</span>
     </div>
 
-    <section v-if="moods.length" class="block">
+    <section v-if="moods.length || editing" class="block">
       <h3>Moods</h3>
       <div class="row wrap">
-        <button v-for="(m, i) in moods" :key="m.name" class="mood" @click="applyMood(soundset.id, i)">
-          {{ m.name }}
-        </button>
+        <template v-for="m in moods" :key="m.id">
+          <button
+            class="mood"
+            :class="{ active: store.activeMoodId === m.id }"
+            @click="applyMood(soundset.id, m.id)"
+          >
+            {{ m.name }}
+          </button>
+          <button v-if="editing" class="learn" title="Edit mood" @click="openEditMood(m)">edit</button>
+          <button v-if="editing" class="learn danger" title="Delete mood" @click="deleteMood(soundset.id, m.id)">delete</button>
+        </template>
+        <span v-if="!moods.length" class="small muted">No moods yet</span>
       </div>
     </section>
 
@@ -173,7 +213,7 @@ function commitRenameSoundset() {
             min="0"
             max="2"
             step="0.01"
-            :value="store.loopsVolume"
+            :value="store.global.buses.loop"
             @input="setLoopsVolume(Number($event.target.value))"
           />
         </label>
@@ -204,7 +244,7 @@ function commitRenameSoundset() {
             min="0"
             max="2"
             step="0.01"
-            :value="store.randomsVolume"
+            :value="store.global.buses.random"
             @input="setRandomsVolume(Number($event.target.value))"
           />
         </label>
@@ -222,6 +262,7 @@ function commitRenameSoundset() {
         :editing="editing"
         @edit="openEditGroup"
       />
+      <p v-if="!randoms.length" class="muted small">No random elements</p>
     </section>
 
     <section class="block">
@@ -234,7 +275,7 @@ function commitRenameSoundset() {
             min="0"
             max="2"
             step="0.01"
-            :value="store.effectsVolume"
+            :value="store.global.buses.effects"
             @input="setEffectsVolume(Number($event.target.value))"
           />
         </label>
@@ -270,21 +311,29 @@ function commitRenameSoundset() {
         <div class="grow"></div>
         <button
           class="learn"
-          :class="{ active: isLearningCC({ type: 'master' }) }"
+          :class="{ active: isLearningCC(masterAction()) }"
           title="Assign knob"
-          @click="learnCC({ type: 'master' })"
+          @click="learnCC(masterAction())"
         >
           learn master
         </button>
-        <button class="danger" @click="clearMapping()">Clear mapping</button>
       </div>
     </section>
 
     <GroupEditor
       v-if="showGroupEditor"
+      :soundset="soundset"
       :element="groupBeingEdited"
       @save="saveGroup"
       @cancel="showGroupEditor = false; groupBeingEdited = null"
+    />
+
+    <MoodEditor
+      v-if="showMoodEditor"
+      :soundset="soundset"
+      :mood="moodBeingEdited"
+      @save="saveMood"
+      @cancel="showMoodEditor = false; moodBeingEdited = null"
     />
   </section>
 </template>
@@ -304,16 +353,6 @@ function commitRenameSoundset() {
 
 .soundset-name {
   margin: 0;
-}
-
-.tag {
-  font-size: 0.7rem;
-  font-weight: 500;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  padding: 0 0.3rem;
-  vertical-align: middle;
 }
 
 .rename-input {
@@ -373,6 +412,11 @@ function commitRenameSoundset() {
   padding: 0.3rem 0.5rem;
   font-size: 0.75rem;
   white-space: nowrap;
+}
+
+.learn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .hidden-row {
