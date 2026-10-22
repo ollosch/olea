@@ -10,6 +10,9 @@ import {
   loadFiles,
   startSoundset,
   leaveSoundset,
+  learnCC,
+  cancelLearn,
+  bindingLabel,
 } from './store'
 import ScenesPanel from './components/ScenesPanel.vue'
 import LibraryBrowser from './components/LibraryBrowser.vue'
@@ -41,6 +44,19 @@ function leaveScene() {
   view.value = 'scenes'
 }
 
+const mainAction = { type: 'master', scope: 'global' }
+const mainLabel = computed(() => bindingLabel(mainAction, 'cc'))
+const learningMain = computed(
+  () =>
+    store.learning?.mode === 'cc' &&
+    store.learning.action?.type === 'master'
+)
+
+function learnMain() {
+  if (learningMain.value) cancelLearn()
+  else learnCC(mainAction)
+}
+
 onMounted(async () => {
   await loadLibrary()
   loadFiles()
@@ -64,6 +80,20 @@ onMounted(async () => {
           @input="setMaster(Number($event.target.value))"
         />
       </label>
+      <button
+        class="btn-sm learn-btn"
+        :class="{ assigned: mainLabel, learning: learningMain }"
+        :title="
+          learningMain
+            ? 'Turn a MIDI knob to assign Main volume (click to cancel)'
+            : mainLabel
+              ? `Main volume on ${mainLabel} — click to re-learn`
+              : 'Assign a MIDI knob to Main volume'
+        "
+        @click="learnMain"
+      >
+        {{ learningMain ? 'turn knob…' : mainLabel || 'learn' }}
+      </button>
 
       <button class="stop" @click="stopEverything()">STOP</button>
 
