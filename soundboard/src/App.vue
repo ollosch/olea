@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import {
   store,
   activeSoundset,
@@ -8,9 +8,38 @@ import {
   connectMidi,
   loadLibrary,
   loadFiles,
+  startSoundset,
+  leaveSoundset,
 } from './store'
-import LibraryPanel from './components/LibraryPanel.vue'
+import ScenesPanel from './components/ScenesPanel.vue'
+import LibraryBrowser from './components/LibraryBrowser.vue'
+import PalettePanel from './components/PalettePanel.vue'
+import ReviewPanel from './components/ReviewPanel.vue'
 import SoundsetPanel from './components/SoundsetPanel.vue'
+
+const view = ref('scenes')
+
+const activeView = computed(() =>
+  view.value === 'scene' && !activeSoundset.value ? 'scenes' : view.value
+)
+
+watch(activeSoundset, (ss) => {
+  if (!ss && view.value === 'scene') view.value = 'scenes'
+})
+
+function setView(next) {
+  view.value = next
+}
+
+function openScene(id) {
+  if (id && store.activeId !== id) startSoundset(id)
+  view.value = 'scene'
+}
+
+function leaveScene() {
+  leaveSoundset()
+  view.value = 'scenes'
+}
 
 onMounted(async () => {
   await loadLibrary()
@@ -43,20 +72,57 @@ onMounted(async () => {
           {{ store.midiConnected ? 'MIDI connected' : 'MIDI not connected' }}
         </span>
         <span v-if="store.midiError" class="small muted">{{ store.midiError }}</span>
-        <button @click="connectMidi()">Connect MIDI</button>
+        <button class="btn-sm" @click="connectMidi()">Connect MIDI</button>
       </div>
     </header>
 
-    <main class="body">
-      <LibraryPanel v-if="!activeSoundset" />
-      <SoundsetPanel v-else :soundset="activeSoundset" />
-    </main>
+    <nav class="nav-tabs" aria-label="Main views">
+      <button class="nav-tab" :class="{ active: activeView === 'scenes' }" @click="setView('scenes')">
+        Scenes
+      </button>
+      <button class="nav-tab" :class="{ active: activeView === 'library' }" @click="setView('library')">
+        Library
+      </button>
+      <button class="nav-tab" :class="{ active: activeView === 'review' }" @click="setView('review')">
+        Review
+      </button>
+      <button
+        v-if="activeSoundset"
+        class="nav-tab scene-tab"
+        :class="{ active: activeView === 'scene' }"
+        :title="activeSoundset.name"
+        @click="setView('scene')"
+      >
+        ● {{ activeSoundset.name }}
+      </button>
+
+      <div class="grow"></div>
+
+      <button v-if="activeView === 'scene'" class="btn-sm" @click="leaveScene">
+        ← Scenes
+      </button>
+    </nav>
+
+    <div class="workspace">
+      <main class="body">
+        <template v-if="activeView === 'scene' && activeSoundset">
+          <SoundsetPanel :soundset="activeSoundset" />
+        </template>
+        <ScenesPanel v-else-if="activeView === 'scenes'" @open="openScene" />
+        <LibraryBrowser v-else-if="activeView === 'library'" />
+        <ReviewPanel v-else-if="activeView === 'review'" />
+      </main>
+
+      <aside v-if="activeView !== 'review'" class="palette-slot">
+        <PalettePanel @open-library="setView('library')" />
+      </aside>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .app {
-  max-width: 1100px;
+  max-width: 1320px;
   margin: 0 auto;
   padding: 1rem;
 }
@@ -68,7 +134,7 @@ onMounted(async () => {
   flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
   padding-bottom: 0.75rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.6rem;
 }
 
 .app-title {
@@ -98,5 +164,44 @@ onMounted(async () => {
 
 .midi-ok {
   color: var(--ok);
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 330px);
+  gap: 1rem;
+  align-items: start;
+}
+
+.body {
+  min-width: 0;
+}
+
+.palette-slot {
+  position: sticky;
+  top: 0.75rem;
+  min-width: 0;
+}
+
+.scene-tab {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .palette-slot {
+    position: static;
+    order: 2;
+  }
+
+  .scene-tab {
+    max-width: 100%;
+  }
 }
 </style>
