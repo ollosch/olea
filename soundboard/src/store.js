@@ -62,6 +62,24 @@ const lastPicks = new Map() // key -> last file index (avoid immediate repeats)
 
 const elKey = (ssId, elId) => `${ssId}::${elId}`
 const paletteKey = (paletteId) => `palette:${paletteId}`
+const DEFAULT_RANDOM_TRIGGER = { min: 10, max: 30, startMin: 2, startMax: 10 }
+
+function triggerIsZero(t) {
+  return [t?.min, t?.max, t?.startMin, t?.startMax].every((v) => !Number(v))
+}
+
+function randomTriggerOf(el) {
+  return triggerIsZero(el?.trigger)
+    ? { ...DEFAULT_RANDOM_TRIGGER }
+    : el.trigger
+}
+
+function ensureRandomTrigger(el) {
+  if (el && el.kind === 'random' && triggerIsZero(el.trigger)) {
+    el.trigger = { ...DEFAULT_RANDOM_TRIGGER }
+  }
+  return el
+}
 
 function clamp01(v) {
   const n = Number(v)
@@ -718,7 +736,7 @@ function triggerRandom(ssId, elId) {
 
   const entry = randomTimers.get(key)
   if (!entry) return
-  const trigger = el.trigger || {}
+  const trigger = randomTriggerOf(el)
   const wait = Math.max(0, randBetween(trigger.min, trigger.max))
   entry.timeout = setTimeout(() => triggerRandom(ssId, elId), wait * 1000)
 }
@@ -727,7 +745,7 @@ function startRandom(ss, el) {
   const key = elKey(ss.id, el.id)
   if (randomTimers.has(key)) return
   randomTimers.set(key, { timeout: null })
-  const trigger = el.trigger || {}
+  const trigger = randomTriggerOf(el)
   const start = Math.max(0, randBetween(trigger.startMin, trigger.startMax))
   const entry = randomTimers.get(key)
   if (entry) entry.timeout = setTimeout(() => triggerRandom(ss.id, el.id), start * 1000)
@@ -953,7 +971,7 @@ function sceneFilesFromInput(ss, files) {
 // ---- library actions ----
 
 export function addLibraryGroup(def = {}) {
-  const group = normalizeLibraryGroup(def)
+  const group = ensureRandomTrigger(normalizeLibraryGroup(def))
   store.library.groups = [...(store.library.groups || []), group]
   persistLibrary()
   return group.id
@@ -962,7 +980,7 @@ export function addLibraryGroup(def = {}) {
 export function updateLibraryGroup(id, patch = {}) {
   const group = findLibraryGroup(id)
   if (!group) return
-  Object.assign(group, normalizeLibraryGroup({ ...group, ...patch }))
+  Object.assign(group, ensureRandomTrigger(normalizeLibraryGroup({ ...group, ...patch })))
   persistLibrary()
 }
 
@@ -1097,7 +1115,7 @@ export function reclassifyElements(ssId, ids, patch = {}) {
     for (const key of ['kind', 'trigger', 'reverb']) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key]
     }
-    Object.assign(element, normalizeElement(next))
+    Object.assign(element, ensureRandomTrigger(normalizeElement(next)))
   }
 
   for (const include of ss.includes || []) {
@@ -1106,7 +1124,15 @@ export function reclassifyElements(ssId, ids, patch = {}) {
     for (const key of ['kind', 'trigger', 'reverb']) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) overrides[key] = patch[key]
     }
-    Object.assign(include, normalizeInclude({ ...include, overrides }))
+    const next = normalizeInclude({ ...include, overrides })
+    if (
+      next.overrides.kind === 'random' &&
+      next.overrides.trigger &&
+      triggerIsZero(next.overrides.trigger)
+    ) {
+      next.overrides.trigger = { ...DEFAULT_RANDOM_TRIGGER }
+    }
+    Object.assign(include, next)
   }
 
   persistSoundset(ss)
@@ -1167,7 +1193,7 @@ export function addElement(ssId, def = {}) {
   if (def.randomise != null) next.randomise = def.randomise
   if (def.reverb != null) next.reverb = def.reverb
   if (def.trigger != null) next.trigger = def.trigger
-  else if (kind === 'random') next.trigger = { min: 10, max: 30, startMin: 2, startMax: 10 }
+  else if (kind === 'random') next.trigger = { ...DEFAULT_RANDOM_TRIGGER }
 
   const element = normalizeElement(next)
   ss.elements.push(element)
@@ -1184,7 +1210,7 @@ export function updateElement(ssId, elId, patch = {}) {
   if (raw.type === 'scene') {
     const merged = { ...raw.element, ...patch }
     if (patch.files != null) merged.files = sceneFilesFromInput(ss, patch.files)
-    Object.assign(raw.element, normalizeElement(merged))
+    Object.assign(raw.element, ensureRandomTrigger(normalizeElement(merged)))
   } else {
     const overrides = { ...(raw.include.overrides || {}) }
     for (const key of ['gain', 'kind', 'trigger', 'reverb', 'randomise']) {

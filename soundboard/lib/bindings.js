@@ -8,12 +8,24 @@
 // key, so `bindAction` removes any previous same-action entry before writing
 // the new one. Any binding already present on the captured key is replaced.
 
+// Note actions store the element kind for readability, but dispatch always
+// uses the element's current kind. Treat every element-note kind as the same
+// target so re-learning still replaces the old binding after a reclassification.
+const NOTE_ACTION_TYPES = new Set(['loop', 'random', 'oneshot'])
+
+function sameType(a, b) {
+  return (
+    a.type === b.type ||
+    (NOTE_ACTION_TYPES.has(a.type) && NOTE_ACTION_TYPES.has(b.type))
+  )
+}
+
 // Compare actions for "same target". `scope` is deliberately ignored: local
 // and global maps are separate, and the same conceptual action should replace
 // itself wherever it is stored.
 export function sameAction(a, b) {
   if (!a || !b) return false
-  if (a.type !== b.type) return false
+  if (!sameType(a, b)) return false
   return (
     (a.elementId ?? null) === (b.elementId ?? null) &&
     (a.moodId ?? null) === (b.moodId ?? null) &&

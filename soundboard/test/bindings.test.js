@@ -9,7 +9,7 @@ import {
   sameAction,
 } from '../lib/bindings.js'
 
-test('sameAction ignores scope but respects type and ids', () => {
+test('sameAction ignores scope and element-note kind, but respects ids and other types', () => {
   assert.equal(
     sameAction(
       { type: 'element', elementId: 'a', scope: 'local' },
@@ -18,6 +18,14 @@ test('sameAction ignores scope but respects type and ids', () => {
     true
   )
   assert.equal(sameAction({ type: 'element', elementId: 'a' }, { type: 'element', elementId: 'b' }), false)
+  assert.equal(
+    sameAction({ type: 'oneshot', elementId: 'a' }, { type: 'loop', elementId: 'a' }),
+    true
+  )
+  assert.equal(
+    sameAction({ type: 'oneshot', elementId: 'a' }, { type: 'element', elementId: 'a' }),
+    false
+  )
   assert.equal(sameAction({ type: 'bus', bus: 'loop' }, { type: 'bus', bus: 'random' }), false)
   assert.equal(sameAction({ type: 'bus', bus: 'loop' }, { type: 'bus' }), false)
   assert.equal(sameAction({ type: 'soundset' }, { type: 'soundset', soundsetId: 's' }), false)
@@ -40,6 +48,14 @@ test('re-learning the same note action on a new key replaces the old binding', (
 
   assert.deepEqual(Object.keys(notes), ['0:64'])
   assert.equal(findBindingKey(notes, action), '0:64')
+})
+
+test('re-learning an element after its kind changes replaces the old note binding', () => {
+  let notes = bindAction({}, '0:60', { type: 'oneshot', elementId: 'el-1' })
+  notes = bindAction(notes, '0:64', { type: 'loop', elementId: 'el-1' })
+
+  assert.deepEqual(Object.keys(notes), ['0:64'])
+  assert.equal(findBindingKey(notes, { type: 'random', elementId: 'el-1' }), '0:64')
 })
 
 test('re-learning the same CC action replaces the old binding', () => {
