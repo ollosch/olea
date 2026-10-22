@@ -144,6 +144,7 @@ test('migrate writes v2 data, backups JSON only, and preserves IDs', () => {
 
   const library = readJson(libraryFile)
   assert.deepEqual(library, { version: 2, groups: [] })
+  assert.equal(fs.existsSync(path.join(audioDir, '_library')), true)
 
   const backupFiles = allFiles(summary.backupDir)
   const configBackups = backupFiles.filter(
@@ -187,5 +188,6 @@ test('--dry-run reports changes without writing anything', () => {
   assert.equal(fs.existsSync(backupRoot), false)
   assert.equal(fs.existsSync(globalFile), false)
   assert.equal(fs.existsSync(libraryFile), false)
+  assert.equal(fs.existsSync(path.join(audioDir, '_library')), false)
   assert.equal(fs.readFileSync(configPath, 'utf8'), before)
 })

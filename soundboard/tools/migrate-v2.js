@@ -200,6 +200,7 @@ export function migrate({
     for (const output of outputs) writeJson(output.abs, output.value)
     writeJson(globalPath, global)
     writeJson(libraryPath, library)
+    fs.mkdirSync(path.join(root, '_library'), { recursive: true })
   }
 
   return {
