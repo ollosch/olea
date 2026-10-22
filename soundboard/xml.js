@@ -6,6 +6,8 @@
 // - `generateSoundsetXml` builds a minimal Chapter XML from filename heuristics
 //   for soundsets that ship without one.
 
+import { suggestKind, suggestTrigger } from './lib/heuristics.js'
+
 export function decodeEntities(s) {
   return String(s)
     .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
@@ -265,9 +267,8 @@ export function parseSoundsetXml(xmlString, files) {
   }
 }
 
-// --- filename heuristics -> minimal Chapter XML ---
+// --- filename heuristics -> element model ---
 
-const LOOP_RE = /(^|[^a-z])(loop|loops|fadeloop|ambience|drone)([^a-z]|$)/i
 const AUDIO_RE = /\.(ogg|mp3|wav)$/i
 
 function groupKey(name) {
@@ -275,42 +276,75 @@ function groupKey(name) {
   return name.replace(/[\s._-]*\(?\d{1,3}\)?$/, '').trim()
 }
 
-export function elementsFromFiles(files) {
-  const audio = files.filter((f) => AUDIO_RE.test(f))
+function fileOf(entry) {
+  if (typeof entry === 'string') return entry
+  if (entry && typeof entry === 'object') {
+    if (typeof entry.file === 'string') return entry.file
+    if (typeof entry.name === 'string') return entry.name
+  }
+  return null
+}
+
+function sizeOf(entry, file, fileSizes) {
+  const inline = entry && typeof entry === 'object' ? Number(entry.size) : NaN
+  if (Number.isFinite(inline)) return inline
+  if (fileSizes instanceof Map) {
+    const size = Number(fileSizes.get(file))
+    return Number.isFinite(size) ? size : undefined
+  }
+  if (fileSizes && typeof fileSizes === 'object') {
+    const size = Number(fileSizes[file])
+    return Number.isFinite(size) ? size : undefined
+  }
+  return undefined
+}
+
+export function elementsFromFiles(files, fileSizes) {
   const groups = new Map()
 
-  for (const f of audio) {
-    const name = fileBase(f)
-    const key = groupKey(name)
-    const isLoop = LOOP_RE.test(name) || LOOP_RE.test(key)
-    const bucket = isLoop ? 'loops' : 'oneshots'
-    const gkey = `${bucket}::${key}`
-    if (!groups.has(gkey)) groups.set(gkey, { name: key, isLoop, files: [] })
-    groups.get(gkey).files.push(f)
+  for (const entry of Array.isArray(files) ? files : []) {
+    const file = fileOf(entry)
+    if (!file || !AUDIO_RE.test(file)) continue
+    const key = groupKey(fileBase(file))
+    if (!groups.has(key)) groups.set(key, { name: key, files: [] })
+    groups.get(key).files.push({ file, size: sizeOf(entry, file, fileSizes) })
   }
 
   const elements = []
   for (const g of groups.values()) {
-    g.files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    g.files.sort((a, b) => a.file.localeCompare(b.file, undefined, { numeric: true }))
+    const sized = g.files.filter((f) => Number.isFinite(f.size))
+    const representativeSize = g.files.length === 1
+      ? g.files[0].size
+      : sized.length
+        ? Math.max(...sized.map((f) => f.size))
+        : undefined
+    const kind = suggestKind({
+      name: g.name,
+      fileCount: g.files.length,
+      size: representativeSize,
+      xmlKind: null,
+    })
     const id = slugify(g.name) || 'group'
     elements.push({
       id,
       name: g.name,
-      kind: g.isLoop ? 'loop' : 'oneshot',
+      kind,
       gain: 1,
       randomise: 'random',
-      files: g.files.map((f) => ({ name: fileBase(f), file: f })),
-      trigger: { min: 0, max: 0, startMin: 0, startMax: 0 },
+      files: g.files.map((f) => ({ name: fileBase(f.file), file: f.file })),
+      trigger: suggestTrigger(kind),
     })
   }
   elements.sort((a, b) => a.name.localeCompare(b.name))
   return elements
 }
 
-export function generateSoundsetXml(folderName, files) {
+export function generateSoundsetXml(folderName, files, fileSizes) {
   const title = folderName.replace(/^Syrinscape\s*-\s*/i, '').trim()
-  const elements = elementsFromFiles(files)
+  const elements = elementsFromFiles(files, fileSizes)
   const loops = elements.filter((e) => e.kind === 'loop')
+  const randoms = elements.filter((e) => e.kind === 'random')
   const oneshots = elements.filter((e) => e.kind === 'oneshot')
 
   const samples = []
@@ -334,18 +368,36 @@ export function generateSoundsetXml(folderName, files) {
     return lines.join('\n')
   }
 
-  const elementBlock = (el, extra) => {
-    const kindTag = el.kind === 'loop' ? 'MusicElement' : 'OneshotElement'
-    const inner = el.kind === 'loop'
-      ? `      <MinStartDelay>0.0</MinStartDelay>\n` +
+  const elementBlock = (el) => {
+    let kindTag
+    let inner
+    if (el.kind === 'loop') {
+      kindTag = 'MusicElement'
+      inner =
+        `      <MinStartDelay>0.0</MinStartDelay>\n` +
         `      <MaxStartDelay>0.0</MaxStartDelay>\n` +
         `      <RandomisePlaylist>random</RandomisePlaylist>\n` +
         `      <RepeatPlaylist>true</RepeatPlaylist>\n` +
         `      <AllowPlaylistOverlap>false</AllowPlaylistOverlap>\n` +
         `      <MinTriggerWait>-15.0</MinTriggerWait>\n` +
         `      <MaxTriggerWait>-15.0</MaxTriggerWait>`
-      : `      <IsGlobalOneshot>false</IsGlobalOneshot>\n` +
+    } else if (el.kind === 'random') {
+      const t = el.trigger || {}
+      kindTag = 'SFXElement'
+      inner =
+        `      <MinStartDelay>${t.startMin ?? 0}</MinStartDelay>\n` +
+        `      <MaxStartDelay>${t.startMax ?? 0}</MaxStartDelay>\n` +
+        `      <RandomisePlaylist>random</RandomisePlaylist>\n` +
+        `      <RepeatPlaylist>true</RepeatPlaylist>\n` +
+        `      <AllowPlaylistOverlap>false</AllowPlaylistOverlap>\n` +
+        `      <MinTriggerWait>${t.min ?? 0}</MinTriggerWait>\n` +
+        `      <MaxTriggerWait>${t.max ?? 0}</MaxTriggerWait>`
+    } else {
+      kindTag = 'OneshotElement'
+      inner =
+        `      <IsGlobalOneshot>false</IsGlobalOneshot>\n` +
         `      <RandomisePlaylist>random</RandomisePlaylist>`
+    }
     return (
       `      <${kindTag}>\n` +
       `        <Title>${encodeEntities(el.name)}</Title>\n` +
@@ -359,6 +411,7 @@ export function generateSoundsetXml(folderName, files) {
   }
 
   const loopsBlock = loops.map((el) => elementBlock(el)).join('\n')
+  const randomsBlock = randoms.map((el) => elementBlock(el)).join('\n')
   const oneshotsBlock = oneshots.map((el) => elementBlock(el)).join('\n')
   const samplesBlock = samples
     .map(
@@ -379,7 +432,7 @@ export function generateSoundsetXml(folderName, files) {
     `  <InitialGain>1.0</InitialGain>\n` +
     `  <Samples>\n${samplesBlock}\n  </Samples>\n` +
     `  <MusicElements>\n${loopsBlock}\n  </MusicElements>\n` +
-    `  <SfxElements>\n  </SfxElements>\n` +
+    `  <SfxElements>\n${randomsBlock}\n  </SfxElements>\n` +
     `  <LoopElements>\n  </LoopElements>\n` +
     `  <OneshotElements>\n${oneshotsBlock}\n  </OneshotElements>\n` +
     `  <Moods>\n  </Moods>\n` +

@@ -13,6 +13,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { parseSoundsetXml, elementsFromFiles } from './xml.js'
 import { normalizeConfig, newId, REVERB_PRESETS } from './lib/schema.js'
+import { suggestTrigger } from './lib/heuristics.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const AUDIO_DIR = process.env.OLEA_AUDIO_DIR || path.join(__dirname, 'syrinscape')
@@ -83,6 +84,15 @@ function resolveSubDir(parent, base) {
 
 // --- element / mood mapping ---
 
+function ensureTrigger(el) {
+  const t = el.trigger || {}
+  if (el.kind === 'random') {
+    const values = [t.min, t.max, t.startMin, t.startMax].map(Number)
+    if (!values.some((v) => Number.isFinite(v) && v > 0)) return suggestTrigger('random')
+  }
+  return t
+}
+
 function buildElements(parsed, prefix) {
   const slugToUuid = new Map()
   const elements = (parsed.elements || []).map((el) => {
@@ -97,7 +107,7 @@ function buildElements(parsed, prefix) {
       reverb: normalizeReverbName(el.reverb),
       position: el.position || null,
       files: (el.files || []).map((f) => prefix + f.file),
-      trigger: el.trigger,
+      trigger: ensureTrigger(el),
     }
   })
   return { elements, slugToUuid }
@@ -145,6 +155,14 @@ function importFolder(dir, stats) {
   const audioFiles = entries
     .filter((e) => e.isFile() && AUDIO_RE.test(e.name))
     .map((e) => e.name)
+  const fileSizes = {}
+  for (const name of audioFiles) {
+    try {
+      fileSizes[name] = fs.statSync(path.join(dir, name)).size
+    } catch {
+      fileSizes[name] = undefined
+    }
+  }
   const xmlNames = entries
     .filter((e) => e.isFile() && XML_RE.test(e.name) && !GENERATED_XML_RE.test(e.name))
     .map((e) => e.name)
@@ -160,9 +178,9 @@ function importFolder(dir, stats) {
 
   // No XML: build elements from filename heuristics.
   if (xmlNames.length === 0) {
-    const raw = elementsFromFiles(audioFiles)
+    const raw = elementsFromFiles(audioFiles, fileSizes)
     const { elements } = buildElements({ elements: raw, moods: [] }, '')
-    writeConfig(configPath, { name: fallbackName, elements, moods: [] })
+    writeConfig(configPath, { name: fallbackName, elements, moods: [], reviewed: false })
     stats.imported++
     console.log(`imported ${configPath}`)
     return
@@ -180,7 +198,7 @@ function importFolder(dir, stats) {
     const { elements, slugToUuid } = buildElements(parsed, '')
     const moods = buildMoods(parsed, slugToUuid)
     const name = parsed.title || fallbackName
-    writeConfig(configPath, { name, elements, moods })
+    writeConfig(configPath, { name, elements, moods, reviewed: true })
     stats.imported++
     console.log(`imported ${configPath}`)
     return
@@ -206,7 +224,7 @@ function importFolder(dir, stats) {
     fs.mkdirSync(subDir, { recursive: true })
     const { elements, slugToUuid } = buildElements(parsed, '../')
     const moods = buildMoods(parsed, slugToUuid)
-    writeConfig(path.join(subDir, 'config.json'), { name, elements, moods })
+    writeConfig(path.join(subDir, 'config.json'), { name, elements, moods, reviewed: true })
     stats.imported++
     console.log(`imported ${path.join(subDir, 'config.json')}`)
   }
