@@ -46,14 +46,28 @@ olea/
     server.js
     xml.js             # dependency-free XML parser (Syrinscape chapter -> element model)
     import.js          # CLI: Syrinscape pack folder -> config.json (XML is import-only)
-    SCHEMA.md          # the config.json / global.json schema doc
+    SCHEMA.md          # config.json / library.json / global.json schema (v2)
     lib/
-      schema.js        # schema + normalization/validation helpers (shared server + frontend)
-    global.json        # app-level state: buses + global MIDI (gitignored, runtime-created)
+      schema.js        # v2 schema + normalization helpers (shared server + frontend)
+      resolve.js       # resolve scenes + includes; missing-group warnings
+      heuristics.js    # size/name kind + trigger suggestions for XML-less imports
+      edit.js          # pure merge/reclassify helpers
+      bindings.js      # pure MIDI binding replacement helpers
+      library-service.js # scan/write scenes, read/write library/global, promote, refs
+      path-utils.js    # path safety, audio listing, slugs, relative paths
+    tools/
+      audit-syrinscape.js # read-only XML/config audit
+      migrate-v2.js    # v1 -> v2 with JSON-only backup
+      reclassify.js    # dry-run/--apply bulk scene reclassification
+      promote-library.js # manifest-driven bulk promotion
+    test/              # node --test suites
+    library.json       # shared library groups (gitignored, runtime-created)
+    global.json        # buses + palette + global MIDI (gitignored, runtime-created)
     src/
     dist/              # built (gitignored)
-    syrinscape/        # audio library (gitignored, ~292MB, user-provided); one folder (or
-                       #   chapter subfolder) per soundscape, each holding a config.json
+    syrinscape/        # audio tree (gitignored, user-provided); one folder (or chapter
+                       #   subfolder) per scene, each holding config.json; shared audio under
+                       #   syrinscape/_library/
 ```
 
 ---
@@ -177,106 +191,160 @@ cd equipment/frontend && npm run dev             # dev server, proxies /api
 ## 4. Soundboard app (Express + Vue)
 
 Fully separate from PocketBase (no DB — it only serves JSON state files + audio). Port **8091**.
-State is JSON only: one `config.json` per soundscape folder + a single `global.json`. The schema and
-its normalizers live in `soundboard/lib/schema.js` (shared by server and frontend) and are documented
-in `soundboard/SCHEMA.md`. Syrinscape XML is an **import format only** (read by `soundboard/import.js`).
+State is **schema v2** JSON only: one `config.json` per scene folder, one app-level `library.json`,
+and one `global.json`. The normalizers live in `soundboard/lib/schema.js` (shared by server and
+frontend) and the format is documented in `soundboard/SCHEMA.md`. Syrinscape XML is an **import
+format only** (read by `soundboard/import.js`). Scenes use **includes** to reference reusable
+library groups; `lib/resolve.js` resolves them for the UI and audio engine.
 
 ### 4.1 `soundboard/server.js` (Express, ESM, port 8091)
 
-- `GET /api/library` — recursively scans `OLEA_AUDIO_DIR` (default `soundboard/syrinscape`) for
-  `config.json` files → `{ soundsets: [...], global }`. Each soundset is the normalized config plus a
-  `dir` field (folder path relative to the audio root, `/`-separated; may contain a `/` for chapter
-  subfolders). Sorted by name. Cached in-process; invalidated on any write.
-- `GET /api/files` — editor picker index: top-level folders + their audio files →
-  `{ folders: [{ dir, name, files: [{name,file}] }] }`.
-- `GET /api/soundset/:id` — one soundset (`{ ...config, dir: id }`); `:id` = the soundscape's `dir`
+- `GET /api/library` — scan scenes + read app state → `{ soundsets, library, global }`. Scenes are
+  normalized configs plus `dir` (path relative to the audio root, `/`-separated). Sorted by name.
+  Cached in-process; invalidated on any write.
+- `GET /api/files` — editor picker index with file sizes. Scene top-level folders plus **recursive**
+  library folders under `_library` → `{ folders: [{ dir, name, files: [{name,file,size}] }] }`.
+- `GET /api/soundset/:id` — one scene (`{ ...config, dir: id }`); `:id` is the scene `dir`
   (URL-encoded). 404 if missing.
-- `POST /api/soundset/:id` — write a full config (body = config object; normalized via
-  `normalizeConfig`); creates the folder if missing; invalidates cache; → `{ ok, soundset }`.
-- `DELETE /api/soundset/:id` — recursively delete the folder (config.json + audio); → `{ ok }`.
-- `GET /api/global` / `POST /api/global` — read/write `global.json` (normalized via `normalizeGlobal`).
+- `POST /api/soundset/:id` — write a full normalized config; creates the folder if missing →
+  `{ ok, soundset }`.
+- `DELETE /api/soundset/:id` — recursively delete the scene folder (config + audio) → `{ ok }`.
+- `GET /api/global` / `POST /api/global` — read/write `global.json` (buses, palette, global MIDI).
+- `POST /api/library` — write `library.json` (the read side is part of `GET /api/library`).
+- `POST /api/library/promote` — body `{ soundsetDir, elementId, category }`; copies the element's
+  files into `_library/<category>/<slug>/`, writes a library group, replaces the scene element with
+  an include, and returns `{ ok, soundsets, library, global, soundset, group, warnings }`. Failure
+  codes: `already-library`, `invalid-category`, `missing-file`, `unsafe-path`, `not-found`.
+- `GET /api/refs` — `{ ok, broken: [...] }` reference check for missing files/library groups.
 - `GET /audio/*` — `express.static(AUDIO_DIR)` (native Range support for seeking).
 - Serves `soundboard/dist/` (built frontend) with SPA fallback for non-`/api`/`/audio` GETs.
-- `resolveSoundsetDir(id)` rejects any `:id` that is empty, absolute, or normalizes outside
-  `OLEA_AUDIO_DIR` (path-traversal guard) for GET/POST/DELETE.
+- `resolveSoundsetDir(id)` rejects empty/absolute ids and any path outside `OLEA_AUDIO_DIR` (or
+  inside `_library`) for GET/POST/DELETE. Promotion and file paths use the same guards.
 
 Env: `OLEA_AUDIO_DIR` (default `soundboard/syrinscape`), `OLEA_GLOBAL_FILE` (default
-`soundboard/global.json`), `PORT` (default 8091).
+`soundboard/global.json`), `OLEA_LIBRARY_FILE` (default `soundboard/library.json`),
+`OLEA_LIBRARY_DIR` (default `<audio>/_library`), `PORT` (default 8091).
 
 ### 4.2 Data model
 
-Soundscape `config.json` (lives in each soundscape folder under `soundboard/syrinscape/`):
+Scene `config.json` (one per scene folder under `soundboard/syrinscape/`):
 
 ```jsonc
 {
-  "version": 1,
+  "version": 2,
   "id": "uuid",                 // stable; renames/disable never change it
   "name": "Car Chase 2017",
-  "disabled": false,            // hidden from the main library list
+  "disabled": false,
   "elements": [ { "id": "uuid", "name", "kind": "loop|random|oneshot", "gain",
     "randomise": "shuffle|random|null", "reverb": "preset|null", "position": null,
     "files": ["Foo.ogg"], "trigger": {"min","max","startMin","startMax"} } ],
-  "hidden": ["elementUuid"],    // elements hidden from this soundscape
-  "moods": [ { "id": "uuid", "name", "params": { "<elementId>": {"plays", "volume"} } } ],
+  "includes": [ { "id": "instance-uuid", "libraryId": "group-uuid",
+    "overrides": { "gain": null, "kind": null, "trigger": null, "reverb": null,
+      "randomise": null } } ],
+  "hidden": ["instanceUuid"],
+  "moods": [ { "id": "uuid", "name", "params": { "<instanceId>": {"plays", "volume"} } } ],
+  "midi": { "notes": {}, "ccs": {} },
+  "reviewed": true               // false for heuristic imports with no real XML
+}
+```
+
+- `elements[]` are scene-local; `includes[]` reference reusable groups from `library.json` by
+  `libraryId`. Each include has its **own instance `id`**; `overrides` fields with `null` inherit from
+  the library group. Resolution lives in `lib/resolve.js`; missing groups are skipped and reported.
+- Scene `files[]` are relative to the scene folder (`"Foo.ogg"` or `"../Other/Foo.ogg"`). Resolved
+  includes get `baseDir: "_library"` and files relative to the library root. Runtime-only fields are
+  `source` (`scene|library`), `baseDir`, and `libraryId` on resolved instances.
+- `kind`: `loop` = continuous playlist; `random` = auto-triggered at `trigger` interval; `oneshot` =
+  manual. All gains/volumes clamp to `0..1`. `reverb` is a preset from `REVERB_PRESETS` (or `null`);
+  `position` is stored but not rendered. Random elements always get a nonzero default trigger
+  (`10–30s`, start `2–10s`) if none is configured.
+- `moods` are authoritative while active: a loop/random missing from a mood's `params`, or with
+  `plays: false`, does not play. Stop keeps the mood selected; Start restores it.
+
+`library.json` (gitignored, at `soundboard/library.json`):
+
+```jsonc
+{
+  "version": 2,
+  "groups": [ { "id": "uuid", "name": "Dogs", "kind": "random", "gain": 0.8,
+    "randomise": null, "reverb": null, "position": null,
+    "files": ["monsters/dogs/1.ogg"], "trigger": {"min","max","startMin","startMax"},
+    "category": "Monsters/Dogs", "tags": ["dog", "bark"] } ]
+}
+```
+
+`library.groups` is an **array**; lookup is always by group `id`. Group files are relative to
+`_library`. Promotion preserves the scene instance id, creates the group, rewrites file paths, and
+replaces the element with an include.
+
+`global.json` (gitignored, at `soundboard/global.json`):
+
+```jsonc
+{
+  "version": 2,
+  "buses": { "loop": 1, "random": 1, "effects": 1 },
+  "palette": [ { "id": "uuid", "libraryId": "group-uuid", "label": "", "gain": null, "order": 0 } ],
   "midi": { "notes": {}, "ccs": {} }
 }
 ```
 
-- `files[]` are relative to the config's own folder: bare `"Foo.ogg"` for own files, `"../Other/Foo.ogg"`
-  for a sibling folder. The frontend resolves them to `/audio/<path>` (`store.js` `resolvePath`/`audioUrl`).
-- `kind`: `loop` = continuous; `random` = auto-triggered at `trigger` interval; `oneshot` = manual.
-- `reverb` = a preset from `REVERB_PRESETS` in `lib/schema.js` (or `null`). `position` (3D/pan) is
-  stored but not rendered (future feature).
-
-`global.json` (gitignored, at `soundboard/global.json`):
-`{ "version": 1, "buses": {"loop","random","effects"}, "midi": {"notes","ccs"} }`. `master` volume is
-session-only (in-memory, default 0.8), never persisted.
+`master` volume is session-only (in-memory, default 0.8), never persisted. Palette gains are optional
+overrides; `null` inherits the library group gain.
 
 Import: `node soundboard/import.js [folder]` reads a Syrinscape pack (XML + audio) and writes
-`config.json`; no arg imports every folder lacking one. A folder with a single XML → one soundscape;
-a folder with multiple chapter XMLs → a container whose chapters each get a subfolder + `config.json`
-with `../` file references. Never overwrites an existing `config.json`. Reuses `xml.js`
-(`parseSoundsetXml` now also returns `reverb` + `position`; `elementsFromFiles` for XML-less folders).
+`config.json`; no arg imports every folder lacking one. A folder with a single XML → one scene; a
+folder with multiple chapter XMLs → a container whose chapters each get a subfolder + `config.json`
+with `../` file references. Never overwrites an existing `config.json`. Real XML keeps authoritative
+kinds/triggers (`reviewed: true`); XML-less packs use `lib/heuristics.js` with file sizes, get a
+nonzero random trigger, and are marked `reviewed: false`. Migration sets the same flags from the
+presence of real (non-`.generated`) XML.
 
 ### 4.3 Frontend modules (`soundboard/src/`)
 
-- `engine.js` — Web Audio. Reactive `state = { activeLoops:Set, loading:Set, activeOneshots:Set }`.
-  Loop elements cycle a multi-file playlist with crossfade; one-shots are tracked so they can be
-  stopped. Three bus gains + master, plus a **reverb send**: a lazily-created `ConvolverNode` per
-  preset, a shared return gain, and per-element dry/wet. Impulse responses are generated
-  programmatically (exponentially-decaying noise) for `REVERB_PRESETS`. `playLoopElement`/`playOneShot`
-  take optional `reverb` + `bus`.
-- `store.js` — single `reactive` state + actions + MIDI dispatch (no overlay/merge). State:
-  `soundsets`, `global`, `files`, `activeId`, `activeMoodId`, `masterVolume` (session-only),
-  `volumeOverrides` (keyed `${soundsetId}::${elementId}`), `learning`, `loopsPlaying`,
-  `randomsPlaying`, `midiConnected`, `midiError`. Volume baseline = active mood's `params[el].volume`
-  ?? `el.gain`; `resetElementVolume` clears an override back to that baseline. Actions: transport
-  (`startLoops/stopLoops/startRandoms/stopRandoms/stopEffects/stopEverything`, `startSoundset`),
-  element play/stop (`toggleLoopElement`, `playOneshotElement`, `toggleRandomElement`,
-  `playRandomOnce`), volume (`setElementVolume/resetElementVolume/resetSectionVolume`, `setMaster`,
-  `setLoopsVolume/.../setEffectsVolume` → persisted to `global.buses`), moods (`applyMood` + CRUD),
-  editor (`renameElement`, `hideElement`/`unhideElement`, `addElement`/`updateElement`/`deleteElement`,
-  `createSoundset`/`renameSoundset`/`disableSoundset`/`enableSoundset`/`deleteSoundset`), MIDI learn +
-  dispatch (local soundscape bindings override global). Persists via `POST /api/soundset/:dir` and
-  `POST /api/global`. Random elements use `setTimeout` schedulers (first fire after
-  `startMin..startMax`, then every `min..max` seconds).
-- `midi.js` — unchanged Web MIDI wrapper (`connectMidi`, `onMidiMessage`).
-- `App.vue` + `components/{LibraryPanel,SoundsetPanel,ElementRow,GroupEditor,MoodEditor}.vue`.
-  LibraryPanel lists enabled soundsets + a "Disabled" section (enable/delete, `window.confirm` before
-  delete). SoundsetPanel has transport, per-bus volume sliders, moods, and Loops/Random/Effects lists.
-  GroupEditor edits name/kind/interval/volume/reverb + file picker. MoodEditor edits per-element
-  plays/volume.
+- `engine.js` — Web Audio. Reactive `state = { activeLoops, loading, activeOneshots }`. Loop elements
+  cycle a multi-file playlist with crossfade; one-shots are tracked so they can be stopped. Three bus
+  gains + master, plus a **reverb send**: lazily-created `ConvolverNode` per preset, shared return
+  gain, per-element dry/wet. Impulse responses are generated programmatically. Supports live one-shot
+  gain (`setOneShotGain`) and click-avoiding volume ramps.
+- `store.js` — single `reactive` state + actions + MIDI dispatch. State: `soundsets`, `library`,
+  `global`, `files`, `activeId`, `activeMoodId`, `masterVolume` (session-only), `volumeOverrides`
+  (keyed `${soundsetId}::${elementId}`), `learning`, `loopsPlaying`, `randomsPlaying`,
+  `midiConnected`, `midiError`. Resolved-element helpers (`resolvedSceneElements`,
+  `soundsetElements`, `findElement`, `paletteElements`) come from `lib/resolve.js`, so library edits
+  are reflected immediately. Volume baseline = active mood's param ?? resolved `el.gain`. Actions:
+  transport, element play/stop, volumes, mood CRUD/apply (`applyMood` starts/stops to match the mood),
+  scene CRUD, library CRUD, palette pin/play/unpin/volume, promotion, include add/remove,
+  merge/reclassify, review flag, MIDI learn + dispatch. Local scene bindings override global on the
+  same key; global palette mappings report when shadowed. Random elements use `setTimeout` schedulers
+  (first fire after `startMin..startMax`, then every `min..max`; zero triggers fall back to defaults).
+  Persists via `POST /api/soundset/:dir`, `POST /api/library`, `POST /api/global`, and promotion API.
+- `midi.js` — Web MIDI wrapper (`connectMidi`, `onMidiMessage`).
+- `App.vue` — topbar (main volume, STOP, MIDI), tabs **Scenes / Library / Review**, active-scene tab,
+  and the persistent collapsible palette.
+- `components/` — `ScenesPanel` (search, counts, needs-review badge, start/edit/disable/delete,
+  Disabled section); `SoundsetPanel` (transport, moods, bus volumes + MIDI learn, Loops/Random/Effects,
+  edit bar, hidden elements); `ElementRow` (play/stop, kind/origin/reverb tags, volume reset, learn
+  note/CC, edit/promote/pin); `GroupEditor` (kind/volume/interval/reverb + searchable file picker with
+  sizes, read-only files for library includes); `MoodEditor` (all resolved loops/randoms);
+  `LibraryBrowser` (search/kind filter, preview, add to scene, pin, edit/delete);
+  `PalettePanel` (play/toggle, volume, learn note/CC, unpin, missing/shadow warnings);
+  `ReviewPanel` (heuristic scenes, element table with size/interval, bulk kind/interval/reverb, merge,
+  promote, mark reviewed).
 
 ### 4.4 MIDI mapping (stored in `config.json.midi` + `global.json.midi`)
 
-Keys are `"channel:note"` / `"channel:cc"` strings. Local bindings live in a soundscape's
-`config.json.midi` (scoped to that soundscape); global bindings live in `global.json.midi`. Local
-overrides global when both bind the same key.
+Keys are `"channel:note"` / `"channel:cc"` strings. Local bindings live in a scene's
+`config.json.midi`; global bindings live in `global.json.midi`. Local overrides global on the same
+key; the palette UI warns when a global mapping is shadowed by the active scene.
 
 - Local notes: `{type:'oneshot'|'loop'|'random', elementId}`, `{type:'mood', moodId}`,
-  `{type:'soundset'}` (toggle this soundscape). Local CCs: `{type:'element', elementId}` (volume).
-- Global notes: `{type:'stop'}`, `{type:'soundset', soundsetId}`. Global CCs: `{type:'master'}`,
-  `{type:'bus', bus:'loop'|'random'|'effects'}`.
+  `{type:'soundset'}`. The element `type` is informational — dispatch uses the element's **current**
+  kind, so reclassified elements keep working. Local CCs: `{type:'element', elementId}` (volume).
+- Global notes: `{type:'stop'}`, `{type:'soundset', soundsetId}`, `{type:'palette', paletteId}`.
+  Global CCs: `{type:'master'}`, `{type:'bus', bus:'loop'|'random'|'effects'}`,
+  `{type:'paletteVolume', paletteId}`.
+- Re-learning a target replaces its previous key; element-note actions are matched by element id
+  even if the stored kind changed.
 
 ### 4.5 Web MIDI caveats
 
@@ -295,19 +363,29 @@ OLEA_AUDIO_DIR=/other/folder ./soundboard/start.sh
 node soundboard/import.js             # import Syrinscape packs -> config.json (first run)
 cd soundboard && npm install && npm run dev   # Vite dev, proxies /api + /audio → 8091
 cd soundboard && npm run build                # → soundboard/dist/
+cd soundboard && npm test                     # node --test test/*.test.js
+
+node soundboard/tools/migrate-v2.js --dry-run # inspect v1 -> v2
+node soundboard/tools/migrate-v2.js           # JSON-only backup, then migrate
+node soundboard/tools/audit-syrinscape.js      # read-only XML/config audit
+node soundboard/tools/reclassify.js [--apply] [--soundset <dir>]
+node soundboard/tools/promote-library.js <manifest.json> [--apply]
 ```
+
+Migration backups go to `soundboard/.migration-backup/<timestamp>/` and contain JSON only (no audio).
+The live audio tree is not touched by migration except for writing normalized `config.json` files.
 
 ---
 
 ## 5. Known status / future work
 
 - **Done:** equipment manager (roles, multi-game, per-game currencies, items catalog + instances,
-  give/use/drop, money transfers, optimized totals, realtime, print), soundboard (library, loop +
-  one-shot + random elements, moods, fades, playlist cycling, per-element volume + reverb presets,
-  Web MIDI learn + persistence, per-element stop, stop-loops vs stop-effects), and a **soundscape
-  editor** (rename/hide/add/remove elements, custom groups with editable loop/random/one-shot kind +
-  random interval + reverb, mood create/edit/delete, create/rename/disable/enable/delete soundsets —
-  all persisted in each soundscape's own `config.json` / `global.json`).
+  give/use/drop, money transfers, optimized totals, realtime, print), and soundboard **schema v2**:
+  resolved scenes + library includes, shared library and persistent palette, authoritative moods,
+  loop/one-shot/random elements with 0..1 gains, per-bus volume, reverb presets, MIDI learn (local +
+  global palette bindings), promotion to library, bulk review/reclassification/merge, size-aware
+  heuristic imports, v1 migration with JSON backup, audit/reclassify/promote CLI tools, and a
+  Scenes / Library / Review UI.
 - **Not done / planned:** stereo panning from the stored `position` data; knob → LED
   color/brightness (needs a Zigbee/Hue bridge).
 
@@ -324,7 +402,9 @@ cd soundboard && npm run build                # → soundboard/dist/
 - The equipment frontend build uses `emptyOutDir` — note: `equipment/frontend/vite.config.js` writes to
   `../pb_public`. The soundboard builds to its own `soundboard/dist` (no conflict).
 - `soundboard/syrinscape/` (~292MB) and runtime dirs (`equipment/pb_data/`, `soundboard/dist/`,
-  `soundboard/node_modules/`, `soundboard/global.json`, `equipment/pocketbase`) are gitignored.
-  Imported `config.json` files live inside `soundboard/syrinscape/` (also gitignored).
-- The soundboard no longer auto-generates XML. Run `node soundboard/import.js` (once) to turn
-  existing Syrinscape packs into `config.json` files; it is idempotent (never overwrites).
+  `soundboard/node_modules/`, `soundboard/global.json`, `soundboard/library.json`,
+  `soundboard/_library` audio under the tree, `equipment/pocketbase`) are gitignored. Imported
+  `config.json` files live inside `soundboard/syrinscape/` (also gitignored).
+- The soundboard does not generate XML at runtime. Run `node soundboard/import.js` (once) to turn
+  existing Syrinscape packs into `config.json` files; it is idempotent (never overwrites). Re-run
+  `migrate-v2.js` only for legacy v1 data; it is safe to inspect with `--dry-run`.

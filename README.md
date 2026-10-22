@@ -45,22 +45,34 @@ Open `http://localhost:8090` / `http://localhost:8091` on the host, or
 
 ## Soundboard
 
-Serves the `soundboard/syrinscape/` folder. Each **soundscape** is a folder containing a `config.json`
-(the soundboard's own JSON — see `soundboard/SCHEMA.md`); the audio files it references are grouped
-into **elements** — a loop (continuous ambience), a random effect (auto-triggered at bounded
-intervals), or a one-shot. On first run, import existing Syrinscape packs with
-`node soundboard/import.js` (it reads each pack's `.xml` and writes a `config.json`; campaign packs
-with multiple chapters are split into a subfolder per chapter).
+Serves the `soundboard/syrinscape/` audio tree. State is JSON only — see `soundboard/SCHEMA.md`:
+
+- **Scenes** — one folder + `config.json` per soundscape. Audio is grouped into **elements**: loop
+  (continuous ambience), random (auto-triggered at bounded intervals), or one-shot (manual effect).
+- **Library** — reusable groups in `soundboard/library.json`, with audio under
+  `syrinscape/_library/`. Scenes add library groups as **includes**, so editing a group updates every
+  scene that uses it.
+- **Palette** — pin library groups for always-available playback and MIDI control.
+- **Review** — imported packs without authoritative XML are marked `reviewed: false`; use this tab to
+  bulk reclassify, set random intervals/reverb, merge tracks, or promote groups to the library.
+
+On first run, import existing Syrinscape packs with `node soundboard/import.js` (it reads each pack's
+`.xml` and writes a `config.json`; campaign packs with multiple chapters are split into a subfolder
+per chapter). Packs without real XML use size/name heuristics and are flagged for review.
+
+If you are upgrading existing v1 data, run the migration **once** before starting the v2 server:
+
+```bash
+node soundboard/tools/migrate-v2.js --dry-run   # inspect
+node soundboard/tools/migrate-v2.js             # JSON backup, then write v2 files
+```
 
 - Set the audio folder with `OLEA_AUDIO_DIR=/path/to/folder ./soundboard/start.sh`.
-- MIDI mappings live in each soundscape's `config.json` (per-soundscape) and in
-  `soundboard/global.json` (app-level). Assign them in the UI via "learn" mode.
-- **Edit** (button on a soundscape): rename, hide, add or remove elements; build **custom groups**
-  (pick files from anywhere in the library, choose loop / random / one-shot, set the random interval
-  and a reverb preset); create/edit **moods** (per-element volume + play presets). **+ New soundscape**
-  creates your own (its audio can come from any pack).
-- Any soundscape can be **disabled** (hidden from the main list; re-enabled from the "Disabled"
-  section) or **deleted** (removes the folder and its files).
+- MIDI mappings live in each scene's `config.json` (local), `soundboard/global.json` (app-level), and
+  palette entries. Assign them in the UI via "learn" mode. Local scene bindings win over global ones.
+- **Edit** (scene header): add from the library, create custom groups, merge/reclassify selected
+  elements, promote to the library, hide/delete, and edit moods.
+- Any scene can be **disabled**, **renamed**, or **deleted** (removes the folder and its files).
 - **Web MIDI** works in Chrome/Edge out of the box. In Firefox, enable `dom.webmidi.enabled` in
   `about:config` or install a Web MIDI add-on.
 
@@ -79,7 +91,11 @@ Soundboard:
 ```bash
 cd soundboard && npm install && npm run dev          # frontend dev (Vite proxies /api, /audio)
 cd soundboard && npm run build                       # rebuild into soundboard/dist/
+cd soundboard && npm test                            # Node test runner
 node soundboard/server.js                            # or ./soundboard/start.sh
+node soundboard/tools/audit-syrinscape.js            # read-only pack/config audit
+node soundboard/tools/reclassify.js                  # dry-run heuristic reclassification
+node soundboard/tools/promote-library.js manifest.json [--apply]
 ```
 
 ## Layout
@@ -93,11 +109,15 @@ equipment/       # equipment manager (PocketBase + Vue 3)
   pocketbase     #   the PocketBase binary (downloaded by download-pocketbase.sh)
   pb_data/       #   runtime database + storage (gitignored)
 soundboard/      # soundboard (Express server.js + Vue 3 frontend)
-  src/           #   Vue 3 source
-  lib/           #   schema + validation helpers (shared server/frontend)
+  src/           #   Vue 3 source (scenes, library, palette, review)
+  lib/           #   schema, resolution, heuristics, edit, library service
+  tools/         #   audit, migrate-v2, reclassify, promote-library
+  test/          #   node --test suites
   import.js      #   Syrinscape XML -> config.json importer
-  SCHEMA.md      #   the config.json / global.json schema
+  SCHEMA.md      #   the config.json / library.json / global.json schema
   syrinscape/    #   audio library (gitignored, user-provided)
+  library.json   #   shared library groups (gitignored, runtime-created)
+  global.json    #   buses, palette, global MIDI (gitignored, runtime-created)
   server.js      #   Express backend
 start.sh         # starts both apps
 ```

@@ -12,6 +12,7 @@ soundboard/dist/
 soundboard/midi-mapping.json
 soundboard/library.json
 soundboard/global.json
+soundboard/.migration-backup/
 
 # Audio library (large, user-provided)
 soundboard/syrinscape/
