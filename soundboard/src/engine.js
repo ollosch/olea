@@ -41,18 +41,34 @@ let masterGain = null
 let loopsBus = null
 let randomsBus = null
 let effectsBus = null
-let reverbReturn = null
+let reverbReturns = null
+let masterVolume = 1
 const busVolumes = { loop: 1, random: 1, effects: 1 }
-const convolvers = new Map() // preset name -> ConvolverNode (created lazily)
+const convolvers = new Map() // `${bus}::${preset}` -> ConvolverNode (created lazily)
 const buffers = new Map() // url -> AudioBuffer
 const loops = new Map() // elementId -> loop entry
 const oneshots = new Map() // elementId -> Set<instance>
 const pending = new Map() // url -> Promise<AudioBuffer>
 
+function clamp01(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 0
+  return Math.min(1, Math.max(0, n))
+}
+
+function rampGain(param, value, seconds = 0.05) {
+  if (!ctx || !param) return
+  const t = ctx.currentTime
+  param.cancelScheduledValues(t)
+  param.setValueAtTime(param.value, t)
+  param.linearRampToValueAtTime(clamp01(value), t + seconds)
+}
+
 function ensureCtx() {
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)()
     masterGain = ctx.createGain()
+    masterGain.gain.value = masterVolume
     masterGain.connect(ctx.destination)
     loopsBus = ctx.createGain()
     loopsBus.gain.value = busVolumes.loop
@@ -63,9 +79,13 @@ function ensureCtx() {
     effectsBus = ctx.createGain()
     effectsBus.gain.value = busVolumes.effects
     effectsBus.connect(masterGain)
-    reverbReturn = ctx.createGain()
-    reverbReturn.gain.value = REVERB_RETURN_LEVEL
-    reverbReturn.connect(masterGain)
+    reverbReturns = {}
+    for (const bus of BUSES) {
+      const ret = ctx.createGain()
+      ret.gain.value = busVolumes[bus] * REVERB_RETURN_LEVEL
+      ret.connect(masterGain)
+      reverbReturns[bus] = ret
+    }
   }
   if (ctx.state === 'suspended') ctx.resume()
   return ctx
@@ -78,9 +98,14 @@ function getBusNode(bus) {
 }
 
 function setBusGain(bus, v) {
-  busVolumes[bus] = v
+  if (!BUSES.includes(bus)) return
+  const value = clamp01(v)
+  busVolumes[bus] = value
   const node = getBusNode(bus)
-  if (node) node.gain.value = v
+  if (node) rampGain(node.gain, value)
+  if (reverbReturns && reverbReturns[bus]) {
+    rampGain(reverbReturns[bus].gain, value * REVERB_RETURN_LEVEL)
+  }
 }
 
 function createImpulseResponse(decay, damping) {
@@ -101,19 +126,21 @@ function createImpulseResponse(decay, damping) {
   return buffer
 }
 
-function getReverb(preset) {
+function getReverb(bus, preset) {
   if (!preset) return null
   let name = String(preset)
   const known = REVERB_PRESETS.find((p) => p.toLowerCase() === name.toLowerCase())
   if (known) name = known
-  if (!convolvers.has(name)) {
+  const key = `${bus}::${name}`
+  if (!convolvers.has(key)) {
     const params = REVERB_PARAMS[name] || FALLBACK_REVERB
     const conv = ctx.createConvolver()
     conv.buffer = createImpulseResponse(params.decay, params.damping)
-    conv.connect(reverbReturn)
-    convolvers.set(name, conv)
+    const returnNode = (reverbReturns && reverbReturns[bus]) || reverbReturns.effects
+    conv.connect(returnNode || masterGain)
+    convolvers.set(key, conv)
   }
-  return convolvers.get(name)
+  return convolvers.get(key)
 }
 
 function loadBuffer(url) {
@@ -150,7 +177,7 @@ function startLoopSample(entry) {
       src.connect(g)
       g.connect(getBusNode(entry.bus))
       let wet = null
-      const conv = getReverb(entry.reverb)
+      const conv = getReverb(entry.bus, entry.reverb)
       if (conv) {
         wet = ctx.createGain()
         wet.gain.setValueAtTime(0.0001, ctx.currentTime)
@@ -232,7 +259,7 @@ async function playLoopElement(id, { files, gain = 0.8, randomise = false, rever
   const entry = {
     id,
     files,
-    gain,
+    gain: clamp01(gain),
     randomise,
     reverb,
     bus,
@@ -277,19 +304,10 @@ function stopLoopElement(id, { fadeOut = 1.0 } = {}) {
 function setLoopGain(id, v) {
   const entry = loops.get(id)
   if (!entry) return
-  entry.gain = v
-  if (entry.gainNode) {
-    const t = ctx.currentTime
-    entry.gainNode.gain.cancelScheduledValues(t)
-    entry.gainNode.gain.setValueAtTime(entry.gainNode.gain.value, t)
-    entry.gainNode.gain.linearRampToValueAtTime(v, t + 0.05)
-  }
-  if (entry.wetGainNode) {
-    const t = ctx.currentTime
-    entry.wetGainNode.gain.cancelScheduledValues(t)
-    entry.wetGainNode.gain.setValueAtTime(entry.wetGainNode.gain.value, t)
-    entry.wetGainNode.gain.linearRampToValueAtTime(v * WET_RATIO, t + 0.05)
-  }
+  const value = clamp01(v)
+  entry.gain = value
+  rampGain(entry.gainNode && entry.gainNode.gain, value)
+  rampGain(entry.wetGainNode && entry.wetGainNode.gain, value * WET_RATIO)
 }
 
 function isLoopPlaying(id) {
@@ -298,6 +316,7 @@ function isLoopPlaying(id) {
 
 async function playOneShot(id, url, { gain = 1, bus = 'effects', reverb = null } = {}) {
   ensureCtx()
+  const value = clamp01(gain)
   let audio
   try {
     audio = await loadBuffer(url)
@@ -308,19 +327,20 @@ async function playOneShot(id, url, { gain = 1, bus = 'effects', reverb = null }
   const src = ctx.createBufferSource()
   src.buffer = audio
   const g = ctx.createGain()
-  g.gain.value = gain
+  g.gain.value = value
   src.connect(g)
   g.connect(getBusNode(bus))
 
-  const conv = getReverb(reverb)
+  let wet = null
+  const conv = getReverb(bus, reverb)
   if (conv) {
-    const wet = ctx.createGain()
-    wet.gain.value = gain * WET_RATIO
+    wet = ctx.createGain()
+    wet.gain.value = value * WET_RATIO
     src.connect(wet)
     wet.connect(conv)
   }
 
-  const inst = { src, gain: g }
+  const inst = { src, gain: g, wetGain: wet }
   if (!oneshots.has(id)) oneshots.set(id, new Set())
   oneshots.get(id).add(inst)
   state.activeOneshots.add(id)
@@ -336,6 +356,16 @@ async function playOneShot(id, url, { gain = 1, bus = 'effects', reverb = null }
     }
   }
   src.start()
+}
+
+function setOneShotGain(id, v) {
+  const set = oneshots.get(id)
+  if (!set) return
+  const value = clamp01(v)
+  for (const inst of set) {
+    rampGain(inst.gain && inst.gain.gain, value)
+    rampGain(inst.wetGain && inst.wetGain.gain, value * WET_RATIO)
+  }
 }
 
 function stopOneShot(id) {
@@ -366,7 +396,8 @@ function stopAll() {
 }
 
 function setMasterGain(v) {
-  if (masterGain) masterGain.gain.value = v
+  masterVolume = clamp01(v)
+  rampGain(masterGain && masterGain.gain, masterVolume)
 }
 
 function isOneShotPlaying(id) {
@@ -376,11 +407,13 @@ function isOneShotPlaying(id) {
 export const engine = {
   state,
   ensureCtx,
+  clamp01,
   playLoopElement,
   stopLoopElement,
   setLoopGain,
   isLoopPlaying,
   playOneShot,
+  setOneShotGain,
   stopOneShot,
   stopAllOneshots,
   stopAllLoops,
