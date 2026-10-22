@@ -1,80 +1,46 @@
 import express from 'express'
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
-import { normalizeConfig, normalizeGlobal } from './lib/schema.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { createLibraryService } from './lib/library-service.js'
+import {
+  AUDIO_RE,
+  isInside,
+  listAudioFiles,
+  toPosixPath,
+  walkDirs,
+} from './lib/path-utils.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const AUDIO_DIR = process.env.OLEA_AUDIO_DIR || path.join(__dirname, 'syrinscape')
-const GLOBAL_FILE = process.env.OLEA_GLOBAL_FILE || path.join(__dirname, 'global.json')
+function envPath(...names) {
+  for (const name of names) {
+    const value = process.env[name]
+    if (value) return path.resolve(value)
+  }
+  return null
+}
+
+const AUDIO_DIR =
+  envPath('OLEA_AUDIO_DIR', 'AUDIO_DIR') || path.join(__dirname, 'syrinscape')
+const GLOBAL_FILE =
+  envPath('OLEA_GLOBAL_FILE', 'GLOBAL_FILE') || path.join(__dirname, 'global.json')
+const LIBRARY_FILE =
+  envPath('OLEA_LIBRARY_FILE', 'LIBRARY_FILE') || path.join(__dirname, 'library.json')
+const LIBRARY_DIR =
+  envPath('OLEA_LIBRARY_DIR', 'LIBRARY_DIR') || path.join(AUDIO_DIR, '_library')
 const DIST = path.join(__dirname, 'dist')
 const PORT = Number(process.env.PORT) || 8091
 
-const AUDIO_RE = /\.(ogg|mp3|wav)$/i
+const service = createLibraryService({
+  audioDir: AUDIO_DIR,
+  libraryDir: LIBRARY_DIR,
+  libraryFile: LIBRARY_FILE,
+  globalFile: GLOBAL_FILE,
+})
 
-// ---- path safety ----
-
-function resolveSoundsetDir(id) {
-  if (typeof id !== 'string' || !id) return null
-  if (id.includes('\0')) return null
-  if (path.isAbsolute(id)) return null
-  const target = path.normalize(path.join(AUDIO_DIR, id))
-  const base = AUDIO_DIR.endsWith(path.sep) ? AUDIO_DIR : AUDIO_DIR + path.sep
-  if (target === AUDIO_DIR) return null
-  if (!target.startsWith(base)) return null
-  return target
-}
-
-// ---- library scan (recursive) ----
-
-function readConfig(configPath, dir) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-    return { ...normalizeConfig(raw), dir }
-  } catch {
-    return null
-  }
-}
-
-function walkSoundsets(dirAbs, rel, out) {
-  let entries
-  try {
-    entries = fs.readdirSync(dirAbs, { withFileTypes: true })
-  } catch {
-    return
-  }
-  for (const e of entries) {
-    if (!e.isDirectory()) continue
-    const abs = path.join(dirAbs, e.name)
-    const childRel = rel ? `${rel}/${e.name}` : e.name
-    const configPath = path.join(abs, 'config.json')
-    if (fs.existsSync(configPath)) {
-      const ss = readConfig(configPath, childRel)
-      if (ss) out.push(ss)
-    }
-    walkSoundsets(abs, childRel, out)
-  }
-}
-
-function scanSoundsets() {
-  const soundsets = []
-  if (!fs.existsSync(AUDIO_DIR)) return soundsets
-  walkSoundsets(AUDIO_DIR, '', soundsets)
-  soundsets.sort((a, b) => a.name.localeCompare(b.name))
-  return soundsets
-}
-
-function readGlobal() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(GLOBAL_FILE, 'utf8'))
-    return normalizeGlobal(raw)
-  } catch {
-    return normalizeGlobal({})
-  }
-}
-
-// ---- in-process cache ----
+// ---- in-process cache ---------------------------------------------------
 
 let cache = null
 
@@ -82,102 +48,175 @@ function invalidateCache() {
   cache = null
 }
 
-function getLibrary() {
+function getData() {
   if (!cache) {
-    cache = { at: Date.now(), soundsets: scanSoundsets(), global: readGlobal() }
+    cache = {
+      soundsets: service.scanSoundsets(),
+      library: service.readLibrary(),
+      global: service.readGlobal(),
+    }
   }
   return cache
 }
 
-// ---- file picker scan (top-level only) ----
+// ---- file picker --------------------------------------------------------
 
-function listAudio(dir) {
-  try {
-    return fs.readdirSync(path.join(AUDIO_DIR, dir)).filter((f) => AUDIO_RE.test(f))
-  } catch {
-    return []
-  }
+function sceneName(dirName) {
+  return dirName.replace(/^Syrinscape\s*-\s*/i, '').trim()
+}
+
+function filesWithSizes(dirAbs) {
+  return listAudioFiles(dirAbs).map(({ file, size }) => ({
+    name: file.replace(AUDIO_RE, ''),
+    file,
+    size,
+  }))
 }
 
 function scanFiles() {
   const folders = []
+
   let dirs = []
   try {
-    dirs = fs.readdirSync(AUDIO_DIR, { withFileTypes: true }).filter((e) => e.isDirectory())
+    dirs = fs
+      .readdirSync(AUDIO_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
   } catch {
     return folders
   }
-  for (const d of dirs) {
-    const files = listAudio(d.name).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+
+  for (const entry of dirs) {
+    const abs = path.join(AUDIO_DIR, entry.name)
+    if (service.isLibraryPath(abs)) continue
+
+    const files = filesWithSizes(abs)
     if (!files.length) continue
-    folders.push({
-      dir: d.name,
-      name: d.name.replace(/^Syrinscape\s*-\s*/i, '').trim(),
-      files: files.map((f) => ({ name: f.replace(AUDIO_RE, ''), file: f })),
-    })
+    folders.push({ dir: entry.name, name: sceneName(entry.name), files })
   }
-  folders.sort((a, b) => a.name.localeCompare(b.name))
+
+  // Library folders are listed recursively below the library root.
+  if (fs.existsSync(LIBRARY_DIR)) {
+    const libraryDirs = [{ abs: LIBRARY_DIR, rel: '' }]
+    for (const dir of walkDirs(LIBRARY_DIR)) libraryDirs.push(dir)
+
+    for (const dir of libraryDirs) {
+      if (!fs.existsSync(dir.abs) || !isInside(LIBRARY_DIR, dir.abs)) continue
+      const files = filesWithSizes(dir.abs)
+      if (!files.length) continue
+
+      const rel = dir.rel
+        ? `${path.basename(LIBRARY_DIR)}/${dir.rel}`
+        : path.basename(LIBRARY_DIR)
+      folders.push({
+        dir: toPosixPath(rel),
+        name: path.basename(dir.abs).replace(/-/g, ' '),
+        files,
+      })
+    }
+  }
+
+  folders.sort((a, b) => a.name.localeCompare(b.name) || a.dir.localeCompare(b.dir))
   return folders
+}
+
+function statusFor(code) {
+  if (code === 'already-library') return 409
+  if (code === 'promote-failed') return 500
+  return 400
 }
 
 const app = express()
 app.use(express.json({ limit: '4mb' }))
 
 app.get('/api/library', (req, res) => {
-  const lib = getLibrary()
-  res.json({ soundsets: lib.soundsets, global: lib.global })
+  const data = getData()
+  res.json({ soundsets: data.soundsets, library: data.library, global: data.global })
 })
 
 app.get('/api/files', (req, res) => res.json({ folders: scanFiles() }))
 
 app.get('/api/soundset/:id', (req, res) => {
-  const dir = resolveSoundsetDir(req.params.id)
-  if (!dir) return res.status(400).json({ error: 'not found' })
-  const configPath = path.join(dir, 'config.json')
-  if (!fs.existsSync(configPath)) return res.status(404).json({ error: 'not found' })
-  const ss = readConfig(configPath, req.params.id)
-  if (!ss) return res.status(500).json({ error: 'read error' })
-  res.json(ss)
+  try {
+    res.json(service.readSoundset(req.params.id))
+  } catch (err) {
+    const status = err.code === 'not-found' ? 404 : err.code === 'read-error' ? 500 : 400
+    res.status(status).json({ error: err.message })
+  }
 })
 
 app.post('/api/soundset/:id', (req, res) => {
-  const dir = resolveSoundsetDir(req.params.id)
-  if (!dir) return res.status(400).json({ ok: false, error: 'unsafe path' })
   try {
-    fs.mkdirSync(dir, { recursive: true })
-    const cfg = normalizeConfig(req.body)
-    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2) + '\n')
+    const soundset = service.writeSoundset(req.params.id, req.body)
     invalidateCache()
-    res.json({ ok: true, soundset: { ...cfg, dir: req.params.id } })
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
+    res.json({ ok: true, soundset })
+  } catch (err) {
+    const status = err.code === 'unsafe-path' ? 400 : 500
+    res.status(status).json({ ok: false, error: err.message })
   }
 })
 
 app.delete('/api/soundset/:id', (req, res) => {
-  const dir = resolveSoundsetDir(req.params.id)
-  if (!dir) return res.status(400).json({ error: 'not found' })
-  if (!fs.existsSync(dir)) return res.status(404).json({ error: 'not found' })
   try {
-    fs.rmSync(dir, { recursive: true, force: true })
+    service.deleteSoundset(req.params.id)
     invalidateCache()
     res.json({ ok: true })
-  } catch (e) {
-    res.status(500).json({ error: e.message })
+  } catch (err) {
+    const status =
+      err.code === 'not-found' ? 404 : err.code === 'unsafe-path' ? 400 : 500
+    res.status(status).json({ error: err.message })
   }
 })
 
-app.get('/api/global', (req, res) => res.json(readGlobal()))
+app.get('/api/global', (req, res) => res.json(service.readGlobal()))
 
 app.post('/api/global', (req, res) => {
   try {
-    const g = normalizeGlobal(req.body)
-    fs.mkdirSync(path.dirname(GLOBAL_FILE), { recursive: true })
-    fs.writeFileSync(GLOBAL_FILE, JSON.stringify(g, null, 2) + '\n')
+    const global = service.writeGlobal(req.body)
     invalidateCache()
-    res.json({ ok: true, global: g })
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
+    res.json({ ok: true, global })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+app.post('/api/library', (req, res) => {
+  try {
+    const library = service.writeLibrary(req.body)
+    invalidateCache()
+    res.json({ ok: true, library })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+app.post('/api/library/promote', (req, res) => {
+  try {
+    const result = service.promote(req.body || {})
+    if (!result.ok) {
+      return res.status(statusFor(result.code)).json(result)
+    }
+
+    invalidateCache()
+    const data = getData()
+    res.json({
+      ok: true,
+      ...data,
+      soundset: result.soundset,
+      soundsetDir: result.soundsetDir,
+      group: result.group,
+      warnings: result.warnings,
+    })
+  } catch (err) {
+    invalidateCache()
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+app.get('/api/refs', (req, res) => {
+  try {
+    res.json({ ok: true, broken: service.checkRefs() })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
   }
 })
 
