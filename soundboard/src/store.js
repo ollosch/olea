@@ -511,6 +511,57 @@ export function isLibraryPreviewPlaying(libraryId) {
   return engine.isLoopPlaying(key) || engine.isOneShotPlaying(key)
 }
 
+// ---- review preview ----
+
+const reviewKey = (ssId, elId) => `review:${ssId}::${elId}`
+let activeReviewPreview = null
+
+function stopReviewPreviewKey() {
+  if (!activeReviewPreview) return
+  engine.stopLoopElement(activeReviewPreview)
+  engine.stopOneShot(activeReviewPreview)
+  activeReviewPreview = null
+}
+
+export function stopReviewPreviews() {
+  stopReviewPreviewKey()
+}
+
+export function isReviewPreviewPlaying(ssId, elId) {
+  const key = reviewKey(ssId, elId)
+  return engine.isLoopPlaying(key) || engine.isOneShotPlaying(key)
+}
+
+export function toggleReviewPreview(ssId, elId) {
+  const { ss, el } = findElementPair(ssId, elId)
+  if (!ss || !el || !(el.files || []).length) return
+  const key = reviewKey(ss.id, el.id)
+  if (engine.isLoopPlaying(key) || engine.isOneShotPlaying(key)) {
+    stopReviewPreviewKey()
+    return
+  }
+
+  stopReviewPreviewKey()
+  activeReviewPreview = key
+  const bus = el.kind === 'loop' ? 'loop' : el.kind === 'random' ? 'random' : 'effects'
+
+  if (el.kind === 'loop') {
+    engine.playLoopElement(key, {
+      files: el.files.map((file) => audioUrl(el, file)),
+      gain: clamp01(el.gain),
+      randomise: el.randomise === 'random' || el.randomise === 'shuffle',
+      reverb: el.reverb,
+      bus,
+    })
+  } else {
+    engine.playOneShot(key, audioUrl(el, el.files[pickIndex(el, key)]), {
+      gain: clamp01(el.gain),
+      bus,
+      reverb: el.reverb,
+    })
+  }
+}
+
 export function toggleLibraryPreview(libraryId) {
   const group = findLibraryGroup(libraryId)
   if (!group || !(group.files || []).length) return
@@ -646,6 +697,7 @@ export function stopEverything() {
   stopEffects()
   for (const entry of store.global.palette || []) stopPaletteItem(entry.id)
   stopAllLibraryPreviews()
+  stopReviewPreviews()
 }
 
 // ---- loop elements ----

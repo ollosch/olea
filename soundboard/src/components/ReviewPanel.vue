@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, computed, watch } from 'vue'
+import { reactive, computed, watch, onUnmounted } from 'vue'
 import {
   store,
   resolvedSceneElements,
@@ -8,6 +8,9 @@ import {
   mergeSceneElements,
   promoteToLibrary,
   markReviewed,
+  toggleReviewPreview,
+  isReviewPreviewPlaying,
+  stopReviewPreviews,
 } from '../store'
 import { REVERB_PRESETS } from '../../lib/schema.js'
 
@@ -56,6 +59,8 @@ watch(
   },
   { immediate: true }
 )
+
+onUnmounted(stopReviewPreviews)
 
 const sizeIndex = computed(() => {
   const byPath = new Map()
@@ -166,6 +171,7 @@ function applyKind(entry) {
     `Set ${ids.length} selected element${ids.length === 1 ? '' : 's'} to ${label}?`
   )
   if (!ok) return
+  stopReviewPreviews()
   reclassifyElements(entry.ss.id, ids, { kind: state.kind })
   setMessage(entry.ss.id, `Set ${ids.length} element${ids.length === 1 ? '' : 's'} to ${label}.`)
 }
@@ -210,6 +216,7 @@ function applyReverb(entry) {
     `Set reverb to ${label} for ${ids.length} selected element${ids.length === 1 ? '' : 's'}?`
   )
   if (!ok) return
+  stopReviewPreviews()
   reclassifyElements(entry.ss.id, ids, { reverb: state.reverb || null })
   setMessage(entry.ss.id, `Updated reverb for ${ids.length} element${ids.length === 1 ? '' : 's'}.`)
 }
@@ -223,6 +230,7 @@ function mergeSelected(entry) {
       'Library includes are never merged.'
   )
   if (!ok) return
+  stopReviewPreviews()
   const result = mergeSceneElements(
     entry.ss.id,
     local.map((el) => el.id),
@@ -258,6 +266,7 @@ async function promoteSelected(entry) {
   if (!ok) return
 
   state.category = category
+  stopReviewPreviews()
   let promoted = 0
   const failures = []
 
@@ -280,6 +289,7 @@ function markSceneReviewed(entry) {
   const ok = window.confirm(`Mark “${entry.ss.name}” as reviewed?\n\nIt will leave the review list.`)
   if (!ok) return
   clearSelected(entry.ss)
+  stopReviewPreviews()
   markReviewed(entry.ss.id)
 }
 </script>
@@ -379,6 +389,7 @@ function markSceneReviewed(entry) {
           <thead>
             <tr>
               <th class="check-col"><span class="sr-only">Select</span></th>
+              <th class="preview-col"><span class="sr-only">Preview</span></th>
               <th>Name</th>
               <th>Kind</th>
               <th>Files</th>
@@ -399,6 +410,24 @@ function markSceneReviewed(entry) {
                   @change="toggleSelect(entry.ss.id, el.id, $event.target.checked)"
                 />
               </td>
+              <td class="preview-col">
+                <button
+                  class="btn-sm preview-btn"
+                  :class="{ active: isReviewPreviewPlaying(entry.ss.id, el.id) }"
+                  :disabled="!(el.files || []).length"
+                  :title="
+                    !(el.files || []).length
+                      ? 'No audio files'
+                      : isReviewPreviewPlaying(entry.ss.id, el.id)
+                        ? 'Stop preview'
+                        : 'Preview this sound'
+                  "
+                  :aria-label="`${isReviewPreviewPlaying(entry.ss.id, el.id) ? 'Stop' : 'Play'} preview of ${el.name}`"
+                  @click="toggleReviewPreview(entry.ss.id, el.id)"
+                >
+                  {{ isReviewPreviewPlaying(entry.ss.id, el.id) ? 'Stop' : 'Play' }}
+                </button>
+              </td>
               <td>
                 <div class="element-name">
                   <span class="name">{{ el.name || '(unnamed)' }}</span>
@@ -416,7 +445,7 @@ function markSceneReviewed(entry) {
               <td class="small">{{ el.reverb || '—' }}</td>
             </tr>
             <tr v-if="!entry.elements.length">
-              <td colspan="7" class="muted empty-row">No resolved elements in this scene.</td>
+              <td colspan="8" class="muted empty-row">No resolved elements in this scene.</td>
             </tr>
           </tbody>
         </table>
@@ -538,6 +567,20 @@ function markSceneReviewed(entry) {
 .check-col {
   width: 2rem;
   text-align: center;
+}
+
+.preview-col {
+  width: 3.8rem;
+  text-align: center;
+}
+
+.preview-btn {
+  min-width: 3.2rem;
+}
+
+.preview-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .element-name {
