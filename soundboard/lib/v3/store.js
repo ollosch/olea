@@ -21,6 +21,7 @@ import {
   uid,
 } from './schema.js'
 import {
+  addSoundToCatalog,
   findSound,
   searchCatalog,
   setSoundDuration as setCatalogSoundDuration,
@@ -353,6 +354,32 @@ export function createStore({ dataDir, soundsDir } = {}) {
     state.catalog = setCatalogSoundDuration(state.catalog, soundId, numeric)
     await persist(catalogPath(rootDataDir), state.catalog)
     return findSound(state.catalog, soundId)
+  }
+
+  async function addSounds(soundRecords) {
+    const list = Array.isArray(soundRecords) ? soundRecords : []
+    let catalog = state.catalog
+    let added = 0
+    let existing = 0
+
+    for (const record of list) {
+      const result = addSoundToCatalog(catalog, record)
+      catalog = result.catalog
+      if (result.added) added += 1
+      else existing += 1
+    }
+
+    if (added > 0) {
+      state.catalog = normalizeCatalog(catalog)
+      await persist(catalogPath(rootDataDir), state.catalog)
+    }
+    return { catalog: state.catalog, added, existing }
+  }
+
+  async function saveCatalog(raw) {
+    state.catalog = normalizeCatalog(raw)
+    await persist(catalogPath(rootDataDir), state.catalog)
+    return state.catalog
   }
 
   async function saveGlobal(raw) {
@@ -847,6 +874,8 @@ export function createStore({ dataDir, soundsDir } = {}) {
     stats,
     searchSounds,
     setSoundDuration,
+    addSounds,
+    saveCatalog,
     saveGlobal,
     saveLibrary,
     createGroup,
