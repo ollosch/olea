@@ -364,11 +364,11 @@ export const useGameStore = defineStore('game', {
     async useItem(inventoryId) {
       await api.useItem(inventoryId)
     },
-    async dropItem(inventoryId) {
-      await api.dropItem(inventoryId)
+    async dropItem(inventoryId, quantity) {
+      await api.dropItem(inventoryId, quantity)
     },
-    async moveItem(inventoryId, location) {
-      await api.moveItem(inventoryId, location)
+    async moveItem(inventoryId, location, quantity) {
+      await api.moveItem(inventoryId, location, quantity)
     },
 
     // ---- money ----

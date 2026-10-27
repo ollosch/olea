@@ -138,6 +138,22 @@ function createInventoryEntry(app, gameId, itemId, ownerId, quantity, chargesCur
   return rec;
 }
 
+function addToInventoryStack(app, gameId, itemId, ownerId, quantity, location) {
+  const loc = location === "stash" ? "stash" : "person";
+  const existing = firstOrNull(
+    app,
+    "inventory",
+    "game = {:game} && item = {:item} && owner = {:owner} && location = {:location}",
+    { game: gameId, item: itemId, owner: ownerId, location: loc }
+  );
+  if (existing) {
+    existing.set("quantity", (existing.get("quantity") || 0) + quantity);
+    app.save(existing);
+    return existing;
+  }
+  return createInventoryEntry(app, gameId, itemId, ownerId, quantity, null, loc);
+}
+
 function currencyLookup(app, systemId) {
   const map = {};
   app.findRecordsByFilter("currencies", "system = {:system}", "sort", 0, 0, { system: systemId }).forEach((c) => {
@@ -256,6 +272,7 @@ module.exports = {
   ensureWallet,
   adjustWallet,
   createInventoryEntry,
+  addToInventoryStack,
   currencyLookup,
   importSystemData,
   validateItemCurrency,

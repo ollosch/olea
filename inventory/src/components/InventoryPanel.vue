@@ -25,6 +25,11 @@ const giveQty = ref(1)
 const giveError = ref('')
 const busy = ref(false)
 
+const split = ref(null)
+const splitQty = ref(1)
+const splitError = ref('')
+const splitBusy = ref(false)
+
 const recipients = computed(() =>
   game.players.filter((m) => m.player !== props.playerId)
 )
@@ -52,6 +57,10 @@ async function onUse(entry) {
 }
 
 async function onMove(entry) {
+  if (entry.expand?.item?.kind === 'stack') {
+    openSplit(entry, 'move')
+    return
+  }
   try {
     await game.moveItem(entry.id, entry.location === 'person' ? 'stash' : 'person')
   } catch (err) {
@@ -60,13 +69,67 @@ async function onMove(entry) {
 }
 
 async function onDrop(entry) {
-  const label = game.isGM ? 'Take' : 'Drop'
-  if (!confirm(`${label} "${entry.expand?.item?.name || 'this item'}"?`)) return
+  if (game.isGM) {
+    if (!confirm(`Take "${entry.expand?.item?.name || 'this item'}"?`)) return
+    try {
+      await game.dropItem(entry.id)
+      show('Item taken')
+    } catch (err) {
+      show(errorMessage(err))
+    }
+    return
+  }
+
+  if (entry.expand?.item?.kind === 'stack') {
+    openSplit(entry, 'drop')
+    return
+  }
+
+  if (!confirm(`Drop "${entry.expand?.item?.name || 'this item'}"?`)) return
   try {
     await game.dropItem(entry.id)
-    show(game.isGM ? 'Item taken' : 'Item dropped')
+    show('Item dropped')
   } catch (err) {
     show(errorMessage(err))
+  }
+}
+
+function openSplit(entry, action) {
+  split.value = { entry, action }
+  splitQty.value = 1
+  splitError.value = ''
+}
+
+function closeSplit() {
+  split.value = null
+  splitError.value = ''
+}
+
+async function confirmSplit() {
+  const current = split.value
+  if (!current) return
+  const entry = current.entry
+  const qty = Number(splitQty.value)
+  if (!qty || qty < 1 || qty > entry.quantity) {
+    splitError.value = 'Invalid quantity'
+    return
+  }
+  splitBusy.value = true
+  splitError.value = ''
+  try {
+    if (current.action === 'move') {
+      const target = entry.location === 'person' ? 'stash' : 'person'
+      await game.moveItem(entry.id, target, qty)
+      show('Item moved')
+    } else {
+      await game.dropItem(entry.id, qty)
+      show('Item dropped')
+    }
+    closeSplit()
+  } catch (err) {
+    splitError.value = errorMessage(err)
+  } finally {
+    splitBusy.value = false
   }
 }
 
@@ -158,11 +221,11 @@ async function confirmGive() {
 
           <div class="row">
             <button
-              v-if="isSelf && section === 'person' && entry.expand?.item?.kind === 'charges' && entry.charges_current > 0"
+              v-if="isSelf && section === 'person' && ((entry.expand?.item?.kind === 'charges' && entry.charges_current > 0) || (entry.expand?.item?.kind === 'stack' && entry.quantity > 0))"
               class="primary"
               @click="onUse(entry)"
             >
-              Use
+              {{ entry.expand?.item?.kind === 'stack' ? 'Use 1' : 'Use' }}
             </button>
             <button v-if="isSelf" @click="openGive(entry)">Give</button>
             <button v-if="isSelf" @click="onMove(entry)">
@@ -179,6 +242,40 @@ async function confirmGive() {
         </div>
       </div>
     </section>
+
+    <div v-if="split" class="modal-backdrop" @click.self="closeSplit">
+      <div class="modal">
+        <h3>
+          {{
+            split.action === 'move'
+              ? split.entry.location === 'person'
+                ? 'Move to stash'
+                : 'Move to pocket'
+              : 'Drop item'
+          }}
+        </h3>
+        <p class="small muted">
+          {{ split.entry.expand?.item?.name }} · {{ split.entry.quantity }} available
+        </p>
+        <div class="field">
+          <label for="split-qty">Quantity</label>
+          <input
+            id="split-qty"
+            v-model.number="splitQty"
+            type="number"
+            min="1"
+            :max="split.entry.quantity"
+          />
+        </div>
+        <div v-if="splitError" class="error">{{ splitError }}</div>
+        <div class="row" style="margin-top: 1rem">
+          <button class="primary grow" :disabled="splitBusy" @click="confirmSplit">
+            {{ split.action === 'move' ? 'Move' : 'Drop' }}
+          </button>
+          <button :disabled="splitBusy" @click="closeSplit">Cancel</button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="giving" class="modal-backdrop" @click.self="closeGive">
       <div class="modal">

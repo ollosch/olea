@@ -318,8 +318,21 @@ routerAdd(
     if (entry.get("owner") !== me.get("id")) u.forbidden("You cannot use someone else's item");
 
     const item = app.findRecordById("items", entry.get("item"));
-    if ((item.get("kind") || "single") !== "charges") u.bad("This item is not charge-based");
+    const kind = item.get("kind") || "single";
 
+    if (kind === "stack") {
+      const qty = entry.get("quantity") || 0;
+      if (qty <= 0) u.bad("Nothing left");
+      if (qty === 1) {
+        app.delete(entry);
+      } else {
+        entry.set("quantity", qty - 1);
+        app.save(entry);
+      }
+      return e.json(200, { ok: true });
+    }
+
+    if (kind !== "charges") u.bad("This item cannot be used");
     const current = entry.get("charges_current") || 0;
     if (current <= 0) u.bad("No charges left");
     entry.set("charges_current", current - 1);
@@ -343,6 +356,21 @@ routerAdd(
     const isGM = u.roleOf(app, entry.get("game"), me.get("id")) === "gm";
     if (!isOwner && !isGM) u.forbidden("You cannot remove someone else's item");
 
+    // GM "take" always removes the whole instance.
+    if (!isGM) {
+      const item = app.findRecordById("items", entry.get("item"));
+      if ((item.get("kind") || "single") === "stack" && body.quantity != null) {
+        const current = entry.get("quantity") || 0;
+        const qty = parseInt(body.quantity, 10);
+        if (!qty || qty < 1 || qty > current) u.bad("Invalid quantity");
+        if (qty < current) {
+          entry.set("quantity", current - qty);
+          app.save(entry);
+          return e.json(200, { ok: true });
+        }
+      }
+    }
+
     app.delete(entry);
     return e.json(200, { ok: true });
   },
@@ -361,6 +389,30 @@ routerAdd(
     const location = body.location === "stash" ? "stash" : "person";
 
     if (entry.get("owner") !== me.get("id")) u.forbidden("You can only move your own items");
+    if (entry.get("location") === location) return e.json(200, { ok: true });
+
+    const item = app.findRecordById("items", entry.get("item"));
+    if ((item.get("kind") || "single") === "stack" && body.quantity != null) {
+      const current = entry.get("quantity") || 0;
+      const qty = parseInt(body.quantity, 10);
+      if (!qty || qty < 1 || qty > current) u.bad("Invalid quantity");
+      if (qty < current) {
+        app.runInTransaction((tx) => {
+          const source = tx.findRecordById("inventory", entry.get("id"));
+          source.set("quantity", current - qty);
+          tx.save(source);
+          u.addToInventoryStack(
+            tx,
+            entry.get("game"),
+            entry.get("item"),
+            entry.get("owner"),
+            qty,
+            location
+          );
+        });
+        return e.json(200, { ok: true });
+      }
+    }
 
     entry.set("location", location);
     app.save(entry);

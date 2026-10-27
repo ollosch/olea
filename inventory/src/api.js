@@ -37,11 +37,15 @@ export const api = {
   useItem(inventoryId) {
     return post('/api/inventory/use', { inventoryId })
   },
-  dropItem(inventoryId) {
-    return post('/api/inventory/drop', { inventoryId })
+  dropItem(inventoryId, quantity) {
+    const data = { inventoryId }
+    if (quantity != null) data.quantity = quantity
+    return post('/api/inventory/drop', data)
   },
-  moveItem(inventoryId, location) {
-    return post('/api/inventory/move', { inventoryId, location })
+  moveItem(inventoryId, location, quantity) {
+    const data = { inventoryId, location }
+    if (quantity != null) data.quantity = quantity
+    return post('/api/inventory/move', data)
   },
   giveMoney(data) {
     return post('/api/money/give', data)
