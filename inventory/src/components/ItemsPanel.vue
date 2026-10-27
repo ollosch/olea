@@ -5,6 +5,10 @@ import { useToast } from '../composables/useToast'
 import { errorMessage } from '../utils/errors'
 import ItemEditorModal from './ItemEditorModal.vue'
 
+const props = defineProps({
+  showGive: { type: Boolean, default: true },
+})
+
 const game = useGameStore()
 const { show } = useToast()
 
@@ -58,7 +62,7 @@ const giveQty = ref(1)
 const giveError = ref('')
 const giveBusy = ref(false)
 
-const recipients = computed(() => game.members)
+const recipients = computed(() => game.players)
 
 function openGive(item) {
   giving.value = item
@@ -104,9 +108,14 @@ async function confirmGive() {
 
 <template>
   <div>
-    <div class="row" style="margin-bottom: 0.75rem">
-      <div class="grow"></div>
+    <div class="row" style="margin-bottom: 0.25rem">
+      <span class="small muted grow">
+        This catalog is shared by every game using this system.
+      </span>
       <button class="primary" @click="openCreate">Add item</button>
+    </div>
+    <div class="small muted" style="margin-bottom: 0.75rem">
+      Weight unit: {{ game.system?.weight_unit || 'lb' }}
     </div>
 
     <div v-if="!game.items.length" class="muted">No items yet.</div>
@@ -128,7 +137,7 @@ async function confirmGive() {
               <span v-if="item.value > 0"> · {{ item.value }} {{ valueCurrency(item) }}</span>
             </div>
           </div>
-          <button @click.stop="openGive(item)">Give</button>
+          <button v-if="props.showGive" @click.stop="openGive(item)">Give</button>
           <button class="danger" @click.stop="onDelete(item)">Delete</button>
         </div>
       </div>

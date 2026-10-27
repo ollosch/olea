@@ -139,7 +139,7 @@ async function save() {
 
       <div class="row">
         <div class="field grow">
-          <label for="item-weight">Weight</label>
+          <label for="item-weight">Weight ({{ game.system?.weight_unit || 'lb' }})</label>
           <input id="item-weight" v-model="form.weight" type="number" min="0" />
         </div>
         <div class="field grow">
