@@ -619,7 +619,7 @@ export function createMood() {
     scene.tracks.map((track) => track.id)
   )
   scene.moods.push(mood)
-  store.selectedMoodId = mood.id
+  selectMood(mood.id)
   scheduleSave()
   return mood
 }
@@ -638,7 +638,7 @@ export function duplicateMood(id = store.selectedMoodId) {
     scene.tracks.map((track) => track.id)
   )
   scene.moods.push(mood)
-  store.selectedMoodId = mood.id
+  selectMood(mood.id)
   scheduleSave()
   return mood
 }
@@ -1268,9 +1268,10 @@ export async function play() {
   const initial = initialTransportPlan(plan)
   engine.stopScene()
   engine.unlock()
-  for (const track of initial.startLoops) engine.startTrack(track)
-  for (const track of initial.startRandoms) engine.startTrack(track)
-  store.transportRunning = true
+  let started = 0
+  for (const track of initial.startLoops) if (engine.startTrack(track)) started += 1
+  for (const track of initial.startRandoms) if (engine.startTrack(track)) started += 1
+  store.transportRunning = started > 0
 }
 
 export function stop() {
