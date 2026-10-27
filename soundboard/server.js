@@ -86,6 +86,7 @@ export function createApp(store, options = {}) {
   app.get('/api/global', (req, res) => res.json(store.global()))
 
   app.get('/api/scenes', (req, res) => res.json(store.listScenes()))
+  app.get('/api/bindings', (req, res) => res.json(store.bindingsOverview()))
   app.get('/api/scenes/:id', (req, res) => {
     const scene = store.scene(req.params.id)
     if (!scene) return res.status(404).json({ error: 'Scene not found' })

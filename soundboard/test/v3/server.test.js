@@ -157,6 +157,40 @@ test('group creation and scene save/reject through HTTP', async (t) => {
   assert.equal((await fetch(`${base}/api/scenes/missing`)).status, 404)
 })
 
+test('GET /api/bindings returns global MIDI, scene MIDI, and conflicts', async (t) => {
+  const { base, store } = await setup(t, [{ id: 's1' }])
+  const group = await store.createGroup({ name: 'Group', sounds: ['s1'] })
+  const scene = await store.createScene({ name: 'Alpha' })
+
+  await store.saveScene(scene.id, {
+    ...scene,
+    tracks: [{ id: 't1', groupId: group.id, kind: 'loop', order: 0 }],
+    midi: { notes: { '0:note:60': { type: 'trackTrigger', trackId: 't1' } }, ccs: {} },
+  })
+  await store.saveGlobal({
+    palette: [{ id: 'p1', groupId: group.id }],
+    midi: { notes: { '0:note:60': { type: 'paletteTrigger', paletteId: 'p1' } } },
+  })
+
+  const response = await fetch(`${base}/api/bindings`)
+  assert.equal(response.status, 200)
+  const body = await response.json()
+
+  assert.deepEqual(body.global, store.global().midi)
+  assert.equal(body.scenes.length, 1)
+  assert.equal(body.scenes[0].sceneId, scene.id)
+  assert.equal(body.scenes[0].name, 'Alpha')
+  assert.deepEqual(body.scenes[0].midi, store.scene(scene.id).midi)
+  assert.equal(body.conflicts.length, 1)
+  assert.equal(body.conflicts[0].sceneId, scene.id)
+  assert.equal(body.conflicts[0].key, '0:note:60')
+  assert.deepEqual(body.conflicts[0].globalAction, {
+    type: 'paletteTrigger',
+    paletteId: 'p1',
+  })
+  assert.deepEqual(body.conflicts[0].localAction, { type: 'trackTrigger', trackId: 't1' })
+})
+
 test('audio is served by hash with immutable caching and Range support', async (t) => {
   const { base, audio } = await setup(t, [{ id: 'a1', data: 'abcdefghij' }])
   const fixture = audio.get('a1')

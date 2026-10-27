@@ -27,6 +27,7 @@ import {
   setSoundDuration as setCatalogSoundDuration,
   stats as catalogStats,
 } from './catalog.js'
+import { cleanupBindings, findConflicts } from './bindings.js'
 import {
   catalogPath,
   ensureDirs,
@@ -299,17 +300,47 @@ export function createStore({ dataDir, soundsDir } = {}) {
     return state.scenes.get(id) || null
   }
 
+  function sortScenes(scenes) {
+    return scenes.slice().sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+  }
+
+  function allScenes() {
+    return sortScenes(Array.from(state.scenes.values()))
+  }
+
   function listScenes() {
-    return Array.from(state.scenes.values())
-      .map((item) => ({
-        id: item.id,
-        name: item.name,
-        disabled: item.disabled,
-        trackCount: item.tracks.length,
-        moodCount: item.moods.length,
-        defaultMoodId: item.defaultMoodId,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    return allScenes().map((item) => ({
+      id: item.id,
+      name: item.name,
+      disabled: item.disabled,
+      trackCount: item.tracks.length,
+      moodCount: item.moods.length,
+      defaultMoodId: item.defaultMoodId,
+    }))
+  }
+
+  function bindingsOverview() {
+    const scenes = allScenes()
+    const conflicts = []
+    for (const scene of scenes) {
+      for (const conflict of findConflicts(state.global.midi, scene.midi)) {
+        conflicts.push({ sceneId: scene.id, ...conflict })
+      }
+    }
+    conflicts.sort(
+      (a, b) =>
+        (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) ||
+        a.sceneId.localeCompare(b.sceneId)
+    )
+    return {
+      global: state.global.midi,
+      scenes: scenes.map((scene) => ({
+        sceneId: scene.id,
+        name: scene.name,
+        midi: scene.midi,
+      })),
+      conflicts,
+    }
   }
 
   function importDone() {
@@ -383,7 +414,8 @@ export function createStore({ dataDir, soundsDir } = {}) {
   }
 
   async function saveGlobal(raw) {
-    state.global = normalizeGlobal(raw)
+    state.global = normalizeGlobal(cleanRawGlobalMidi(raw))
+    pruneGlobalBindings()
     await persist(globalPath(rootDataDir), state.global)
     return state.global
   }
@@ -449,6 +481,77 @@ export function createStore({ dataDir, soundsDir } = {}) {
     return before - palette.length
   }
 
+  function midiBindingCount(midi) {
+    return (
+      Object.keys(isObj(midi?.notes) ? midi.notes : {}).length +
+      Object.keys(isObj(midi?.ccs) ? midi.ccs : {}).length
+    )
+  }
+
+  function cleanGlobalMidi(midi) {
+    const paletteIds = new Set(state.global.palette.map((entry) => entry.id))
+    const groupIds = new Set(state.library.groups.map((group) => group.id))
+    return cleanupBindings(midi, 'global', (action) => {
+      if (action.type === 'paletteTrigger' || action.type === 'paletteVolume') {
+        return !paletteIds.has(action.paletteId)
+      }
+      if (action.groupId && !groupIds.has(action.groupId)) return true
+      return false
+    })
+  }
+
+  function pruneGlobalBindings() {
+    const before = midiBindingCount(state.global.midi)
+    const midi = cleanGlobalMidi(state.global.midi)
+    const after = midiBindingCount(midi)
+    if (after === before) return 0
+    state.global = { ...state.global, midi }
+    return before - after
+  }
+
+  function cleanRawGlobalMidi(raw) {
+    const source = isObj(raw) ? raw : {}
+    const rawPalette = Array.isArray(source.palette) ? source.palette : []
+    const paletteIds = new Set(
+      rawPalette
+        .filter((entry) => isObj(entry) && typeof entry.id === 'string' && entry.id)
+        .map((entry) => entry.id)
+    )
+    const groupIds = new Set(state.library.groups.map((group) => group.id))
+    const midi = isObj(source.midi) ? source.midi : {}
+    const out = { notes: {}, ccs: {} }
+
+    for (const mapName of ['notes', 'ccs']) {
+      const bindings = isObj(midi[mapName]) ? midi[mapName] : {}
+      for (const [key, action] of Object.entries(bindings)) {
+        if (isObj(action)) {
+          if (
+            (action.type === 'paletteTrigger' || action.type === 'paletteVolume') &&
+            !paletteIds.has(action.paletteId)
+          ) {
+            continue
+          }
+          if (action.groupId && !groupIds.has(action.groupId)) continue
+        }
+        out[mapName][key] = action
+      }
+    }
+
+    return { ...source, midi: out }
+  }
+
+  function cleanSceneMidi(scene) {
+    const trackIds = new Set(scene.tracks.map((track) => track.id))
+    const moodIds = new Set(scene.moods.map((mood) => mood.id))
+    return cleanupBindings(scene.midi, 'local', (action) => {
+      if (action.type === 'trackTrigger' || action.type === 'trackVolume') {
+        return !trackIds.has(action.trackId)
+      }
+      if (action.type === 'moodSelect') return !moodIds.has(action.moodId)
+      return false
+    })
+  }
+
   async function createGroup(raw) {
     let group
     try {
@@ -496,9 +599,16 @@ export function createStore({ dataDir, soundsDir } = {}) {
       groups: state.library.groups.filter((candidate) => candidate.id !== id),
     }
     const paletteRemoved = prunePaletteForGroups([id])
+    const bindingsRemoved = pruneGlobalBindings()
     await persistLibrary()
-    if (paletteRemoved) await persistGlobal()
-    return { group, library: state.library, global: state.global, paletteRemoved }
+    if (paletteRemoved || bindingsRemoved) await persistGlobal()
+    return {
+      group,
+      library: state.library,
+      global: state.global,
+      paletteRemoved,
+      bindingsRemoved,
+    }
   }
 
   async function addGroupSounds(id, soundIds) {
@@ -586,14 +696,16 @@ export function createStore({ dataDir, soundsDir } = {}) {
     }
 
     const paletteRemoved = prunePaletteForGroups(removedIds)
+    const bindingsRemoved = pruneGlobalBindings()
     await persistLibrary()
-    if (paletteRemoved) await persistGlobal()
+    if (paletteRemoved || bindingsRemoved) await persistGlobal()
     return {
       group: merged,
       library: state.library,
       global: state.global,
       removedIds,
       paletteRemoved,
+      bindingsRemoved,
     }
   }
 
@@ -775,10 +887,11 @@ export function createStore({ dataDir, soundsDir } = {}) {
       }
     }
 
-    const scene = normalizeScene({ ...raw, id })
-    const result = validateScene(scene)
+    const normalized = normalizeScene({ ...raw, id })
+    const result = validateScene(normalized)
     if (!result.ok) throw new ValidationError('Invalid scene', result.errors)
 
+    const scene = { ...normalized, midi: cleanSceneMidi(normalized) }
     state.scenes.set(id, scene)
     await persist(scenePath(rootDataDir, id), scene)
     return scene
@@ -868,7 +981,9 @@ export function createStore({ dataDir, soundsDir } = {}) {
     library,
     global,
     scene,
+    allScenes,
     listScenes,
+    bindingsOverview,
     importDone,
     warnings,
     stats,
