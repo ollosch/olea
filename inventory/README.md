@@ -1,5 +1,12 @@
-# Vue 3 + Vite
+# Olea inventory
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+PocketBase + Vue 3 inventory and money manager (port 8090).
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+The built frontend is served from `pb_public/` by PocketBase. See the repository root
+`README.md` for running both apps, and `CONTRACT.md` for the frontend data/store contract.
+
+```bash
+npm install
+npm run dev     # Vite dev server, proxies /api to 127.0.0.1:8090
+npm run build   # rebuild into pb_public/
+```

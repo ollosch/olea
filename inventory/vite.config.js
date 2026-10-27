@@ -11,7 +11,7 @@ export default defineConfig({
       manifest: {
         name: 'Olea',
         short_name: 'Olea',
-        description: 'TTRPG equipment & money manager',
+        description: 'TTRPG inventory & money manager',
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',

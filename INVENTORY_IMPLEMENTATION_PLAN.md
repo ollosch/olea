@@ -1,31 +1,25 @@
 # Inventory app — implementation plan / handoff
 
-> Use this file to resume work. The backend schema/hooks were rewritten for the new model, but the
-> frontend has **not** been updated yet and the dev database has **not** been reset. The app is not
-> usable in its current intermediate state.
+> Status: **COMPLETED** on branch `inventory`. The app was renamed, the frontend was updated for
+> systems/shared catalogs/stash, the dev database was reset, and the backend was tested end to end.
+> The inventory app is not live; data can still be deleted.
 
-IMPORTANT: USE SUBAGENTS TO IMPLEMENT FEATURES OR GATHER INFORMATION. KEEP THIS MAIN CONTEXT WINDOW SMALL. WE ONLY HAVE 100k tokens!!!!
+No data migration is needed or wanted.
 
-Also do NOT migrate any data. The app is NOT live yet. All data can be deleted.
+## Status
 
-## Status right now
-
-- Branch: `redesign`
-- Work already changed:
-  - `inventory/pb_migrations/1791200000_init.js` — rewritten for systems, shared catalogs and stash.
-  - `inventory/pb_hooks/utils.js` — rewritten helpers (roles, wallets by location, system import).
-  - `inventory/pb_hooks/main.pb.js` — rewritten routes/hooks (game delete, systems, stash, roles).
-  - The temporary `1793099500_created_updated_wallet_game.js` migration was deleted.
-- Migration was tested on an empty temp DB (`/tmp/opencode/olea-new`) and applied cleanly.
-- The rewritten API endpoints have **not** been fully end-to-end tested yet. The interrupted test
-  script was going to cover: create game with inline system, add players, give/take items, stash
-  moves, money transfers, permissions, cascade delete, JSON import.
-- `inventory/pb_data/` still contains the old schema/data and migration history. It must be reset.
-- A PocketBase dev server may still be running on port `8090` against that stale DB. Stop it before
-  resetting. (It was PID 606127 at the time of writing.)
-- Frontend is still the old code: game-scoped items/currencies, no systems, no stash, GM treated as
-  a member with inventory/wallet.
-- `inventory/CONTRACT.md` is now outdated. Update or delete it when the frontend is done.
+- Branch: `inventory` (created from `redesign`).
+- Folder renamed from `equipment/` to `inventory/` and the Vue source promoted to `inventory/src`.
+- Backend schema/hooks rewritten and validated; an item's `value_currency` is checked against the
+  item's system.
+- Frontend updated: systems screens, shared catalogs, GM/player roles, person/stash inventory and
+  wallets, weight totals, print sheet.
+- `inventory/CONTRACT.md` rewritten for the new model.
+- Dev DB reset; the init migration applied cleanly.
+- End-to-end API test passed: login, inline system, players, give/take, stash moves, transfers,
+  permissions, JSON import idempotency, cascade deletes.
+- Remaining optional decisions: a game edit route (name/description) and restricting the `games`
+  list/view to members. Neither blocks the app.
 
 ## Decisions confirmed by the user
 
@@ -115,22 +109,20 @@ Helpers in `inventory/pb_hooks/utils.js`:
 - `currencyLookup`, `importSystemData`, `createSystem`
 - `playerByName` still auto-creates an auth account on first login.
 
-## Known backend TODOs / risks
+## Known backend notes / remaining decisions
 
-- Add validation that an item’s `value_currency` belongs to the item’s `system` on
-  create/update (`main.pb.js` item hooks).
-- Verify `findRecordsByFilter(..., limit=0, ...)` returns all rows in this PocketBase version;
-  existing code assumes it does.
-- End-to-end test the API list above. Do not assume the rewritten hooks work just because the
-  migration applied.
-- Decide whether a game needs an edit route (name/description); only delete exists now.
-- Decide whether `GET /api/collections/games` should be restricted to members. Current list/view
-  rules are any authenticated account (which also leaks games the user is not in).
-- System JSON import currently upserts currencies by name and items by `(system, name)`; it matches
-  `value_currency` by currency id, name or symbol (case-insensitive).
-- Importing a system twice is intended to be idempotent-ish, but this needs testing.
+- Item `value_currency` is validated against the item's system on create/update. **Done.**
+- `findRecordsByFilter(..., limit=0, ...)` returned all rows in the end-to-end tests.
+- End-to-end API testing passed (see the reset and test procedure below).
+- No game edit route (name/description) yet; only create/delete exists.
+- `GET /api/collections/games` is still readable by any authenticated account. Consider
+  restricting list/view to members later.
+- System JSON import upserts currencies by name and items by `(system, name)`; `value_currency`
+  matches id, name or symbol (case-insensitive). Re-import does not duplicate rows.
 
-## Frontend TODO
+## Frontend implementation (completed)
+
+All items below are implemented.
 
 ### API / store
 
@@ -191,7 +183,7 @@ Helpers in `inventory/pb_hooks/utils.js`:
 - `ItemEditorModal`: use system currencies/catalog, not game currencies.
 - `PrintView`: update to new wallet shape, person/stash sections, weight totals, system unit.
 
-## Reset and test procedure (after frontend is updated)
+## Reset and test procedure (completed)
 
 1. Stop the old server on `8090`.
 2. Wipe the stale database (allowed; no data to preserve):
@@ -225,7 +217,7 @@ Helpers in `inventory/pb_hooks/utils.js`:
    - Delete the now-unused system; confirm its currencies/items are gone.
    - Import a JSON system/item list.
 
-## Rename / restructure plan
+## Rename / restructure plan (completed)
 
 Recommended final layout (agreed direction, confirm exact names in the new prompt):
 
@@ -265,10 +257,7 @@ Rename steps (do this **before** frontend edits to avoid updating paths twice):
   describes the old data model. Either delete it or rewrite it for systems/shared catalogs, GM vs
   player roles, stash locations, and the new store/actions.
 
-## Quick reference for the next prompt
+## Quick reference
 
-Start with something like:
-
-> Read `INVENTORY_IMPLEMENTATION_PLAN.md`. The backend schema/hooks are already rewritten but not
-> fully tested. Do the folder rename first, then update the frontend, reset the DB, rebuild, and
-> test end-to-end. The old `inventory/CONTRACT.md` is obsolete.
+This plan is complete. The inventory app lives in `inventory/`; see `inventory/CONTRACT.md` for
+the current store/component contract.
