@@ -10,6 +10,8 @@ const auth = useAuthStore()
 const { show } = useToast()
 
 const myPlayerId = computed(() => auth.player?.id || null)
+const gms = computed(() => game.gms)
+const players = computed(() => game.players)
 
 const newName = ref('')
 const newRole = ref('player')
@@ -53,7 +55,7 @@ async function onRemove(m) {
 
 <template>
   <div>
-    <div v-if="game.isGM" class="card">
+    <div v-if="game.isGM" class="card" style="margin-bottom: 1rem">
       <h3>Add member</h3>
       <div class="row">
         <input v-model="newName" class="grow" type="text" placeholder="Player name" />
@@ -65,25 +67,45 @@ async function onRemove(m) {
       </div>
     </div>
 
-    <div class="list" style="margin-top: 0.75rem">
-      <div v-for="m in game.members" :key="m.id" class="list-item">
-        <div class="grow">
-          <strong>{{ memberName(m) }}</strong>
-          <span v-if="m.player === myPlayerId" class="small muted"> · you</span>
+    <section style="margin-bottom: 1.5rem">
+      <h2>GMs</h2>
+      <div v-if="!gms.length" class="muted small">No GMs.</div>
+      <div v-else class="list">
+        <div v-for="m in gms" :key="m.id" class="list-item">
+          <div class="grow">
+            <strong>{{ memberName(m) }}</strong>
+            <span v-if="m.player === myPlayerId" class="small muted"> · you</span>
+          </div>
+          <span class="badge gm">GM</span>
+          <template v-if="game.isGM">
+            <button @click="onToggleRole(m)">Make Player</button>
+            <button class="danger" :disabled="m.player === myPlayerId" @click="onRemove(m)">
+              Remove
+            </button>
+          </template>
         </div>
-        <span class="badge" :class="{ gm: m.role === 'gm' }">
-          {{ m.role === 'gm' ? 'GM' : 'Player' }}
-        </span>
-        <template v-if="game.isGM">
-          <button @click="onToggleRole(m)">
-            {{ m.role === 'gm' ? 'Make Player' : 'Make GM' }}
-          </button>
-          <button class="danger" :disabled="m.player === myPlayerId" @click="onRemove(m)">
-            Remove
-          </button>
-        </template>
       </div>
-    </div>
+    </section>
+
+    <section>
+      <h2>Players</h2>
+      <div v-if="!players.length" class="muted small">No players yet.</div>
+      <div v-else class="list">
+        <div v-for="m in players" :key="m.id" class="list-item">
+          <div class="grow">
+            <strong>{{ memberName(m) }}</strong>
+            <span v-if="m.player === myPlayerId" class="small muted"> · you</span>
+          </div>
+          <span class="badge">Player</span>
+          <template v-if="game.isGM">
+            <button @click="onToggleRole(m)">Make GM</button>
+            <button class="danger" :disabled="m.player === myPlayerId" @click="onRemove(m)">
+              Remove
+            </button>
+          </template>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 
