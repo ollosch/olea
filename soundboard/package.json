@@ -8,6 +8,7 @@
     "build": "vite build",
     "start": "node server.js",
     "import-v3": "node tools/import-v3.js",
+    "import-scenes": "node tools/import-scenes-v2.js",
     "test": "node --test test/v3/*.test.js"
   },
   "dependencies": {

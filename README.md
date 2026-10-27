@@ -7,6 +7,46 @@ Two small, local-only tools for running a TTRPG campaign (DnD, Numenera, Call of
    soundscapes (looping ambience + one-shot effects) and can be driven by a MIDI controller
    (e.g. AKAI MPK Mini: pads/keys → triggers, knobs → volume).
 
+## Browser and MIDI setup (read this first)
+
+The soundboard uses the browser **Web MIDI** API. The controller must be connected to the **same
+device that is running the browser**, not to the server if you open the app from another machine.
+
+Web MIDI also requires a **secure browser context**:
+
+- `http://localhost:8091` and `http://127.0.0.1:8091` work normally.
+- `http://<LAN-IP>:8091` is **not** a secure context. Chrome/Edge will not expose MIDI there unless
+  you explicitly mark the origin as trustworthy for testing:
+
+  ```bash
+  # Chromium
+  chromium --unsafely-treat-insecure-origin-as-secure=http://192.168.1.50:8091 \
+           --user-data-dir=/tmp/olea-chromium
+
+  # Google Chrome
+  google-chrome --unsafely-treat-insecure-origin-as-secure=http://192.168.1.50:8091 \
+                --user-data-dir=/tmp/olea-chrome
+  ```
+
+  Replace the IP with the machine running the app. For regular use on a tablet/another computer,
+  prefer HTTPS (reverse proxy or a trusted local certificate) instead of the flag.
+
+- Firefox: open `about:config` and set:
+
+  | Setting | Value |
+  |---|---|
+  | `dom.webmidi.enabled` | `true` |
+  | `dom.webmidi.gated` | `false` (if present) |
+
+  Restart Firefox, open the soundboard, and allow the MIDI permission prompt. `localhost` works
+  over HTTP; if a remote `http://<LAN-IP>` exposes no devices, use HTTPS.
+
+Seeing **two MIDI inputs** is normal: the AKAI often exposes more than one port, and Linux/ALSA may
+also show `Midi Through`. The app listens to all inputs, so if one physical pad triggers twice,
+you have two ports delivering the same event; use the controller port and remove/disable the
+virtual one. In the app, click **Connect MIDI**, then **Learn** next to an action and press the pad
+or turn the knob. Note actions accept notes; volume actions accept CC only.
+
 ## Equipment & money manager
 
 - **Roles:** GM and Player. Roles are per-game — you can be GM in one game and a Player in another.
@@ -84,6 +124,19 @@ The default source is `soundboard/syrinscape/`, with data in `soundboard/data/` 
 Re-running the importer is safe and idempotent. It never deletes or modifies source audio: verify
 the catalog and library, then remove the old audio tree yourself. Old v2 `config.json`/`library.json`
 data is deprecated and is not read or migrated.
+
+When the audio catalog is ready, recreate the legacy scenes as a one-off conversion:
+
+```bash
+npm run import-scenes -- --dry-run
+npm run import-scenes
+```
+
+This reads every old `config.json`, recreates each scene (name, disabled state, element
+kinds/order/triggers, moods, and local MIDI), and adds only the library groups needed to preserve
+each element's sound set. It is idempotent: re-running skips scenes that already exist, and
+`--force` updates them. It does not migrate the old global palette or global MIDI. Use
+`--limit <n>` for a small test run, and `--source`, `--data`, or `--sounds` to override paths.
 
 - Override paths with `OLEA_DATA_DIR` / `OLEA_SOUNDS_DIR`, and the port with `PORT`.
 - MIDI learn is available in the UI. Local scene bindings are checked against global bindings and
