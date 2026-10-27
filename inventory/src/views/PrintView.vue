@@ -3,6 +3,7 @@ import { computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useGameStore } from '../stores/game'
 import { currencyLabel } from '../utils/money'
+import { entryWeight, totalWeight, formatWeight } from '../utils/weight'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,33 +22,35 @@ const playerName = computed(() => {
 })
 
 const gameName = computed(() => game.activeGame?.name || '')
+const unit = computed(() => game.system?.weight_unit || 'lb')
 
 const wallet = computed(() => game.walletFor(playerId))
-const inventory = computed(() => game.inventoryFor(playerId))
+const personItems = computed(() => game.inventoryFor(playerId, 'person'))
+const stashItems = computed(() => game.inventoryFor(playerId, 'stash'))
 
 const currencies = computed(() => [...game.currencies].sort((a, b) => a.sort - b.sort))
 
-const optimizedLabel = computed(() =>
-  wallet.value.optimized
-    .map(({ currency, amount }) => `${amount} ${currencyLabel(currency)}`)
-    .join(' ')
-)
+function optimizedLabel(part) {
+  const parts = part.optimized
+    .filter((x) => x.amount > 0)
+    .map((x) => `${x.amount} ${currencyLabel(x.currency)}`)
+  return parts.length ? parts.join(' ') : '0'
+}
 
-function qtyLabel(e) {
-  const item = e.expand?.item
+function qtyLabel(entry) {
+  const item = entry.expand?.item
   if (!item) return ''
-  if (item.kind === 'stack') return String(e.quantity)
-  if (item.kind === 'charges') return `${e.charges_current}/${item.max_charges}`
+  if (item.kind === 'stack') return String(entry.quantity)
+  if (item.kind === 'charges') return `${entry.charges_current}/${item.max_charges}`
   return ''
 }
 
-function weightLabel(e) {
-  const item = e.expand?.item
-  return item && item.weight > 0 ? String(item.weight) : ''
+function weightLabel(entry) {
+  return formatWeight(entryWeight(entry), unit.value)
 }
 
-function valueLabel(e) {
-  const item = e.expand?.item
+function valueLabel(entry) {
+  const item = entry.expand?.item
   if (!item || !(item.value > 0)) return ''
   const symbol = game.currencyMap[item.value_currency]
     ? currencyLabel(game.currencyMap[item.value_currency])
@@ -73,18 +76,27 @@ function print() {
     <section v-if="currencies.length" style="margin-bottom: 1.5rem">
       <h2>Money</h2>
       <table>
+        <thead>
+          <tr>
+            <th>Currency</th>
+            <th>On person</th>
+            <th>Stash</th>
+          </tr>
+        </thead>
         <tbody>
           <tr v-for="c in currencies" :key="c.id">
             <td>{{ c.name }}</td>
-            <td>{{ wallet.amounts[c.id] || 0 }}</td>
+            <td>{{ wallet.person.amounts[c.id] || 0 }}</td>
+            <td>{{ wallet.stash.amounts[c.id] || 0 }}</td>
           </tr>
         </tbody>
       </table>
-      <p v-if="optimizedLabel"><strong>Optimized total:</strong> {{ optimizedLabel }}</p>
+      <p><strong>On person optimized:</strong> {{ optimizedLabel(wallet.person) }}</p>
+      <p><strong>Stash optimized:</strong> {{ optimizedLabel(wallet.stash) }}</p>
     </section>
 
-    <section>
-      <h2>Items</h2>
+    <section style="margin-bottom: 1.5rem">
+      <h2>Items on person</h2>
       <table>
         <thead>
           <tr>
@@ -95,17 +107,44 @@ function print() {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="e in inventory" :key="e.id">
+          <tr v-for="e in personItems" :key="e.id">
             <td>{{ e.expand?.item?.name || 'Unknown' }}</td>
             <td>{{ qtyLabel(e) }}</td>
             <td>{{ weightLabel(e) }}</td>
             <td>{{ valueLabel(e) }}</td>
           </tr>
-          <tr v-if="!inventory.length">
+          <tr v-if="!personItems.length">
             <td colspan="4" class="muted">No items</td>
           </tr>
         </tbody>
       </table>
+      <p><strong>Total carried:</strong> {{ formatWeight(totalWeight(personItems), unit) }}</p>
+    </section>
+
+    <section>
+      <h2>Stash</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Qty/Charges</th>
+            <th>Weight</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="e in stashItems" :key="e.id">
+            <td>{{ e.expand?.item?.name || 'Unknown' }}</td>
+            <td>{{ qtyLabel(e) }}</td>
+            <td>{{ weightLabel(e) }}</td>
+            <td>{{ valueLabel(e) }}</td>
+          </tr>
+          <tr v-if="!stashItems.length">
+            <td colspan="4" class="muted">No items</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>Stash total:</strong> {{ formatWeight(totalWeight(stashItems), unit) }}</p>
     </section>
   </div>
 </template>
