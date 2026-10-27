@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from './stores/auth'
+import { useGameStore } from './stores/game'
 
 const routes = [
   { path: '/', name: 'home', component: () => import('./views/HomeView.vue') },
@@ -15,10 +16,17 @@ export const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
   if (!auth.ready) auth.init()
   if (to.name !== 'home' && !auth.isAuthed) return { name: 'home' }
   if (to.name === 'home' && auth.isAuthed) return { name: 'games' }
+
+  if (to.name === 'systems' || to.name === 'system') {
+    const game = useGameStore()
+    if (!game.games.length) await game.loadGames()
+    if (!game.isGlobalGM) return { name: 'games' }
+  }
+
   return true
 })
