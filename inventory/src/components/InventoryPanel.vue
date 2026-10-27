@@ -3,6 +3,8 @@ import { ref, computed } from 'vue'
 import { useGameStore } from '../stores/game'
 import { useToast } from '../composables/useToast'
 import { errorMessage } from '../utils/errors'
+import { currencyLabel } from '../utils/money'
+import { entryWeight, totalWeight, formatWeight } from '../utils/weight'
 
 const props = defineProps({
   playerId: { type: String, required: true },
@@ -11,7 +13,11 @@ const props = defineProps({
 const game = useGameStore()
 const { show } = useToast()
 
-const entries = computed(() => game.inventoryFor(props.playerId))
+const unit = computed(() => game.system?.weight_unit || 'lb')
+const isSelf = computed(() => props.playerId === game.myPlayerId)
+
+const personEntries = computed(() => game.inventoryFor(props.playerId, 'person'))
+const stashEntries = computed(() => game.inventoryFor(props.playerId, 'stash'))
 
 const giving = ref(null)
 const giveTo = ref('')
@@ -20,33 +26,52 @@ const giveError = ref('')
 const busy = ref(false)
 
 const recipients = computed(() =>
-  game.members.filter((m) => m.player !== props.playerId)
+  game.players.filter((m) => m.player !== props.playerId)
 )
 
-const valueCurrency = (item) => {
-  const c = game.currencyMap[item.value_currency]
-  return c ? c.symbol : ''
+function valueLabel(item) {
+  if (!item || !(item.value > 0)) return ''
+  const currency = game.currencyMap[item.value_currency]
+  return currency ? `${item.value} ${currencyLabel(currency)}` : String(item.value)
 }
 
-async function onUse(e) {
+function qtyLabel(entry) {
+  const item = entry.expand?.item
+  if (!item) return ''
+  if (item.kind === 'stack') return `× ${entry.quantity}`
+  if (item.kind === 'charges') return `${entry.charges_current}/${item.max_charges} charges`
+  return ''
+}
+
+async function onUse(entry) {
   try {
-    await game.useItem(e.id)
+    await game.useItem(entry.id)
   } catch (err) {
     show(errorMessage(err))
   }
 }
 
-async function onDrop(e) {
-  if (!confirm('Drop this item?')) return
+async function onMove(entry) {
   try {
-    await game.dropItem(e.id)
+    await game.moveItem(entry.id, entry.location === 'person' ? 'stash' : 'person')
   } catch (err) {
     show(errorMessage(err))
   }
 }
 
-function openGive(e) {
-  giving.value = e
+async function onDrop(entry) {
+  const label = game.isGM ? 'Take' : 'Drop'
+  if (!confirm(`${label} "${entry.expand?.item?.name || 'this item'}"?`)) return
+  try {
+    await game.dropItem(entry.id)
+    show(game.isGM ? 'Item taken' : 'Item dropped')
+  } catch (err) {
+    show(errorMessage(err))
+  }
+}
+
+function openGive(entry) {
+  giving.value = entry
   giveTo.value = ''
   giveQty.value = 1
   giveError.value = ''
@@ -58,17 +83,17 @@ function closeGive() {
 }
 
 async function confirmGive() {
-  const e = giving.value
-  if (!e) return
+  const entry = giving.value
+  if (!entry) return
   if (!giveTo.value) {
     giveError.value = 'Choose a recipient'
     return
   }
-  const item = e.expand?.item
-  const payload = { inventoryId: e.id, toPlayerId: giveTo.value }
+  const item = entry.expand?.item
+  const payload = { inventoryId: entry.id, toPlayerId: giveTo.value }
   if (item?.kind === 'stack') {
     const q = Number(giveQty.value)
-    if (!q || q < 1 || q > e.quantity) {
+    if (!q || q < 1 || q > entry.quantity) {
       giveError.value = 'Invalid quantity'
       return
     }
@@ -90,46 +115,70 @@ async function confirmGive() {
 
 <template>
   <div>
-    <div v-if="!entries.length" class="muted">No items yet.</div>
-    <div v-else class="list">
-      <div v-for="e in entries" :key="e.id" class="list-item">
-        <div class="grow">
-          <div>
-            <strong>{{ e.expand?.item?.name }}</strong>
-            <span v-if="e.expand?.item?.category" class="small muted">
-              · {{ e.expand.item.category }}</span
-            >
+    <section v-for="section in ['person', 'stash']" :key="section" style="margin-bottom: 1.5rem">
+      <div class="row" style="margin-bottom: 0.5rem">
+        <h2 class="grow" style="margin: 0">
+          {{ section === 'person' ? 'On person' : 'Stash' }}
+        </h2>
+        <span class="small muted">
+          {{ formatWeight(totalWeight(section === 'person' ? personEntries : stashEntries), unit) }}
+        </span>
+      </div>
+
+      <div
+        v-if="!(section === 'person' ? personEntries : stashEntries).length"
+        class="muted small"
+      >
+        No items.
+      </div>
+
+      <div v-else class="list">
+        <div
+          v-for="entry in section === 'person' ? personEntries : stashEntries"
+          :key="entry.id"
+          class="list-item"
+        >
+          <div class="grow">
+            <div>
+              <strong>{{ entry.expand?.item?.name || 'Unknown item' }}</strong>
+              <span v-if="entry.expand?.item?.category" class="small muted">
+                · {{ entry.expand.item.category }}
+              </span>
+            </div>
+            <div class="small muted">
+              <span v-if="qtyLabel(entry)">{{ qtyLabel(entry) }}</span>
+              <span v-if="entry.expand?.item?.weight > 0">
+                · {{ formatWeight(entryWeight(entry), unit) }}
+              </span>
+              <span v-if="valueLabel(entry.expand?.item)">
+                · {{ valueLabel(entry.expand?.item) }}
+              </span>
+            </div>
           </div>
-          <div class="small muted">
-            <span v-if="e.expand?.item?.kind === 'stack'">× {{ e.quantity }}</span>
-            <span v-else-if="e.expand?.item?.kind === 'charges'"
-              >{{ e.charges_current }} / {{ e.expand?.item?.max_charges }} charges</span
+
+          <div class="row">
+            <button
+              v-if="isSelf && section === 'person' && entry.expand?.item?.kind === 'charges' && entry.charges_current > 0"
+              class="primary"
+              @click="onUse(entry)"
             >
-            <span v-if="e.expand?.item?.weight > 0">{{ e.expand.item.weight }} lb</span>
-            <span v-if="e.expand?.item?.value > 0">
-              {{ e.expand.item.value }} {{ valueCurrency(e.expand.item) }}</span
+              Use
+            </button>
+            <button v-if="isSelf" @click="openGive(entry)">Give</button>
+            <button v-if="isSelf" @click="onMove(entry)">
+              {{ section === 'person' ? 'Stash' : 'Pocket' }}
+            </button>
+            <button
+              v-if="isSelf || game.isGM"
+              class="danger"
+              @click="onDrop(entry)"
             >
+              {{ game.isGM ? 'Take' : 'Drop' }}
+            </button>
           </div>
-        </div>
-        <div class="row">
-          <button
-            v-if="e.expand?.item?.kind === 'charges' && e.charges_current > 0"
-            class="primary"
-            @click="onUse(e)"
-          >
-            Use
-          </button>
-          <button @click="openGive(e)">Give</button>
-          <button
-            v-if="e.owner === game.myPlayerId || game.isGM"
-            class="danger"
-            @click="onDrop(e)"
-          >
-            Drop
-          </button>
         </div>
       </div>
-    </div>
+    </section>
 
     <div v-if="giving" class="modal-backdrop" @click.self="closeGive">
       <div class="modal">
@@ -153,9 +202,12 @@ async function confirmGive() {
             :max="giving.quantity"
           />
         </div>
+        <div v-if="!recipients.length" class="small muted">There are no other players to give to.</div>
         <div v-if="giveError" class="error">{{ giveError }}</div>
         <div class="row" style="margin-top: 1rem">
-          <button class="primary grow" :disabled="busy" @click="confirmGive">Give</button>
+          <button class="primary grow" :disabled="busy || !recipients.length" @click="confirmGive">
+            Give
+          </button>
           <button :disabled="busy" @click="closeGive">Cancel</button>
         </div>
       </div>
