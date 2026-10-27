@@ -1,18 +1,34 @@
-// Web Audio engine. Two kinds of playback:
-//   - loop elements: one or more samples cycled continuously (crossfaded when
-//     the element has a playlist with several samples).
-//   - one-shot elements: play a single sample; instances are tracked so they
-//     can be stopped individually or all at once.
-import { reactive } from 'vue'
-import { REVERB_PRESETS, BUSES } from '../lib/schema.js'
+// Web Audio engine for the v3 soundboard.
+//
+// - One sound at a time per scene track and per palette entry.
+// - Loop tracks crossfade to the next group sound near the end.
+// - Random tracks run a scheduler using the resolved trigger interval.
+// - One-shots toggle: a second trigger stops the current instance.
+// - Three kind buses (loop/random/oneshot), master gain, per-track gain/pan and
+//   a shared per-preset reverb convolver per bus.
+//
+// The engine owns all timers and audio nodes. It never reads the store; callers
+// pass resolved tracks that already include sound metadata.
 
-const CROSSFADE = 2.0
+import { reactive } from 'vue'
+import {
+  BUSES,
+  REVERB_PRESETS,
+  clamp01,
+  clampPan,
+  coerceReverb,
+} from '../lib/v3/schema.js'
+import {
+  pickSoundIndex,
+  triggerDelay,
+} from './playback-model.js'
+
+const CROSSFADE = 1.8
 const WET_RATIO = 0.4
 const REVERB_RETURN_LEVEL = 0.5
+const START_FADE = 0.35
+const STOP_FADE = 0.25
 
-// Per-preset reverb parameters: `decay` is the impulse length in seconds,
-// `damping` acts as a lowpass cutoff (Hz-ish, higher = brighter) so darker
-// presets roll off the high frequencies faster.
 const REVERB_PARAMS = {
   City: { decay: 1.2, damping: 6000 },
   Cave: { decay: 3.5, damping: 1500 },
@@ -30,81 +46,119 @@ const REVERB_PARAMS = {
 
 const FALLBACK_REVERB = { decay: 2.0, damping: 3000 }
 
-const state = reactive({
-  activeLoops: new Set(), // loop element ids currently playing
-  loading: new Set(), // urls currently being fetched/decoded
-  activeOneshots: new Set(), // oneshot element ids with >= 1 live instance
+export const state = reactive({
+  ready: false,
+  unlocked: false,
+  suspended: false,
+  tracks: {},
+  palettes: {},
+  preview: null,
+  activeTrackCount: 0,
+  activePaletteCount: 0,
 })
 
 let ctx = null
 let masterGain = null
-let loopsBus = null
-let randomsBus = null
-let effectsBus = null
+let busNodes = null
 let reverbReturns = null
-let masterVolume = 1
-const busVolumes = { loop: 1, random: 1, effects: 1 }
-const convolvers = new Map() // `${bus}::${preset}` -> ConvolverNode (created lazily)
-const buffers = new Map() // url -> AudioBuffer
-const loops = new Map() // elementId -> loop entry
-const oneshots = new Map() // elementId -> Set<instance>
-const pending = new Map() // url -> Promise<AudioBuffer>
+let progressTimer = null
+let masterVolume = 0.8
+const busVolumes = { loop: 1, random: 1, oneshot: 1 }
 
-function clamp01(v) {
-  const n = Number(v)
-  if (!Number.isFinite(n)) return 0
-  return Math.min(1, Math.max(0, n))
+const buffers = new Map()
+const pending = new Map()
+const convolvers = new Map()
+const trackVoices = new Map()
+const paletteVoices = new Map()
+let previewVoice = null
+let previewToken = 0
+let options = {}
+
+function configure(next = {}) {
+  options = { ...options, ...next }
 }
 
-function rampGain(param, value, seconds = 0.05) {
-  if (!ctx || !param) return
-  const t = ctx.currentTime
-  param.cancelScheduledValues(t)
-  param.setValueAtTime(param.value, t)
-  param.linearRampToValueAtTime(clamp01(value), t + seconds)
+function soundUrl(meta) {
+  if (!meta) return ''
+  return meta.url || `/audio/${meta.hash}`
 }
 
 function ensureCtx() {
   if (!ctx) {
-    ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    ctx = new Ctx()
     masterGain = ctx.createGain()
     masterGain.gain.value = masterVolume
     masterGain.connect(ctx.destination)
-    loopsBus = ctx.createGain()
-    loopsBus.gain.value = busVolumes.loop
-    loopsBus.connect(masterGain)
-    randomsBus = ctx.createGain()
-    randomsBus.gain.value = busVolumes.random
-    randomsBus.connect(masterGain)
-    effectsBus = ctx.createGain()
-    effectsBus.gain.value = busVolumes.effects
-    effectsBus.connect(masterGain)
+
+    busNodes = {}
     reverbReturns = {}
     for (const bus of BUSES) {
+      const node = ctx.createGain()
+      node.gain.value = busVolumes[bus]
+      node.connect(masterGain)
+      busNodes[bus] = node
+
       const ret = ctx.createGain()
       ret.gain.value = busVolumes[bus] * REVERB_RETURN_LEVEL
       ret.connect(masterGain)
       reverbReturns[bus] = ret
     }
+
+    ctx.onstatechange = () => {
+      state.suspended = ctx.state === 'suspended'
+      state.unlocked = ctx.state === 'running'
+    }
+    state.ready = true
+    progressTimer = setInterval(tick, 200)
   }
-  if (ctx.state === 'suspended') ctx.resume()
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {})
+  state.suspended = ctx.state === 'suspended'
+  state.unlocked = ctx.state === 'running'
   return ctx
 }
 
-function getBusNode(bus) {
-  if (bus === BUSES[0]) return loopsBus // 'loop'
-  if (bus === BUSES[1]) return randomsBus // 'random'
-  return effectsBus // BUSES[2] === 'effects'
+async function unlock() {
+  ensureCtx()
+  if (ctx && ctx.state === 'suspended') {
+    try {
+      await ctx.resume()
+    } catch {
+      /* needs a real user gesture */
+    }
+  }
+  state.suspended = ctx ? ctx.state === 'suspended' : false
+  state.unlocked = ctx ? ctx.state === 'running' : false
+  return state.unlocked
 }
 
-function setBusGain(bus, v) {
+function rampTo(param, value, seconds = 0.08) {
+  if (!ctx || !param) return
+  const t = ctx.currentTime
+  param.cancelScheduledValues(t)
+  param.setValueAtTime(param.value, t)
+  param.linearRampToValueAtTime(Number.isFinite(value) ? value : 0, t + seconds)
+}
+
+function ramp(param, value, seconds = 0.08) {
+  rampTo(param, clamp01(value), seconds)
+}
+
+function getBus(kind) {
+  return busNodes?.[kind] || busNodes?.oneshot || masterGain
+}
+
+function setMaster(value) {
+  masterVolume = clamp01(value)
+  ramp(masterGain?.gain, masterVolume)
+}
+
+function setBus(bus, value) {
   if (!BUSES.includes(bus)) return
-  const value = clamp01(v)
-  busVolumes[bus] = value
-  const node = getBusNode(bus)
-  if (node) rampGain(node.gain, value)
-  if (reverbReturns && reverbReturns[bus]) {
-    rampGain(reverbReturns[bus].gain, value * REVERB_RETURN_LEVEL)
+  busVolumes[bus] = clamp01(value)
+  ramp(busNodes?.[bus]?.gain, busVolumes[bus])
+  if (reverbReturns?.[bus]) {
+    ramp(reverbReturns[bus].gain, busVolumes[bus] * REVERB_RETURN_LEVEL)
   }
 }
 
@@ -114,10 +168,10 @@ function createImpulseResponse(decay, damping) {
   const buffer = ctx.createBuffer(2, len, sampleRate)
   const cutoff = Math.max(20, damping)
   const alpha = Math.exp((-2 * Math.PI * cutoff) / sampleRate)
-  for (let ch = 0; ch < 2; ch++) {
+  for (let ch = 0; ch < 2; ch += 1) {
     const data = buffer.getChannelData(ch)
     let lp = 0
-    for (let i = 0; i < len; i++) {
+    for (let i = 0; i < len; i += 1) {
       const noise = Math.random() * 2 - 1
       lp = lp * alpha + noise * (1 - alpha)
       data[i] = lp * Math.pow(1 - i / len, 2)
@@ -127,27 +181,27 @@ function createImpulseResponse(decay, damping) {
 }
 
 function getReverb(bus, preset) {
-  if (!preset) return null
-  let name = String(preset)
-  const known = REVERB_PRESETS.find((p) => p.toLowerCase() === name.toLowerCase())
-  if (known) name = known
-  const key = `${bus}::${name}`
+  const name = coerceReverb(preset)
+  if (!name) return null
+  const known = REVERB_PRESETS.includes(name) ? name : null
+  if (!known) return null
+  const key = `${bus}::${known}`
   if (!convolvers.has(key)) {
-    const params = REVERB_PARAMS[name] || FALLBACK_REVERB
+    const params = REVERB_PARAMS[known] || FALLBACK_REVERB
     const conv = ctx.createConvolver()
     conv.buffer = createImpulseResponse(params.decay, params.damping)
-    const returnNode = (reverbReturns && reverbReturns[bus]) || reverbReturns.effects
-    conv.connect(returnNode || masterGain)
+    conv.connect(reverbReturns[bus] || masterGain)
     convolvers.set(key, conv)
   }
   return convolvers.get(key)
 }
 
-function loadBuffer(url) {
+function loadBuffer(meta) {
+  const url = typeof meta === 'string' ? meta : soundUrl(meta)
+  if (!url) return Promise.reject(new Error('Missing audio url'))
   if (buffers.has(url)) return Promise.resolve(buffers.get(url))
   if (pending.has(url)) return pending.get(url)
-  state.loading.add(url)
-  const p = (async () => {
+  const promise = (async () => {
     try {
       const res = await fetch(url)
       if (!res.ok) throw new Error(`Failed to load audio (${res.status})`)
@@ -155,270 +209,572 @@ function loadBuffer(url) {
       buffers.set(url, audio)
       return audio
     } finally {
-      state.loading.delete(url)
       pending.delete(url)
     }
   })()
-  pending.set(url, p)
-  return p
+  pending.set(url, promise)
+  return promise
 }
 
-function startLoopSample(entry) {
-  const url = entry.files[entry.idx % entry.files.length]
-  return loadBuffer(url)
-    .then((audio) => {
-      if (!loops.has(entry.id)) return // stopped while loading
-      const src = ctx.createBufferSource()
-      src.buffer = audio
-      src.loop = true
-      const g = ctx.createGain()
-      g.gain.setValueAtTime(0.0001, ctx.currentTime)
-      g.gain.linearRampToValueAtTime(entry.gain, ctx.currentTime + CROSSFADE)
-      src.connect(g)
-      g.connect(getBusNode(entry.bus))
-      let wet = null
-      const conv = getReverb(entry.bus, entry.reverb)
-      if (conv) {
-        wet = ctx.createGain()
-        wet.gain.setValueAtTime(0.0001, ctx.currentTime)
-        wet.gain.linearRampToValueAtTime(entry.gain * WET_RATIO, ctx.currentTime + CROSSFADE)
-        src.connect(wet)
-        wet.connect(conv)
-      }
-      src.start()
-      entry.src = src
-      entry.gainNode = g
-      entry.wetGainNode = wet
-      entry.url = url
-      scheduleAdvance(entry)
-    })
-    .catch((e) => {
-      console.error('Failed to load loop', url, e)
-      if (loops.has(entry.id)) {
-        entry.idx += 1
-        startLoopSample(entry)
-      }
-    })
-}
-
-function scheduleAdvance(entry) {
-  if (entry.timer) clearTimeout(entry.timer)
-  entry.timer = null
-  if (entry.files.length < 2) return
-  const url = entry.files[entry.idx % entry.files.length]
-  const buffer = buffers.get(url)
-  if (!buffer) return
-  const dur = buffer.duration || 1
-  // Crossfade into the next sample before this one loops; for very short
-  // samples, advance after one full play so we never get stuck repeating it.
-  const wait = dur > CROSSFADE ? dur - CROSSFADE : Math.max(dur, 0.1)
-  entry.timer = setTimeout(() => advanceLoop(entry), wait * 1000)
-}
-
-function advanceLoop(entry) {
-  if (!loops.has(entry.id)) return
-  if (entry.files.length > 1) {
-    if (entry.randomise) {
-      const n = entry.files.length
-      const i = Math.floor(Math.random() * (n - 1))
-      entry.idx = i >= entry.idx ? i + 1 : i
-    } else {
-      entry.idx = (entry.idx + 1) % entry.files.length
-    }
+function persistDuration(meta, duration) {
+  if (!meta) return
+  const known = Number(meta.duration)
+  if (Number.isFinite(known) && known > 0) return
+  if (!Number.isFinite(duration) || duration <= 0) return
+  meta.duration = duration
+  if (typeof options.onDuration === 'function') {
+    options.onDuration(meta.id, duration)
   }
-  const prevSrc = entry.src
-  const prevGain = entry.gainNode
-  const prevWet = entry.wetGainNode
-  entry.src = null
-  entry.gainNode = null
-  entry.wetGainNode = null
-  startLoopSample(entry).then(() => {
-    if (prevSrc && prevGain) {
-      const t = ctx.currentTime
-      prevGain.gain.cancelScheduledValues(t)
-      prevGain.gain.setValueAtTime(prevGain.gain.value, t)
-      prevGain.gain.linearRampToValueAtTime(0.0001, t + CROSSFADE)
-      if (prevWet) {
-        prevWet.gain.cancelScheduledValues(t)
-        prevWet.gain.setValueAtTime(prevWet.gain.value, t)
-        prevWet.gain.linearRampToValueAtTime(0.0001, t + CROSSFADE)
-      }
-      try {
-        prevSrc.stop(t + CROSSFADE + 0.1)
-      } catch {
-        /* already stopped */
-      }
-    }
-  })
 }
 
-async function playLoopElement(id, { files, gain = 0.8, randomise = false, reverb = null, bus = 'loop' } = {}) {
-  ensureCtx()
-  if (loops.has(id)) return
-  if (!files || !files.length) return
-  const entry = {
-    id,
-    files,
-    gain: clamp01(gain),
-    randomise,
-    reverb,
-    bus,
-    idx: randomise ? Math.floor(Math.random() * files.length) : 0,
-    src: null,
-    gainNode: null,
-    wetGainNode: null,
-    url: null,
-    timer: null,
+function voiceRecord(voice) {
+  const target = voice.type === 'track' ? state.tracks : state.palettes
+  const existing = target[voice.key]
+  const record = existing || {}
+  record.active = true
+  record.kind = voice.kind
+  record.playing = Boolean(voice.nodes)
+  record.position = record.position || 0
+  record.duration = record.duration || 0
+  record.soundId = record.soundId || null
+  record.soundName = record.soundName || ''
+  record.selection = voice.selection
+  record.label = voice.label || ''
+  target[voice.key] = record
+}
+
+function updateCounts() {
+  state.activeTrackCount = trackVoices.size
+  state.activePaletteCount = paletteVoices.size
+}
+
+function allVoices() {
+  return [...trackVoices.values(), ...paletteVoices.values()]
+}
+
+function removeVoiceState(voice) {
+  if (voice.type === 'track') delete state.tracks[voice.key]
+  else delete state.palettes[voice.key]
+  updateCounts()
+}
+
+function clearTimer(voice) {
+  if (voice.timer) {
+    clearTimeout(voice.timer)
+    voice.timer = null
   }
-  loops.set(id, entry)
-  state.activeLoops.add(id)
-  await startLoopSample(entry)
 }
 
-function stopLoopElement(id, { fadeOut = 1.0 } = {}) {
-  const entry = loops.get(id)
-  if (!entry) return
-  if (entry.timer) clearTimeout(entry.timer)
+function fadeOutNodes(nodes, seconds = STOP_FADE) {
+  if (!ctx || !nodes) return
   const t = ctx.currentTime
-  if (entry.gainNode) {
-    entry.gainNode.gain.cancelScheduledValues(t)
-    entry.gainNode.gain.setValueAtTime(entry.gainNode.gain.value, t)
-    entry.gainNode.gain.linearRampToValueAtTime(0.0001, t + fadeOut)
+  for (const param of [nodes.gain?.gain, nodes.wet?.gain]) {
+    if (!param) continue
+    param.cancelScheduledValues(t)
+    param.setValueAtTime(param.value, t)
+    param.linearRampToValueAtTime(0.0001, t + Math.max(0.01, seconds))
   }
-  if (entry.wetGainNode) {
-    entry.wetGainNode.gain.cancelScheduledValues(t)
-    entry.wetGainNode.gain.setValueAtTime(entry.wetGainNode.gain.value, t)
-    entry.wetGainNode.gain.linearRampToValueAtTime(0.0001, t + fadeOut)
-  }
-  if (entry.src) {
-    try {
-      entry.src.stop(t + fadeOut + 0.1)
-    } catch {
-      /* already stopped */
-    }
-  }
-  loops.delete(id)
-  state.activeLoops.delete(id)
-}
-
-function setLoopGain(id, v) {
-  const entry = loops.get(id)
-  if (!entry) return
-  const value = clamp01(v)
-  entry.gain = value
-  rampGain(entry.gainNode && entry.gainNode.gain, value)
-  rampGain(entry.wetGainNode && entry.wetGainNode.gain, value * WET_RATIO)
-}
-
-function isLoopPlaying(id) {
-  return state.activeLoops.has(id)
-}
-
-async function playOneShot(id, url, { gain = 1, bus = 'effects', reverb = null } = {}) {
-  ensureCtx()
-  const value = clamp01(gain)
-  let audio
   try {
-    audio = await loadBuffer(url)
-  } catch (e) {
-    console.error('Failed to load effect', url, e)
-    return
+    nodes.src.stop(t + Math.max(0.01, seconds) + 0.06)
+  } catch {
+    /* already stopped */
   }
+}
+
+function applyVoiceReverb(voice, preset) {
+  voice.reverb = coerceReverb(preset)
+  const nodes = voice.nodes
+  if (!nodes || !ctx) return
+  if (nodes.wet) {
+    try {
+      nodes.wet.disconnect()
+    } catch {
+      /* already disconnected */
+    }
+    nodes.wet = null
+  }
+  const conv = getReverb(voice.bus, voice.reverb)
+  if (conv) {
+    const wet = ctx.createGain()
+    wet.gain.value = voice.gain * WET_RATIO
+    nodes.src.connect(wet)
+    wet.connect(conv)
+    nodes.wet = wet
+  }
+}
+
+function createSegment(voice, buffer, { loop, meta }) {
   const src = ctx.createBufferSource()
-  src.buffer = audio
-  const g = ctx.createGain()
-  g.gain.value = value
-  src.connect(g)
-  g.connect(getBusNode(bus))
+  src.buffer = buffer
+  src.loop = loop
+
+  const gain = ctx.createGain()
+  const now = ctx.currentTime
+  gain.gain.setValueAtTime(0.0001, now)
+  gain.gain.linearRampToValueAtTime(voice.gain, now + START_FADE)
+
+  let pan = null
+  if (typeof ctx.createStereoPanner === 'function') {
+    pan = ctx.createStereoPanner()
+    pan.pan.value = voice.pan
+    src.connect(gain)
+    gain.connect(pan)
+    pan.connect(getBus(voice.bus))
+  } else {
+    src.connect(gain)
+    gain.connect(getBus(voice.bus))
+  }
 
   let wet = null
-  const conv = getReverb(bus, reverb)
+  const conv = getReverb(voice.bus, voice.reverb)
   if (conv) {
     wet = ctx.createGain()
-    wet.gain.value = value * WET_RATIO
+    wet.gain.setValueAtTime(0.0001, now)
+    wet.gain.linearRampToValueAtTime(voice.gain * WET_RATIO, now + START_FADE)
     src.connect(wet)
     wet.connect(conv)
   }
 
-  const inst = { src, gain: g, wetGain: wet }
-  if (!oneshots.has(id)) oneshots.set(id, new Set())
-  oneshots.get(id).add(inst)
-  state.activeOneshots.add(id)
+  voice.nodes = { src, gain, pan, wet }
+  voice.segmentStartedAt = now
+  voice.segmentDuration = buffer.duration || 0
+  voice.soundId = meta?.id || null
+  voice.soundName = meta?.originalName || meta?.id || ''
+  voice.generation = (voice.generation || 0) + 1
 
-  src.onended = () => {
-    const set = oneshots.get(id)
-    if (set) {
-      set.delete(inst)
-      if (set.size === 0) {
-        oneshots.delete(id)
-        state.activeOneshots.delete(id)
-      }
-    }
+  const record = (voice.type === 'track' ? state.tracks : state.palettes)[voice.key]
+  if (record) {
+    record.playing = true
+    record.duration = voice.segmentDuration
+    record.soundId = voice.soundId
+    record.soundName = voice.soundName
+    record.position = 0
   }
+
   src.start()
+  persistDuration(meta, buffer.duration)
+  return voice.nodes
 }
 
-function setOneShotGain(id, v) {
-  const set = oneshots.get(id)
-  if (!set) return
-  const value = clamp01(v)
-  for (const inst of set) {
-    rampGain(inst.gain && inst.gain.gain, value)
-    rampGain(inst.wetGain && inst.wetGain.gain, value * WET_RATIO)
+function chooseSound(voice) {
+  const count = Array.isArray(voice.soundData) ? voice.soundData.length : 0
+  const index = pickSoundIndex(voice.selection, count, voice.lastIndex)
+  if (index < 0) return null
+  const meta = voice.soundData[index]
+  return { index, meta }
+}
+
+function scheduleLoopAdvance(voice, duration) {
+  clearTimer(voice)
+  if (!Array.isArray(voice.soundData) || voice.soundData.length < 2) return
+  const wait = duration > CROSSFADE ? duration - CROSSFADE : duration
+  voice.timer = setTimeout(
+    () => {
+      voice.timer = null
+      playLoopSegment(voice)
+    },
+    Math.max(50, wait * 1000)
+  )
+}
+
+async function playLoopSegment(voice) {
+  if (!voice.active) return
+  const pick = chooseSound(voice)
+  if (!pick) {
+    stopVoice(voice, 0)
+    return
+  }
+  voice.lastIndex = pick.index
+
+  let audio
+  try {
+    audio = await loadBuffer(pick.meta)
+  } catch (err) {
+    if (typeof options.onError === 'function') {
+      options.onError(`Could not load "${pick.meta?.originalName || 'audio'}": ${err.message}`)
+    }
+    stopVoice(voice, 0.05)
+    return
+  }
+  if (!voice.active) return
+
+  const previous = voice.nodes
+  if (previous) fadeOutNodes(previous, CROSSFADE)
+  createSegment(voice, audio, { loop: true, meta: pick.meta })
+  scheduleLoopAdvance(voice, audio.duration)
+}
+
+function scheduleRandomNext(voice) {
+  if (!voice.active) return
+  clearTimer(voice)
+  const delay = triggerDelay(voice.trigger, Math.random)
+  voice.timer = setTimeout(
+    () => {
+      voice.timer = null
+      fireRandom(voice)
+    },
+    Math.max(0, delay) * 1000
+  )
+}
+
+async function fireRandom(voice) {
+  if (!voice.active) return
+  const pick = chooseSound(voice)
+  if (!pick) {
+    stopVoice(voice, 0)
+    return
+  }
+  voice.lastIndex = pick.index
+
+  let audio
+  try {
+    audio = await loadBuffer(pick.meta)
+  } catch (err) {
+    if (typeof options.onError === 'function') {
+      options.onError(`Could not load "${pick.meta?.originalName || 'audio'}": ${err.message}`)
+    }
+    scheduleRandomNext(voice)
+    return
+  }
+  if (!voice.active) return
+
+  const previous = voice.nodes
+  if (previous) fadeOutNodes(previous, 0.08)
+  const nodes = createSegment(voice, audio, { loop: false, meta: pick.meta })
+  const generation = voice.generation
+  nodes.src.onended = () => {
+    if (!voice.active || voice.generation !== generation || voice.nodes !== nodes) return
+    voice.nodes = null
+    const record = state.tracks[voice.key] || state.palettes[voice.key]
+    if (record) record.playing = false
+    scheduleRandomNext(voice)
   }
 }
 
-function stopOneShot(id) {
-  const set = oneshots.get(id)
-  if (!set) return
-  for (const inst of Array.from(set)) {
+async function playOneShot(voice) {
+  if (!voice.active) return
+  const pick = chooseSound(voice)
+  if (!pick) {
+    stopVoice(voice, 0)
+    return
+  }
+  voice.lastIndex = pick.index
+
+  let audio
+  try {
+    audio = await loadBuffer(pick.meta)
+  } catch (err) {
+    if (typeof options.onError === 'function') {
+      options.onError(`Could not load "${pick.meta?.originalName || 'audio'}": ${err.message}`)
+    }
+    stopVoice(voice, 0.05)
+    return
+  }
+  if (!voice.active) return
+
+  const previous = voice.nodes
+  if (previous) fadeOutNodes(previous, 0.08)
+  const nodes = createSegment(voice, audio, { loop: false, meta: pick.meta })
+  const generation = voice.generation
+  nodes.src.onended = () => {
+    if (!voice.active || voice.generation !== generation || voice.nodes !== nodes) return
+    voice.nodes = null
+    stopVoice(voice, 0)
+  }
+}
+
+function startVoice(voice) {
+  const sounds = Array.isArray(voice.soundData) ? voice.soundData : []
+  if (!sounds.length) {
+    if (typeof options.onError === 'function') {
+      options.onError(`Group for "${voice.label || voice.key}" has no playable sounds`)
+    }
+    return false
+  }
+  voice.active = true
+  voice.lastIndex = -1
+  voiceRecord(voice)
+  const map = voice.type === 'track' ? trackVoices : paletteVoices
+  map.set(voice.key, voice)
+  updateCounts()
+
+  if (voice.kind === 'loop') playLoopSegment(voice)
+  else if (voice.kind === 'random') {
+    const delay = triggerDelay(voice.trigger, Math.random, { initial: true })
+    voice.timer = setTimeout(
+      () => {
+        voice.timer = null
+        fireRandom(voice)
+      },
+      Math.max(0, delay) * 1000
+    )
+  } else playOneShot(voice)
+
+  return true
+}
+
+function stopVoice(voice, fade = STOP_FADE) {
+  if (!voice) return
+  voice.active = false
+  clearTimer(voice)
+  const nodes = voice.nodes
+  voice.nodes = null
+  if (nodes) fadeOutNodes(nodes, fade)
+  const map = voice.type === 'track' ? trackVoices : paletteVoices
+  if (map.get(voice.key) === voice) map.delete(voice.key)
+  removeVoiceState(voice)
+}
+
+function makeTrackVoice(track) {
+  return {
+    type: 'track',
+    key: track.trackId,
+    kind: track.kind,
+    bus: track.kind,
+    label: track.groupName || '',
+    soundData: track.soundData || [],
+    sounds: track.sounds || [],
+    selection: track.selection || 'random',
+    gain: clamp01(track.gain ?? 0.8),
+    reverb: coerceReverb(track.reverb),
+    pan: clampPan(track.pan ?? 0),
+    trigger: track.trigger,
+    lastIndex: -1,
+    timer: null,
+    nodes: null,
+    active: false,
+    generation: 0,
+    segmentStartedAt: 0,
+    segmentDuration: 0,
+    soundId: null,
+    soundName: '',
+  }
+}
+
+function startTrack(track) {
+  if (!track || !track.trackId) return false
+  ensureCtx()
+  if (trackVoices.has(track.trackId)) return false
+  return startVoice(makeTrackVoice(track))
+}
+
+function stopTrack(trackId, fade = STOP_FADE) {
+  const voice = trackVoices.get(trackId)
+  if (voice) stopVoice(voice, fade)
+}
+
+function isTrackActive(trackId) {
+  return trackVoices.has(trackId)
+}
+
+function activeTrackIds(kind) {
+  const ids = []
+  for (const voice of trackVoices.values()) {
+    if (kind && voice.kind !== kind) continue
+    ids.push(voice.key)
+  }
+  return ids
+}
+
+function applyTrackParams(track) {
+  if (!track || !track.trackId) return
+  const voice = trackVoices.get(track.trackId)
+  if (!voice) return
+  voice.gain = clamp01(track.gain ?? voice.gain)
+  voice.pan = clampPan(track.pan ?? voice.pan)
+  voice.selection = track.selection || voice.selection
+  voice.soundData = Array.isArray(track.soundData) ? track.soundData : voice.soundData
+  voice.sounds = Array.isArray(track.sounds) ? track.sounds : voice.sounds
+  voice.trigger = track.trigger ?? voice.trigger
+  voice.label = track.groupName || voice.label
+
+  const record = state.tracks[voice.key]
+  if (record) {
+    record.kind = voice.kind
+    record.selection = voice.selection
+    record.label = voice.label
+  }
+
+  if (voice.nodes) {
+    ramp(voice.nodes.gain?.gain, voice.gain)
+    if (voice.nodes.pan) rampTo(voice.nodes.pan.pan, voice.pan)
+    if (voice.nodes.wet) ramp(voice.nodes.wet.gain, voice.gain * WET_RATIO)
+  }
+  if (coerceReverb(track.reverb) !== voice.reverb) applyVoiceReverb(voice, track.reverb)
+}
+
+function stopScene() {
+  for (const voice of [...trackVoices.values()]) stopVoice(voice)
+}
+
+function makePaletteVoice(entry) {
+  return {
+    type: 'palette',
+    key: entry.paletteId,
+    kind: entry.kind,
+    bus: entry.kind,
+    label: entry.label || entry.groupName || '',
+    soundData: entry.soundData || [],
+    sounds: entry.sounds || [],
+    selection: entry.selection || 'random',
+    gain: clamp01(entry.gain ?? 0.8),
+    reverb: coerceReverb(entry.reverb),
+    pan: clampPan(entry.pan ?? 0),
+    trigger: entry.trigger,
+    lastIndex: -1,
+    timer: null,
+    nodes: null,
+    active: false,
+    generation: 0,
+    segmentStartedAt: 0,
+    segmentDuration: 0,
+    soundId: null,
+    soundName: '',
+  }
+}
+
+function triggerPalette(entry) {
+  if (!entry || !entry.paletteId) return false
+  ensureCtx()
+  if (paletteVoices.has(entry.paletteId)) {
+    stopPalette(entry.paletteId)
+    return false
+  }
+  return startVoice(makePaletteVoice(entry))
+}
+
+function stopPalette(paletteId, fade = STOP_FADE) {
+  const voice = paletteVoices.get(paletteId)
+  if (voice) stopVoice(voice, fade)
+}
+
+function stopPaletteAll() {
+  for (const voice of [...paletteVoices.values()]) stopVoice(voice)
+}
+
+function isPaletteActive(paletteId) {
+  return paletteVoices.has(paletteId)
+}
+
+function setPaletteGain(paletteId, value) {
+  const voice = paletteVoices.get(paletteId)
+  if (!voice) return
+  voice.gain = clamp01(value)
+  if (voice.nodes) {
+    ramp(voice.nodes.gain?.gain, voice.gain)
+    if (voice.nodes.wet) ramp(voice.nodes.wet.gain, voice.gain * WET_RATIO)
+  }
+}
+
+function stopPreview() {
+  previewToken += 1
+  if (previewVoice) {
+    const { src } = previewVoice
+    previewVoice = null
     try {
-      inst.src.stop()
+      src.stop()
     } catch {
       /* already stopped */
     }
   }
-  oneshots.delete(id)
-  state.activeOneshots.delete(id)
+  state.preview = null
 }
 
-function stopAllOneshots() {
-  for (const id of Array.from(oneshots.keys())) stopOneShot(id)
-}
+async function preview(url, id) {
+  ensureCtx()
+  stopPreview()
+  if (!url) return false
+  const token = ++previewToken
 
-function stopAllLoops() {
-  for (const id of Array.from(loops.keys())) stopLoopElement(id)
+  let audio
+  try {
+    audio = await loadBuffer(url)
+  } catch (err) {
+    if (typeof options.onError === 'function') options.onError(`Preview failed: ${err.message}`)
+    return false
+  }
+  if (token !== previewToken) return false
+
+  const src = ctx.createBufferSource()
+  src.buffer = audio
+  const gain = ctx.createGain()
+  gain.gain.value = 0.9
+  src.connect(gain)
+  gain.connect(masterGain)
+  previewVoice = { src, gain, startedAt: ctx.currentTime, duration: audio.duration, id }
+  state.preview = {
+    playing: true,
+    position: 0,
+    duration: audio.duration,
+    id: id || null,
+    url,
+  }
+  src.onended = () => {
+    if (previewVoice?.src === src) {
+      previewVoice = null
+      if (state.preview) state.preview.playing = false
+    }
+  }
+  src.start()
+  persistDuration(id ? { id } : null, audio.duration)
+  return true
 }
 
 function stopAll() {
-  stopAllLoops()
-  stopAllOneshots()
+  stopScene()
+  stopPaletteAll()
+  stopPreview()
 }
 
-function setMasterGain(v) {
-  masterVolume = clamp01(v)
-  rampGain(masterGain && masterGain.gain, masterVolume)
-}
+function tick() {
+  if (!ctx) return
+  const now = ctx.currentTime
+  for (const voice of allVoices()) {
+    if (!voice.nodes) continue
+    const elapsed = Math.max(0, now - voice.segmentStartedAt)
+    const duration = voice.segmentDuration || 0
+    let position = elapsed
+    if (voice.kind === 'loop' && duration > 0) position = elapsed % duration
+    else if (duration > 0) position = Math.min(elapsed, duration)
 
-function isOneShotPlaying(id) {
-  return state.activeOneshots.has(id)
+    const record = (voice.type === 'track' ? state.tracks : state.palettes)[voice.key]
+    if (!record) continue
+    record.playing = true
+    record.position = position
+    record.duration = duration
+    record.soundId = voice.soundId
+    record.soundName = voice.soundName
+  }
+
+  if (previewVoice && state.preview) {
+    state.preview.position = Math.min(
+      Math.max(0, now - previewVoice.startedAt),
+      previewVoice.duration || 0
+    )
+  }
 }
 
 export const engine = {
   state,
+  configure,
+  unlock,
   ensureCtx,
-  clamp01,
-  playLoopElement,
-  stopLoopElement,
-  setLoopGain,
-  isLoopPlaying,
-  playOneShot,
-  setOneShotGain,
-  stopOneShot,
-  stopAllOneshots,
-  stopAllLoops,
-  isOneShotPlaying,
-  setMasterGain,
-  setBusGain,
+  setMaster,
+  setBus,
+  startTrack,
+  stopTrack,
+  stopScene,
+  isTrackActive,
+  activeTrackIds,
+  applyTrackParams,
+  triggerPalette,
+  stopPalette,
+  stopPaletteAll,
+  isPaletteActive,
+  setPaletteGain,
+  preview,
+  stopPreview,
   stopAll,
 }
+
+export default engine

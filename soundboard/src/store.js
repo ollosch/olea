@@ -1,1545 +1,1753 @@
-// Central reactive state + actions + MIDI dispatch for the soundboard v2.
+// Central reactive store for the v3 soundboard frontend.
 //
-// The server stores one `config.json` per scene, one app-level `library.json`,
-// and one `global.json` for buses/palette/global MIDI. A scene is composed of
-// scene-local elements plus *includes* of reusable library groups. This module
-// resolves those includes on demand (see `lib/resolve.js`) so library edits are
-// reflected everywhere without duplicating data.
-//
-// Element kinds:
-//   - 'loop'    — continuous ambience/music (started with the scene/mood)
-//   - 'random'  — auto-triggered one-shots at bounded random intervals
-//   - 'oneshot' — manually triggered one-shots
+// The store owns all browser-side state and every user/MIDI action. It talks to
+// the v3 HTTP API, resolves scenes for playback, persists edits (debounced and
+// serialized), and coordinates the Web Audio engine. Components should call
+// these methods rather than touching the API directly.
+
 import { reactive, computed } from 'vue'
 import { engine } from './engine.js'
-import { midi, connectMidi as connectMidiDevice, onMidiMessage } from './midi.js'
 import {
-  newElement,
-  newMood,
-  newInclude,
-  newPaletteEntry,
-  newConfig,
-  normalizeElement,
-  normalizeInclude,
-  normalizeLibrary,
-  normalizeLibraryGroup,
-  normalizeGlobal,
-} from '../lib/schema.js'
-import { resolveElement, resolveScene, resolveSceneElements } from '../lib/resolve.js'
-import { mergeElements as mergeElementsPure } from '../lib/edit.js'
+  KINDS,
+  REVERB_PRESETS,
+  clamp01,
+  clampPan,
+  coerceReverb,
+  normalizeMood,
+  normalizeScene,
+  sanitizeTrigger,
+  uid,
+} from '../lib/v3/schema.js'
 import {
-  bindAction,
-  findBindingKey,
-  removeBindings,
-} from '../lib/bindings.js'
+  addTracksForGroups,
+  moveTracks,
+} from '../lib/v3/order.js'
+import {
+  resolveScenePlan,
+  initialTransportPlan,
+  moodChangePlan,
+  applyManualToggle,
+  palettePlan,
+  nextPaletteKind,
+} from './playback-model.js'
+import {
+  actionChannelType,
+  bindingKey,
+  findConflicts,
+  normalizeMidiAction,
+  parseBindingKey,
+  removeBindingsForTargets,
+  sameTarget,
+  setBinding,
+  targetKey,
+} from '../lib/v3/bindings.js'
 
-const BUSES = ['loop', 'random', 'effects']
+const DEFAULT_GLOBAL = {
+  version: 3,
+  master: 0.8,
+  buses: { loop: 1, random: 1, oneshot: 1 },
+  palette: [],
+  midi: { notes: {}, ccs: {} },
+}
+
+const ZERO_TRIGGER = { min: 0, max: 0, startMin: 0, startMax: 0 }
+
+const clone = (value) => JSON.parse(JSON.stringify(value))
+const triggerCopy = (value) => sanitizeTrigger(value)
 
 export const store = reactive({
-  soundsets: [],
-  library: { version: 2, groups: [] },
-  files: [],
-  global: {
-    version: 2,
-    buses: { loop: 1, random: 1, effects: 1 },
-    palette: [],
-    midi: { notes: {}, ccs: {} },
-  },
-  activeId: null,
-  activeMoodId: null,
-  masterVolume: 0.8,
-  volumeOverrides: {},
+  bootstrapped: false,
+  loading: false,
+  sceneLoading: false,
+  error: '',
+  status: '',
+  statusTone: 'info',
+  warnings: [],
+  mode: 'edit',
+  view: 'editor',
+  browserTab: 'scenes',
+  scenes: [],
+  activeScene: null,
+  selectedMoodId: null,
+  selectedTrackId: null,
+  selectedTrackIds: [],
+  library: { version: 3, groups: [] },
+  global: clone(DEFAULT_GLOBAL),
+  stats: { total: 0, assigned: 0, unassigned: 0, groups: 0, uncategorized: 0 },
+  catalogCount: 0,
+  importDone: false,
+  soundsById: {},
+  soundsLoading: false,
+  transportRunning: false,
+  master: 0.8,
+  buses: { loop: 1, random: 1, oneshot: 1 },
   learning: null,
-  loaded: false,
-  loopsPlaying: false,
-  randomsPlaying: false,
-  midiConnected: false,
-  midiError: '',
+  collision: null,
+  bindingsOverview: null,
+  lastSavedAt: null,
+  librarySelection: [],
+  editingGroupId: null,
+  import: {
+    query: '',
+    unassigned: false,
+    kind: '',
+    category: '',
+    tag: '',
+    offset: 0,
+    limit: 50,
+    sounds: [],
+    total: 0,
+    loading: false,
+    error: '',
+    selectedSoundIds: [],
+    selectedGroupIds: [],
+    groupQuery: '',
+    splitGroupId: '',
+    splitSoundIds: [],
+  },
 })
 
-const randomTimers = reactive(new Map()) // key -> { timeout }
-const lastPicks = new Map() // key -> last file index (avoid immediate repeats)
+// ---------------------------------------------------------------------------
+// HTTP helpers / status
 
-const elKey = (ssId, elId) => `${ssId}::${elId}`
-const paletteKey = (paletteId) => `palette:${paletteId}`
-const DEFAULT_RANDOM_TRIGGER = { min: 10, max: 30, startMin: 2, startMax: 10 }
-
-function triggerIsZero(t) {
-  return [t?.min, t?.max, t?.startMin, t?.startMax].every((v) => !Number(v))
-}
-
-function randomTriggerOf(el) {
-  return triggerIsZero(el?.trigger)
-    ? { ...DEFAULT_RANDOM_TRIGGER }
-    : el.trigger
-}
-
-function ensureRandomTrigger(el) {
-  if (el && el.kind === 'random' && triggerIsZero(el.trigger)) {
-    el.trigger = { ...DEFAULT_RANDOM_TRIGGER }
+function messageFor(err) {
+  if (!err) return 'Unknown error'
+  let message = err.message || 'Request failed'
+  if (Array.isArray(err.errors) && err.errors.length) {
+    const types = err.errors
+      .slice(0, 3)
+      .map((item) => item?.type || item?.message)
+      .filter(Boolean)
+    if (types.length) message += ` (${types.join(', ')})`
   }
-  return el
+  return message
 }
 
-function clamp01(v) {
-  const n = Number(v)
-  if (!Number.isFinite(n)) return 0
-  return Math.min(1, Math.max(0, n))
+async function api(path, options = {}) {
+  const init = { ...options }
+  if (init.body !== undefined && typeof init.body !== 'string') {
+    init.body = JSON.stringify(init.body)
+  }
+  if (init.body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json', ...(init.headers || {}) }
+  }
+  const res = await fetch(path, init)
+  const text = await res.text()
+  let data = null
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = null
+    }
+  }
+  if (!res.ok) {
+    const err = new Error(data?.error || `Request failed (${res.status})`)
+    err.status = res.status
+    err.errors = data?.errors
+    throw err
+  }
+  return data
 }
 
-// ---- computed views ----
+let statusTimer = null
 
-export const activeSoundset = computed(
-  () => store.soundsets.find((s) => s.id === store.activeId) || null
+export function setStatus(message, tone = 'info') {
+  store.status = message
+  store.statusTone = tone
+  if (statusTimer) clearTimeout(statusTimer)
+  statusTimer = setTimeout(() => {
+    store.status = ''
+    store.statusTone = 'info'
+  }, 5000)
+}
+
+export function setError(err) {
+  store.error = messageFor(err)
+}
+
+export function clearError() {
+  store.error = ''
+}
+
+// ---------------------------------------------------------------------------
+// Derived state
+
+function groupsByIdMap() {
+  return new Map(store.library.groups.map((group) => [group.id, group]))
+}
+
+export const groupsById = computed(groupsByIdMap)
+
+export function groupById(id) {
+  return store.library.groups.find((group) => group.id === id) || null
+}
+
+export function soundUrl(sound) {
+  if (!sound) return ''
+  return sound.url || `/audio/${sound.hash}`
+}
+
+function soundMeta(id) {
+  const sound = store.soundsById[id]
+  if (!sound) return null
+  return { ...sound, url: soundUrl(sound) }
+}
+
+function augmentTrack(track, groups) {
+  const group = groups.get(track.groupId) || null
+  return {
+    ...track,
+    group,
+    groupName: group?.name || '(missing group)',
+    sounds: track.sounds || [],
+    soundData: (track.sounds || []).map(soundMeta).filter(Boolean),
+  }
+}
+
+function buildPlan(moodId = store.selectedMoodId) {
+  const scene = store.activeScene
+  if (!scene) {
+    return { mood: null, loops: [], randoms: [], oneshots: [], all: [] }
+  }
+  const groups = groupsByIdMap()
+  const plan = resolveScenePlan(scene, groups, moodId)
+  return {
+    mood: plan.mood,
+    loops: plan.loops.map((track) => augmentTrack(track, groups)),
+    randoms: plan.randoms.map((track) => augmentTrack(track, groups)),
+    oneshots: plan.oneshots.map((track) => augmentTrack(track, groups)),
+    all: plan.all.map((track) => augmentTrack(track, groups)),
+  }
+}
+
+export const currentPlan = computed(() => buildPlan(store.selectedMoodId))
+
+export const sceneSections = computed(() => {
+  const plan = currentPlan.value
+  return [
+    { kind: 'loop', label: 'Loops', tracks: plan.loops },
+    { kind: 'random', label: 'Random', tracks: plan.randoms },
+    { kind: 'oneshot', label: 'One-shots', tracks: plan.oneshots },
+  ]
+})
+
+export const selectedTrack = computed(() => {
+  if (!store.selectedTrackId) return null
+  return currentPlan.value.all.find((track) => track.trackId === store.selectedTrackId) || null
+})
+
+export const selectedMood = computed(() => {
+  const scene = store.activeScene
+  if (!scene) return null
+  return scene.moods.find((mood) => mood.id === store.selectedMoodId) || scene.moods[0] || null
+})
+
+export const paletteEntries = computed(() => {
+  const groups = groupsByIdMap()
+  return palettePlan(store.library, store.global.palette, groups).map((entry) => {
+    const group = entry.group
+    const soundIds = Array.isArray(group?.sounds) ? group.sounds : []
+    return {
+      ...entry,
+      groupName: group?.name || '',
+      sounds: soundIds,
+      soundData: soundIds.map(soundMeta).filter(Boolean),
+      selection: group?.selection || 'random',
+      reverb: group?.defaults?.reverb ?? null,
+      pan: group?.defaults?.pan ?? 0,
+      trigger: group?.defaults?.trigger,
+      gain: entry.gain ?? group?.defaults?.gain ?? 0.8,
+    }
+  })
+})
+
+export const bindingConflicts = computed(() =>
+  findConflicts(store.global.midi, store.activeScene?.midi)
 )
 
-export const enabledSoundsets = computed(() => store.soundsets.filter((s) => !s.disabled))
+// ---------------------------------------------------------------------------
+// Sounds cache
 
-export const disabledSoundsets = computed(() => store.soundsets.filter((s) => s.disabled))
-
-// ---- path helpers ----
-
-export function resolvePath(fromDir, rel) {
-  const parts = [...(fromDir ? fromDir.split('/') : []), ...(rel ? rel.split('/') : [])]
-  const out = []
-  for (const p of parts) {
-    if (!p || p === '.') continue
-    if (p === '..') out.pop()
-    else out.push(p)
+export async function ensureSounds(ids) {
+  const missing = []
+  const seen = new Set()
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (typeof id !== 'string' || !id || seen.has(id) || store.soundsById[id]) continue
+    seen.add(id)
+    missing.push(id)
   }
-  return out
-}
-
-export function audioUrlFor(baseDir, file) {
-  return '/audio/' + resolvePath(baseDir, file).map(encodeURIComponent).join('/')
-}
-
-// Accept either an old-style soundset (`{ dir }`), a resolved element
-// (`{ baseDir }`), or a raw base directory string.
-export function audioUrl(target, file) {
-  if (typeof target === 'string') return audioUrlFor(target, file)
-  const baseDir =
-    target && Object.prototype.hasOwnProperty.call(target, 'baseDir')
-      ? target.baseDir
-      : target && target.dir
-  return audioUrlFor(baseDir || '', file)
-}
-
-export function relativeFile(fromDir, toDir, file) {
-  const from = (fromDir || '').split('/').filter(Boolean)
-  const to = (toDir || '').split('/').filter(Boolean)
-  let i = 0
-  while (i < from.length && i < to.length && from[i] === to[i]) i++
-  const up = Array(from.length - i).fill('..')
-  return [...up, ...to.slice(i), file].filter(Boolean).join('/')
-}
-
-export function fileName(file) {
-  const base = (file || '').split('/').pop()
-  return base.replace(/\.(ogg|mp3|wav)$/i, '')
-}
-
-// Resolve a stored relative file reference back to its picker location
-// { dir, file, name } for the group editor (dir = top-level audio folder).
-export function fileLocation(ss, file) {
-  const segs = resolvePath(ss.dir, file)
-  const filePart = segs.pop()
-  return { dir: segs.join('/'), file: filePart || file, name: fileName(file) }
-}
-
-// ---- resolved element access ----
-
-export function resolvedSceneElements(ss) {
-  return resolveSceneElements(ss, store.library)
-}
-
-export function sceneWarnings(ss) {
-  return resolveScene(ss, store.library).warnings
-}
-
-export function soundsetElements(ss) {
-  const loops = []
-  const randoms = []
-  const oneshots = []
-  for (const el of resolvedSceneElements(ss)) {
-    if (el.kind === 'loop') loops.push(el)
-    else if (el.kind === 'random') randoms.push(el)
-    else oneshots.push(el)
-  }
-  return { loops, randoms, oneshots }
-}
-
-export function findElement(ssId, instanceId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return null
-  return resolveElement(ss, store.library, instanceId)
-}
-
-export function findLibraryGroup(id) {
-  return (store.library.groups || []).find((group) => group.id === id) || null
-}
-
-function findElementPair(ssId, elId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  const el = ss ? resolveElement(ss, store.library, elId) : null
-  return { ss, el }
-}
-
-// Raw instance lookup (ignores `hidden`) used by editor/delete actions.
-function rawInstance(ss, instanceId) {
-  const element = (ss.elements || []).find((el) => el.id === instanceId)
-  if (element) return { type: 'scene', element }
-  const include = (ss.includes || []).find((inc) => inc.id === instanceId)
-  if (include) return { type: 'include', include }
-  return null
-}
-
-function instanceKind(ss, instanceId) {
-  const resolved = resolveElement(ss, store.library, instanceId)
-  if (resolved) return resolved.kind
-  const raw = rawInstance(ss, instanceId)
-  if (!raw) return 'oneshot'
-  if (raw.type === 'scene') return raw.element.kind || 'oneshot'
-  const group = findLibraryGroup(raw.include.libraryId)
-  return raw.include.overrides?.kind || group?.kind || 'oneshot'
-}
-
-function activeMood(ss) {
-  if (!store.activeMoodId) return null
-  return (ss.moods || []).find((m) => m.id === store.activeMoodId) || null
-}
-
-export function elementGainOf(ss, el) {
-  const key = elKey(ss.id, el.id)
-  let value
-  if (key in store.volumeOverrides) {
-    value = store.volumeOverrides[key]
-  } else {
-    const mood = activeMood(ss)
-    const param = mood && mood.params ? mood.params[el.id] : null
-    value = param && param.volume != null ? param.volume : el.gain
-  }
-  return clamp01(value == null ? 0 : value)
-}
-
-export function isVolumeOverridden(ss, el) {
-  return elKey(ss.id, el.id) in store.volumeOverrides
-}
-
-export function isLoopPlaying(ss, el) {
-  return engine.isLoopPlaying(elKey(ss.id, el.id))
-}
-
-export function isOneshotPlaying(ss, el) {
-  return engine.isOneShotPlaying(elKey(ss.id, el.id))
-}
-
-export function isRandomActive(ss, el) {
-  return randomTimers.has(elKey(ss.id, el.id))
-}
-
-export function isLoadingElement(ss, el) {
-  return (el.files || []).some((f) => engine.state.loading.has(audioUrl(el, f)))
-}
-
-// ---- loaders / persistence ----
-
-export async function loadLibrary() {
-  const res = await fetch('/api/library')
-  const data = await res.json()
-  store.soundsets = data.soundsets || []
-  store.library = normalizeLibrary(data.library || {})
-  store.global = normalizeGlobal(data.global || {})
-  for (const bus of BUSES) {
-    engine.setBusGain(bus, clamp01(store.global.buses?.[bus] ?? 1))
-  }
-  store.loaded = true
-}
-
-export async function loadFiles() {
+  if (!missing.length) return
+  store.soundsLoading = true
   try {
-    const res = await fetch('/api/files')
-    const data = await res.json()
-    store.files = data.folders || []
-  } catch {
-    store.files = []
-  }
-}
-
-async function persistSoundset(ss) {
-  try {
-    const res = await fetch('/api/soundset/' + encodeURIComponent(ss.dir), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(ss),
-    })
-    const data = await res.json()
-    if (data.ok) {
-      const i = store.soundsets.findIndex((s) => s.id === ss.id)
-      if (i !== -1) store.soundsets[i] = data.soundset
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
-async function persistGlobal() {
-  try {
-    const res = await fetch('/api/global', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(store.global),
-    })
-    const data = await res.json()
-    if (data.ok) store.global = data.global
-  } catch {
-    /* ignore */
-  }
-}
-
-async function persistLibrary() {
-  try {
-    const res = await fetch('/api/library', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(store.library),
-    })
-    const data = await res.json()
-    if (data.ok) store.library = data.library
-  } catch {
-    /* ignore */
-  }
-}
-
-// ---- palette ----
-
-function paletteEntryById(paletteId) {
-  return (store.global.palette || []).find((entry) => entry.id === paletteId) || null
-}
-
-function paletteRow(entry) {
-  const group = findLibraryGroup(entry.libraryId)
-  const label = entry.label || (group ? group.name : '')
-  const id = paletteKey(entry.id)
-
-  if (!group) {
-    return {
-      id,
-      paletteId: entry.id,
-      libraryId: entry.libraryId,
-      entry,
-      label,
-      name: label,
-      kind: 'oneshot',
-      gain: 0,
-      trigger: { min: 10, max: 30, startMin: 2, startMax: 10 },
-      baseDir: '_library',
-      source: 'palette',
-      files: [],
-      missing: true,
-    }
-  }
-
-  return {
-    ...group,
-    id,
-    paletteId: entry.id,
-    libraryId: entry.libraryId,
-    entry,
-    label,
-    name: label,
-    gain: clamp01(entry.gain != null ? entry.gain : group.gain),
-    baseDir: '_library',
-    source: 'palette',
-    files: group.files || [],
-  }
-}
-
-export function paletteElements() {
-  return (store.global.palette || [])
-    .slice()
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .map(paletteRow)
-}
-
-function paletteRowById(paletteId) {
-  const entry = paletteEntryById(paletteId)
-  return entry ? paletteRow(entry) : null
-}
-
-export function pinToPalette(libraryId) {
-  const group = findLibraryGroup(libraryId)
-  if (!group) return null
-  const existing = (store.global.palette || []).find((entry) => entry.libraryId === libraryId)
-  if (existing) return existing.id
-
-  const order = (store.global.palette || []).reduce(
-    (max, entry) => Math.max(max, Number(entry.order) || 0),
-    -1
-  ) + 1
-  const entry = newPaletteEntry(libraryId, order)
-  store.global.palette = [...(store.global.palette || []), entry]
-  persistGlobal()
-  return entry.id
-}
-
-function removeGlobalPaletteBindings(paletteIds) {
-  const ids = new Set(paletteIds)
-  if (!ids.size) return
-  for (const mapKey of ['notes', 'ccs']) {
-    if (!store.global.midi) store.global.midi = { notes: {}, ccs: {} }
-    store.global.midi[mapKey] = removeBindings(
-      store.global.midi[mapKey],
-      (binding) => binding && ids.has(binding.paletteId)
-    )
-  }
-}
-
-export function unpinFromPalette(paletteId) {
-  stopPaletteItem(paletteId)
-  removeGlobalPaletteBindings([paletteId])
-  store.global.palette = (store.global.palette || []).filter((entry) => entry.id !== paletteId)
-  persistGlobal()
-}
-
-function triggerPaletteRandom(paletteId) {
-  const key = paletteKey(paletteId)
-  if (!randomTimers.has(key)) return
-  const row = paletteRowById(paletteId)
-  if (!row || row.missing || !row.files.length) return
-
-  engine.playOneShot(key, audioUrl(row, row.files[pickIndex(row, key)]), {
-    gain: clamp01(row.gain),
-    bus: 'random',
-    reverb: row.reverb,
-  })
-
-  const entry = randomTimers.get(key)
-  if (!entry) return
-  const trigger = row.trigger || {}
-  const wait = Math.max(0, randBetween(trigger.min, trigger.max))
-  entry.timeout = setTimeout(() => triggerPaletteRandom(paletteId), wait * 1000)
-}
-
-function startPaletteRandom(row) {
-  const key = paletteKey(row.paletteId)
-  if (randomTimers.has(key)) return
-  randomTimers.set(key, { timeout: null })
-  const trigger = row.trigger || {}
-  const start = Math.max(0, randBetween(trigger.startMin, trigger.startMax))
-  const entry = randomTimers.get(key)
-  if (entry) entry.timeout = setTimeout(() => triggerPaletteRandom(row.paletteId), start * 1000)
-}
-
-export function playPaletteItem(paletteId) {
-  const row = paletteRowById(paletteId)
-  if (!row || row.missing || !(row.files || []).length) return
-  const key = paletteKey(paletteId)
-
-  if (row.kind === 'loop') {
-    if (engine.isLoopPlaying(key)) {
-      engine.stopLoopElement(key)
-      return
-    }
-    engine.playLoopElement(key, {
-      files: row.files.map((file) => audioUrl(row, file)),
-      gain: clamp01(row.gain),
-      randomise: row.randomise === 'random' || row.randomise === 'shuffle',
-      reverb: row.reverb,
-      bus: 'loop',
-    })
-  } else if (row.kind === 'random') {
-    if (randomTimers.has(key)) stopPaletteItem(paletteId)
-    else startPaletteRandom(row)
-  } else {
-    engine.playOneShot(key, audioUrl(row, row.files[pickIndex(row, key)]), {
-      gain: clamp01(row.gain),
-      bus: 'effects',
-      reverb: row.reverb,
-    })
-  }
-}
-
-export function stopPaletteItem(paletteId) {
-  const key = paletteKey(paletteId)
-  const entry = randomTimers.get(key)
-  if (entry && entry.timeout) clearTimeout(entry.timeout)
-  randomTimers.delete(key)
-  engine.stopLoopElement(key)
-  engine.stopOneShot(key)
-}
-
-export function isPaletteLoopPlaying(paletteId) {
-  return engine.isLoopPlaying(paletteKey(paletteId))
-}
-
-export function isPaletteRandomActive(paletteId) {
-  return randomTimers.has(paletteKey(paletteId))
-}
-
-export function isPaletteOneshotPlaying(paletteId) {
-  return engine.isOneShotPlaying(paletteKey(paletteId))
-}
-
-export function setPaletteVolume(paletteId, v) {
-  const entry = paletteEntryById(paletteId)
-  if (!entry) return
-  const value = clamp01(v)
-  entry.gain = value
-  const key = paletteKey(paletteId)
-  engine.setLoopGain(key, value)
-  engine.setOneShotGain(key, value)
-  persistGlobal()
-}
-
-// ---- library browser preview ----
-
-const libraryKey = (libraryId) => `library:${libraryId}`
-
-export function stopLibraryPreview(libraryId) {
-  const key = libraryKey(libraryId)
-  engine.stopLoopElement(key)
-  engine.stopOneShot(key)
-}
-
-function stopAllLibraryPreviews() {
-  for (const group of store.library.groups || []) stopLibraryPreview(group.id)
-}
-
-export function isLibraryPreviewPlaying(libraryId) {
-  const key = libraryKey(libraryId)
-  return engine.isLoopPlaying(key) || engine.isOneShotPlaying(key)
-}
-
-// ---- review preview ----
-
-const reviewKey = (ssId, elId) => `review:${ssId}::${elId}`
-let activeReviewPreview = null
-
-function stopReviewPreviewKey() {
-  if (!activeReviewPreview) return
-  engine.stopLoopElement(activeReviewPreview)
-  engine.stopOneShot(activeReviewPreview)
-  activeReviewPreview = null
-}
-
-export function stopReviewPreviews() {
-  stopReviewPreviewKey()
-}
-
-export function isReviewPreviewPlaying(ssId, elId) {
-  const key = reviewKey(ssId, elId)
-  return engine.isLoopPlaying(key) || engine.isOneShotPlaying(key)
-}
-
-export function toggleReviewPreview(ssId, elId) {
-  const { ss, el } = findElementPair(ssId, elId)
-  if (!ss || !el || !(el.files || []).length) return
-  const key = reviewKey(ss.id, el.id)
-  if (engine.isLoopPlaying(key) || engine.isOneShotPlaying(key)) {
-    stopReviewPreviewKey()
-    return
-  }
-
-  stopReviewPreviewKey()
-  activeReviewPreview = key
-  const bus = el.kind === 'loop' ? 'loop' : el.kind === 'random' ? 'random' : 'effects'
-
-  if (el.kind === 'loop') {
-    engine.playLoopElement(key, {
-      files: el.files.map((file) => audioUrl(el, file)),
-      gain: clamp01(el.gain),
-      randomise: el.randomise === 'random' || el.randomise === 'shuffle',
-      reverb: el.reverb,
-      bus,
-    })
-  } else {
-    engine.playOneShot(key, audioUrl(el, el.files[pickIndex(el, key)]), {
-      gain: clamp01(el.gain),
-      bus,
-      reverb: el.reverb,
-    })
-  }
-}
-
-export function toggleLibraryPreview(libraryId) {
-  const group = findLibraryGroup(libraryId)
-  if (!group || !(group.files || []).length) return
-  if (isLibraryPreviewPlaying(libraryId)) {
-    stopLibraryPreview(libraryId)
-    return
-  }
-
-  stopAllLibraryPreviews()
-  const key = libraryKey(libraryId)
-  const bus = group.kind === 'loop' ? 'loop' : group.kind === 'random' ? 'random' : 'effects'
-
-  if (group.kind === 'loop') {
-    engine.playLoopElement(key, {
-      files: group.files.map((file) => audioUrlFor('_library', file)),
-      gain: clamp01(group.gain),
-      randomise: group.randomise === 'random' || group.randomise === 'shuffle',
-      reverb: group.reverb,
-      bus,
-    })
-  } else {
-    engine.playOneShot(key, audioUrlFor('_library', group.files[pickIndex(group, key)]), {
-      gain: clamp01(group.gain),
-      bus,
-      reverb: group.reverb,
-    })
-  }
-}
-
-// ---- transport ----
-
-function updateTransportFlags(ss) {
-  if (!ss) {
-    store.loopsPlaying = false
-    store.randomsPlaying = false
-    return
-  }
-  const { loops, randoms } = soundsetElements(ss)
-  store.loopsPlaying = loops.some((el) => engine.isLoopPlaying(elKey(ss.id, el.id)))
-  store.randomsPlaying = randoms.some((el) => randomTimers.has(elKey(ss.id, el.id)))
-}
-
-export function startSoundset(id) {
-  const ss = store.soundsets.find((s) => s.id === id)
-  if (!ss) return
-  if (store.activeId && store.activeId !== id) stopSoundset()
-  store.activeId = id
-  store.activeMoodId = null
-  startLoops()
-  startRandoms()
-}
-
-export function stopSoundset() {
-  stopLoops()
-  stopRandoms()
-}
-
-export function leaveSoundset() {
-  stopEverything()
-  store.activeId = null
-  store.activeMoodId = null
-}
-
-export function toggleSoundset(id) {
-  if (store.activeId === id && (store.loopsPlaying || store.randomsPlaying)) stopSoundset()
-  else startSoundset(id)
-}
-
-export function desiredMoodElements(ss) {
-  const { loops, randoms } = soundsetElements(ss)
-  const all = [...loops, ...randoms]
-  if (!store.activeMoodId) return all
-  const mood = activeMood(ss)
-  if (!mood) return all
-  return all.filter((el) => {
-    const param = mood.params ? mood.params[el.id] : null
-    return !!param && param.plays !== false
-  })
-}
-
-export function startLoops() {
-  const ss = activeSoundset.value
-  if (!ss) return
-  const desired = store.activeMoodId
-    ? new Set(desiredMoodElements(ss).map((el) => el.id))
-    : null
-  for (const el of soundsetElements(ss).loops) {
-    if (desired && !desired.has(el.id)) continue
-    startLoop(ss, el)
-  }
-  updateTransportFlags(ss)
-}
-
-export function stopLoops() {
-  const ss = activeSoundset.value
-  if (!ss) {
-    store.loopsPlaying = false
-    return
-  }
-  for (const el of soundsetElements(ss).loops) stopLoop(ss, el)
-  updateTransportFlags(ss)
-}
-
-export function startRandoms() {
-  const ss = activeSoundset.value
-  if (!ss) return
-  const desired = store.activeMoodId
-    ? new Set(desiredMoodElements(ss).map((el) => el.id))
-    : null
-  for (const el of soundsetElements(ss).randoms) {
-    if (desired && !desired.has(el.id)) continue
-    startRandom(ss, el)
-  }
-  updateTransportFlags(ss)
-}
-
-export function stopRandoms() {
-  const ss = activeSoundset.value
-  if (!ss) {
-    store.randomsPlaying = false
-    return
-  }
-  for (const el of soundsetElements(ss).randoms) stopRandom(ss, el)
-  updateTransportFlags(ss)
-}
-
-export function stopEffects() {
-  engine.stopAllOneshots()
-}
-
-export function stopEverything() {
-  stopSoundset()
-  stopEffects()
-  for (const entry of store.global.palette || []) stopPaletteItem(entry.id)
-  stopAllLibraryPreviews()
-  stopReviewPreviews()
-}
-
-// ---- loop elements ----
-
-function startLoop(ss, el) {
-  const key = elKey(ss.id, el.id)
-  engine.playLoopElement(key, {
-    files: (el.files || []).map((file) => audioUrl(el, file)),
-    gain: elementGainOf(ss, el),
-    randomise: el.randomise === 'random' || el.randomise === 'shuffle',
-    reverb: el.reverb,
-    bus: 'loop',
-  })
-}
-
-function stopLoop(ss, el) {
-  engine.stopLoopElement(elKey(ss.id, el.id))
-}
-
-export function toggleLoopElement(ssId, elId) {
-  const { ss, el } = findElementPair(ssId, elId)
-  if (!ss || !el) return
-  const key = elKey(ss.id, el.id)
-  if (engine.isLoopPlaying(key)) stopLoop(ss, el)
-  else startLoop(ss, el)
-  if (store.activeId === ss.id) updateTransportFlags(ss)
-}
-
-// ---- one-shot elements ----
-
-export function playOneshotElement(ssId, elId) {
-  const { ss, el } = findElementPair(ssId, elId)
-  if (!ss || !el || !(el.files || []).length) return
-  const key = elKey(ss.id, el.id)
-  engine.playOneShot(key, audioUrl(el, el.files[pickIndex(el, key)]), {
-    gain: elementGainOf(ss, el),
-    bus: 'effects',
-    reverb: el.reverb,
-  })
-}
-
-export function stopOneshotElement(ssId, elId) {
-  const { ss, el } = findElementPair(ssId, elId)
-  if (!ss || !el) return
-  engine.stopOneShot(elKey(ss.id, el.id))
-}
-
-// ---- random (auto-injection) elements ----
-
-const randBetween = (min, max) => {
-  if (min == null || Number.isNaN(min)) min = 0
-  if (max == null || Number.isNaN(max)) max = min
-  if (min === max) return min
-  return min + Math.random() * (max - min)
-}
-
-export function pickIndex(el, key) {
-  const files = el.files || []
-  const n = files.length
-  if (n <= 1) return 0
-  const avoid = lastPicks.get(key)
-  let idx
-  if (avoid == null) {
-    idx = Math.floor(Math.random() * n)
-  } else {
-    const i = Math.floor(Math.random() * (n - 1))
-    idx = i >= avoid ? i + 1 : i
-  }
-  lastPicks.set(key, idx)
-  return idx
-}
-
-function triggerRandom(ssId, elId) {
-  const key = elKey(ssId, elId)
-  if (!randomTimers.has(key)) return
-  const { ss, el } = findElementPair(ssId, elId)
-  if (!ss || !el || !(el.files || []).length) {
-    randomTimers.delete(key)
-    if (ss) updateTransportFlags(ss)
-    return
-  }
-
-  engine.playOneShot(key, audioUrl(el, el.files[pickIndex(el, key)]), {
-    gain: elementGainOf(ss, el),
-    bus: 'random',
-    reverb: el.reverb,
-  })
-
-  const entry = randomTimers.get(key)
-  if (!entry) return
-  const trigger = randomTriggerOf(el)
-  const wait = Math.max(0, randBetween(trigger.min, trigger.max))
-  entry.timeout = setTimeout(() => triggerRandom(ssId, elId), wait * 1000)
-}
-
-function startRandom(ss, el) {
-  const key = elKey(ss.id, el.id)
-  if (randomTimers.has(key)) return
-  randomTimers.set(key, { timeout: null })
-  const trigger = randomTriggerOf(el)
-  const start = Math.max(0, randBetween(trigger.startMin, trigger.startMax))
-  const entry = randomTimers.get(key)
-  if (entry) entry.timeout = setTimeout(() => triggerRandom(ss.id, el.id), start * 1000)
-}
-
-function stopRandom(ss, el) {
-  const key = elKey(ss.id, el.id)
-  const entry = randomTimers.get(key)
-  if (entry && entry.timeout) clearTimeout(entry.timeout)
-  randomTimers.delete(key)
-  engine.stopOneShot(key)
-}
-
-export function toggleRandomElement(ssId, elId) {
-  const { ss, el } = findElementPair(ssId, elId)
-  if (!ss || !el) return
-  if (randomTimers.has(elKey(ss.id, el.id))) stopRandom(ss, el)
-  else startRandom(ss, el)
-  if (store.activeId === ss.id) updateTransportFlags(ss)
-}
-
-export function playRandomOnce(ssId, elId) {
-  const { ss, el } = findElementPair(ssId, elId)
-  if (!ss || !el || !(el.files || []).length) return
-  const key = elKey(ss.id, el.id)
-  engine.playOneShot(key, audioUrl(el, el.files[pickIndex(el, key)]), {
-    gain: elementGainOf(ss, el),
-    bus: 'random',
-    reverb: el.reverb,
-  })
-}
-
-// ---- volume ----
-
-export function setElementVolume(ssId, elId, v) {
-  const { ss, el } = findElementPair(ssId, elId)
-  if (!ss || !el) return
-  const key = elKey(ss.id, el.id)
-  const value = clamp01(v)
-  store.volumeOverrides[key] = value
-  engine.setLoopGain(key, value)
-  engine.setOneShotGain(key, value)
-}
-
-export function resetElementVolume(ssId, elId) {
-  const { ss, el } = findElementPair(ssId, elId)
-  if (!ss || !el) return
-  const key = elKey(ss.id, el.id)
-  delete store.volumeOverrides[key]
-  const value = elementGainOf(ss, el)
-  engine.setLoopGain(key, value)
-  engine.setOneShotGain(key, value)
-}
-
-export function resetSectionVolume(ssId, kind) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const { loops, randoms, oneshots } = soundsetElements(ss)
-  const list = kind === 'loop' ? loops : kind === 'random' ? randoms : oneshots
-  for (const el of list) {
-    const key = elKey(ss.id, el.id)
-    delete store.volumeOverrides[key]
-    const value = elementGainOf(ss, el)
-    engine.setLoopGain(key, value)
-    engine.setOneShotGain(key, value)
-  }
-}
-
-export function setMaster(v) {
-  const value = clamp01(v)
-  store.masterVolume = value
-  engine.setMasterGain(value)
-}
-
-export function setBusVolume(bus, v) {
-  if (!BUSES.includes(bus)) return
-  const value = clamp01(v)
-  if (!store.global.buses) store.global.buses = { loop: 1, random: 1, effects: 1 }
-  store.global.buses[bus] = value
-  engine.setBusGain(bus, value)
-  persistGlobal()
-}
-
-export function setLoopsVolume(v) {
-  setBusVolume('loop', v)
-}
-
-export function setRandomsVolume(v) {
-  setBusVolume('random', v)
-}
-
-export function setEffectsVolume(v) {
-  setBusVolume('effects', v)
-}
-
-// ---- moods ----
-
-function clearSceneVolumeOverrides(ss) {
-  const prefix = ss.id + '::'
-  for (const key of Object.keys(store.volumeOverrides)) {
-    if (key.startsWith(prefix)) delete store.volumeOverrides[key]
-  }
-}
-
-export function applyMood(ssId, moodId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const mood = (ss.moods || []).find((m) => m.id === moodId)
-  if (!mood) return
-
-  store.activeMoodId = moodId
-  clearSceneVolumeOverrides(ss)
-
-  const { loops, randoms } = soundsetElements(ss)
-  const desired = new Set(desiredMoodElements(ss).map((el) => el.id))
-
-  for (const el of loops) {
-    const key = elKey(ss.id, el.id)
-    const playing = engine.isLoopPlaying(key)
-    if (desired.has(el.id)) {
-      if (!playing) startLoop(ss, el)
-      else engine.setLoopGain(key, elementGainOf(ss, el))
-    } else if (playing) {
-      stopLoop(ss, el)
-    }
-  }
-
-  for (const el of randoms) {
-    const key = elKey(ss.id, el.id)
-    const active = randomTimers.has(key)
-    if (desired.has(el.id)) {
-      if (!active) startRandom(ss, el)
-      engine.setOneShotGain(key, elementGainOf(ss, el))
-    } else if (active) {
-      stopRandom(ss, el)
-    }
-  }
-
-  updateTransportFlags(ss)
-}
-
-export function createMood(ssId, name, params = {}) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const mood = newMood(name)
-  mood.params = params
-  ss.moods.push(mood)
-  persistSoundset(ss)
-}
-
-export function updateMood(ssId, moodId, patch = {}) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const mood = (ss.moods || []).find((m) => m.id === moodId)
-  if (!mood) return
-  if (patch.name != null) mood.name = patch.name
-  if (patch.params != null) mood.params = patch.params
-  persistSoundset(ss)
-}
-
-function cleanLocalMoodBindings(ss, moodId) {
-  if (!ss.midi) return
-  for (const mapKey of ['notes', 'ccs']) {
-    if (!ss.midi[mapKey]) continue
-    ss.midi[mapKey] = removeBindings(
-      ss.midi[mapKey],
-      (binding) => binding && binding.moodId === moodId
-    )
-  }
-}
-
-export function deleteMood(ssId, moodId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  ss.moods = (ss.moods || []).filter((m) => m.id !== moodId)
-  cleanLocalMoodBindings(ss, moodId)
-  if (store.activeMoodId === moodId) store.activeMoodId = null
-  persistSoundset(ss)
-}
-
-// ---- instance cleanup ----
-
-function stopInstancePlayback(ss, instanceId) {
-  const key = elKey(ss.id, instanceId)
-  const entry = randomTimers.get(key)
-  if (entry && entry.timeout) clearTimeout(entry.timeout)
-  randomTimers.delete(key)
-  engine.stopLoopElement(key)
-  engine.stopOneShot(key)
-}
-
-function cleanLocalElementBindings(ss, instanceId) {
-  if (!ss.midi) return
-  for (const mapKey of ['notes', 'ccs']) {
-    if (!ss.midi[mapKey]) continue
-    ss.midi[mapKey] = removeBindings(
-      ss.midi[mapKey],
-      (binding) => binding && binding.elementId === instanceId
-    )
-  }
-}
-
-function cleanupInstance(ss, instanceId) {
-  ss.hidden = (ss.hidden || []).filter((id) => id !== instanceId)
-  for (const mood of ss.moods || []) {
-    if (mood.params && instanceId in mood.params) delete mood.params[instanceId]
-  }
-  cleanLocalElementBindings(ss, instanceId)
-}
-
-function sceneFilesFromInput(ss, files) {
-  if (!Array.isArray(files)) return []
-  return files
-    .map((entry) => {
-      if (typeof entry === 'string') return entry
-      if (!entry || typeof entry !== 'object' || typeof entry.file !== 'string') return null
-      if (typeof entry.dir === 'string') return relativeFile(ss.dir, entry.dir, entry.file)
-      return entry.file
-    })
-    .filter(Boolean)
-}
-
-// ---- library actions ----
-
-export function addLibraryGroup(def = {}) {
-  const group = ensureRandomTrigger(normalizeLibraryGroup(def))
-  store.library.groups = [...(store.library.groups || []), group]
-  persistLibrary()
-  return group.id
-}
-
-export function updateLibraryGroup(id, patch = {}) {
-  const group = findLibraryGroup(id)
-  if (!group) return
-  Object.assign(group, ensureRandomTrigger(normalizeLibraryGroup({ ...group, ...patch })))
-  persistLibrary()
-}
-
-export function deleteLibraryGroup(id) {
-  const group = findLibraryGroup(id)
-  if (!group) return
-
-  stopLibraryPreview(id)
-  const affected = []
-  for (const ss of store.soundsets) {
-    const includes = ss.includes || []
-    const doomed = includes.filter((inc) => inc.libraryId === id)
-    if (!doomed.length) continue
-    for (const inc of doomed) {
-      stopInstancePlayback(ss, inc.id)
-      delete store.volumeOverrides[elKey(ss.id, inc.id)]
-      cleanupInstance(ss, inc.id)
-    }
-    ss.includes = includes.filter((inc) => inc.libraryId !== id)
-    affected.push(ss)
-  }
-
-  const paletteIds = (store.global.palette || [])
-    .filter((entry) => entry.libraryId === id)
-    .map((entry) => entry.id)
-  for (const paletteId of paletteIds) stopPaletteItem(paletteId)
-  removeGlobalPaletteBindings(paletteIds)
-  const paletteChanged = paletteIds.length > 0
-  store.global.palette = (store.global.palette || []).filter((entry) => entry.libraryId !== id)
-  store.library.groups = (store.library.groups || []).filter((item) => item.id !== id)
-
-  persistLibrary()
-  for (const ss of affected) persistSoundset(ss)
-  if (paletteChanged) persistGlobal()
-}
-
-export function addIncludeToScene(ssId, libraryId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  const group = findLibraryGroup(libraryId)
-  if (!ss || !group) return null
-  const include = newInclude(libraryId)
-  ss.includes = [...(ss.includes || []), include]
-  persistSoundset(ss)
-  return include.id
-}
-
-export function removeIncludeFromScene(ssId, includeId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const include = (ss.includes || []).find((inc) => inc.id === includeId)
-  if (!include) return
-  stopInstancePlayback(ss, includeId)
-  delete store.volumeOverrides[elKey(ss.id, includeId)]
-  ss.includes = (ss.includes || []).filter((inc) => inc.id !== includeId)
-  cleanupInstance(ss, includeId)
-  if (store.activeId === ss.id) updateTransportFlags(ss)
-  persistSoundset(ss)
-}
-
-export async function promoteToLibrary(ssId, elementId, category) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return { ok: false, error: 'Soundset not found' }
-
-  const kind = instanceKind(ss, elementId)
-  stopInstancePlayback(ss, elementId)
-  if (store.activeId === ss.id) updateTransportFlags(ss)
-
-  try {
-    const res = await fetch('/api/library/promote', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ soundsetDir: ss.dir, elementId, category }),
-    })
-    const data = await res.json()
-    if (!data.ok) return data
-    await loadLibrary()
-    await loadFiles()
-    return data
-  } catch (err) {
-    return { ok: false, error: err.message || `Could not promote ${kind} to library` }
-  }
-}
-
-export function updateIncludeOverrides(ssId, includeId, patch = {}) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const include = (ss.includes || []).find((inc) => inc.id === includeId)
-  if (!include) return
-  const overrides = { ...(include.overrides || {}) }
-  for (const key of ['gain', 'kind', 'trigger', 'reverb', 'randomise']) {
-    if (Object.prototype.hasOwnProperty.call(patch, key)) overrides[key] = patch[key]
-  }
-  Object.assign(include, normalizeInclude({ ...include, overrides }))
-  persistSoundset(ss)
-}
-
-export function mergeSceneElements(ssId, ids, kind) {
-  const index = store.soundsets.findIndex((s) => s.id === ssId)
-  if (index === -1) return { warnings: ['Soundset not found'], element: null }
-  const ss = store.soundsets[index]
-
-  const requested = Array.isArray(ids) ? ids : []
-  const localIds = requested.filter((id) =>
-    (ss.elements || []).some((element) => element.id === id)
-  )
-  const includeIds = requested.filter((id) =>
-    (ss.includes || []).some((include) => include.id === id)
-  )
-
-  const result = mergeElementsPure(ss, localIds, kind)
-  store.soundsets[index] = result.soundset
-  persistSoundset(store.soundsets[index])
-
-  const warnings = [...result.warnings]
-  if (includeIds.length) {
-    warnings.push(
-      `Ignored ${includeIds.length} library include${includeIds.length === 1 ? '' : 's'}; ` +
-        'only scene elements can be merged'
-    )
-  }
-  return { ...result, warnings }
-}
-
-export function reclassifyElements(ssId, ids, patch = {}) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const wanted = new Set(Array.isArray(ids) ? ids : [])
-
-  for (const element of ss.elements || []) {
-    if (!wanted.has(element.id)) continue
-    const next = { ...element }
-    for (const key of ['kind', 'trigger', 'reverb']) {
-      if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key]
-    }
-    Object.assign(element, ensureRandomTrigger(normalizeElement(next)))
-  }
-
-  for (const include of ss.includes || []) {
-    if (!wanted.has(include.id)) continue
-    const overrides = { ...(include.overrides || {}) }
-    for (const key of ['kind', 'trigger', 'reverb']) {
-      if (Object.prototype.hasOwnProperty.call(patch, key)) overrides[key] = patch[key]
-    }
-    const next = normalizeInclude({ ...include, overrides })
-    if (
-      next.overrides.kind === 'random' &&
-      next.overrides.trigger &&
-      triggerIsZero(next.overrides.trigger)
-    ) {
-      next.overrides.trigger = { ...DEFAULT_RANDOM_TRIGGER }
-    }
-    Object.assign(include, next)
-  }
-
-  persistSoundset(ss)
-}
-
-export function markReviewed(ssId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  ss.reviewed = true
-  persistSoundset(ss)
-}
-
-// ---- editor ----
-
-export function renameElement(ssId, elId, name) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const raw = rawInstance(ss, elId)
-  if (!raw) return
-  if (raw.type === 'scene') {
-    raw.element.name = name
-    persistSoundset(ss)
-  } else {
-    const group = findLibraryGroup(raw.include.libraryId)
-    if (group) {
-      group.name = name
-      persistLibrary()
-    }
-  }
-}
-
-export function hideElement(ssId, elId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  if (!rawInstance(ss, elId)) return
-  if (!ss.hidden) ss.hidden = []
-  if (!ss.hidden.includes(elId)) ss.hidden.push(elId)
-  stopInstancePlayback(ss, elId)
-  if (store.activeId === ss.id) updateTransportFlags(ss)
-  persistSoundset(ss)
-}
-
-export function unhideElement(ssId, elId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  ss.hidden = (ss.hidden || []).filter((id) => id !== elId)
-  persistSoundset(ss)
-}
-
-export function addElement(ssId, def = {}) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return null
-  const kind = def.kind || 'oneshot'
-  const base = newElement(kind)
-  const next = { ...base, files: sceneFilesFromInput(ss, def.files) }
-  if (def.name != null) next.name = def.name
-  if (def.gain != null) next.gain = def.gain
-  if (def.randomise != null) next.randomise = def.randomise
-  if (def.reverb != null) next.reverb = def.reverb
-  if (def.trigger != null) next.trigger = def.trigger
-  else if (kind === 'random') next.trigger = { ...DEFAULT_RANDOM_TRIGGER }
-
-  const element = normalizeElement(next)
-  ss.elements.push(element)
-  persistSoundset(ss)
-  return element.id
-}
-
-export function updateElement(ssId, elId, patch = {}) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const raw = rawInstance(ss, elId)
-  if (!raw) return
-
-  if (raw.type === 'scene') {
-    const merged = { ...raw.element, ...patch }
-    if (patch.files != null) merged.files = sceneFilesFromInput(ss, patch.files)
-    Object.assign(raw.element, ensureRandomTrigger(normalizeElement(merged)))
-  } else {
-    const overrides = { ...(raw.include.overrides || {}) }
-    for (const key of ['gain', 'kind', 'trigger', 'reverb', 'randomise']) {
-      if (Object.prototype.hasOwnProperty.call(patch, key)) overrides[key] = patch[key]
-    }
-    Object.assign(raw.include, normalizeInclude({ ...raw.include, overrides }))
-    if (patch.name != null) {
-      const group = findLibraryGroup(raw.include.libraryId)
-      if (group) {
-        group.name = patch.name
-        persistLibrary()
+    for (let i = 0; i < missing.length; i += 500) {
+      const chunk = missing.slice(i, i + 500)
+      const params = new URLSearchParams({ ids: chunk.join(',') })
+      const data = await api(`/api/sounds?${params.toString()}`)
+      for (const sound of data?.sounds || []) {
+        store.soundsById[sound.id] = { ...sound, url: soundUrl(sound) }
       }
     }
+  } catch (err) {
+    setError(err)
+  } finally {
+    store.soundsLoading = false
   }
-
-  persistSoundset(ss)
 }
 
-export function deleteElement(ssId, elId) {
-  const ss = store.soundsets.find((s) => s.id === ssId)
-  if (!ss) return
-  const raw = rawInstance(ss, elId)
-  if (!raw) return
-
-  stopInstancePlayback(ss, elId)
-  delete store.volumeOverrides[elKey(ss.id, elId)]
-
-  if (raw.type === 'scene') {
-    ss.elements = (ss.elements || []).filter((element) => element.id !== elId)
-  } else {
-    ss.includes = (ss.includes || []).filter((include) => include.id !== elId)
+function collectGroupSounds(groupIds) {
+  const groups = groupsByIdMap()
+  const ids = []
+  for (const id of groupIds) {
+    const group = groups.get(id)
+    if (group) ids.push(...group.sounds)
   }
-
-  cleanupInstance(ss, elId)
-  if (store.activeId === ss.id) updateTransportFlags(ss)
-  persistSoundset(ss)
+  return ids
 }
 
-// ---- soundset lifecycle ----
-
-function slugify(name) {
-  return String(name || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+export async function ensureGroupSounds(groupId) {
+  const group = groupById(groupId)
+  if (!group) return
+  await ensureSounds(group.sounds)
+  refreshWarnings()
 }
 
-export async function createSoundset(name) {
-  const base = slugify(name) || 'soundscape'
-  let dir = base
-  let n = 2
-  while (store.soundsets.some((s) => s.dir === dir)) {
-    dir = `${base}-${n++}`
+export async function ensureSceneSounds(scene) {
+  if (!scene) return
+  const groupIds = new Set((scene.tracks || []).map((track) => track.groupId))
+  await ensureSounds(collectGroupSounds(groupIds))
+}
+
+export async function ensurePaletteSounds() {
+  const groupIds = new Set((store.global.palette || []).map((entry) => entry.groupId))
+  await ensureSounds(collectGroupSounds(groupIds))
+}
+
+function refreshWarnings() {
+  const warnings = []
+  const groups = groupsByIdMap()
+  const referenced = new Set()
+  for (const track of store.activeScene?.tracks || []) referenced.add(track.groupId)
+  for (const entry of store.global.palette || []) referenced.add(entry.groupId)
+
+  for (const groupId of referenced) {
+    if (!groupId) continue
+    const group = groups.get(groupId)
+    if (!group) {
+      warnings.push(`Missing library group: ${groupId}`)
+      continue
+    }
+    const missing = (group.sounds || []).filter((soundId) => !store.soundsById[soundId])
+    if (missing.length) {
+      warnings.push(`Group "${group.name}" is missing ${missing.length} sound(s)`)
+    }
   }
-  const body = newConfig(name || 'New soundscape')
+  store.warnings = [...new Set(warnings)]
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap / scene loading
+
+function applyGlobal(global) {
+  store.global = global && typeof global === 'object' ? global : clone(DEFAULT_GLOBAL)
+  store.master = clamp01(store.global.master ?? 0.8)
+  store.buses = {
+    loop: clamp01(store.global.buses?.loop ?? 1),
+    random: clamp01(store.global.buses?.random ?? 1),
+    oneshot: clamp01(store.global.buses?.oneshot ?? 1),
+  }
+  engine.setMaster(store.master)
+  for (const bus of KINDS) engine.setBus(bus, store.buses[bus])
+}
+
+function applyBootstrap(data) {
+  store.scenes = Array.isArray(data?.scenes) ? data.scenes : []
+  store.library = data?.library || { version: 3, groups: [] }
+  applyGlobal(data?.global)
+  store.stats = data?.stats || store.stats
+  store.catalogCount = data?.catalog?.count ?? store.stats.total ?? 0
+  store.importDone = Boolean(data?.stats?.importDone)
+}
+
+export async function bootstrap() {
+  store.loading = true
+  clearError()
   try {
-    const res = await fetch('/api/soundset/' + encodeURIComponent(dir), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+    const data = await api('/api/bootstrap')
+    applyBootstrap(data)
+    const first = store.scenes.find((scene) => !scene.disabled) || store.scenes[0] || null
+    if (first) await openScene(first.id)
+    await ensurePaletteSounds()
+    refreshWarnings()
+    store.bootstrapped = true
+  } catch (err) {
+    setError(err)
+  } finally {
+    store.loading = false
+  }
+}
+
+export async function refreshScenes() {
+  try {
+    const scenes = await api('/api/scenes')
+    store.scenes = Array.isArray(scenes) ? scenes : []
+  } catch (err) {
+    setError(err)
+  }
+}
+
+export async function openScene(id) {
+  if (!id) return null
+  await flushSave()
+  engine.stopScene()
+  store.transportRunning = false
+  store.sceneLoading = true
+  clearError()
+  try {
+    const raw = await api(`/api/scenes/${encodeURIComponent(id)}`)
+    const scene = normalizeScene(raw)
+    store.activeScene = scene
+    const mood = scene.moods.find((item) => item.id === scene.defaultMoodId) || scene.moods[0]
+    store.selectedMoodId = mood?.id || null
+    store.selectedTrackId = null
+    store.selectedTrackIds = []
+    await ensureSceneSounds(scene)
+    refreshWarnings()
+    return scene
+  } catch (err) {
+    setError(err)
+    return null
+  } finally {
+    store.sceneLoading = false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Debounced persistence
+
+let sceneTimer = null
+let sceneChain = Promise.resolve()
+
+export function scheduleSave(delay = 350) {
+  if (!store.activeScene) return
+  if (sceneTimer) clearTimeout(sceneTimer)
+  sceneTimer = setTimeout(() => {
+    sceneTimer = null
+    persistScene()
+  }, delay)
+}
+
+function persistScene() {
+  const scene = store.activeScene
+  if (!scene) return Promise.resolve()
+  const snapshot = clone(scene)
+  sceneChain = sceneChain
+    .catch(() => {})
+    .then(async () => {
+      await api(`/api/scenes/${encodeURIComponent(snapshot.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(snapshot),
+      })
+      store.lastSavedAt = Date.now()
+      const summary = store.scenes.find((item) => item.id === snapshot.id)
+      if (summary) {
+        summary.name = snapshot.name
+        summary.disabled = snapshot.disabled
+        summary.trackCount = snapshot.tracks.length
+        summary.moodCount = snapshot.moods.length
+        summary.defaultMoodId = snapshot.defaultMoodId
+      }
     })
-    const data = await res.json()
-    if (!data.ok) return null
-    store.soundsets.push(data.soundset)
-    store.soundsets.sort((a, b) => a.name.localeCompare(b.name))
-    return data.soundset.id
-  } catch {
+    .catch((err) => setError(err))
+  return sceneChain
+}
+
+export async function flushSave() {
+  if (sceneTimer) {
+    clearTimeout(sceneTimer)
+    sceneTimer = null
+  }
+  if (!store.activeScene) return
+  await persistScene()
+}
+
+let globalTimer = null
+let globalChain = Promise.resolve()
+
+export function scheduleGlobalSave(delay = 300) {
+  if (globalTimer) clearTimeout(globalTimer)
+  globalTimer = setTimeout(() => {
+    globalTimer = null
+    persistGlobalNow()
+  }, delay)
+}
+
+export function persistGlobalNow() {
+  const snapshot = clone(store.global)
+  globalChain = globalChain
+    .catch(() => {})
+    .then(async () => {
+      await api('/api/global', { method: 'PUT', body: JSON.stringify(snapshot) })
+    })
+    .catch((err) => setError(err))
+  return globalChain
+}
+
+export async function flushGlobal() {
+  if (globalTimer) {
+    clearTimeout(globalTimer)
+    globalTimer = null
+  }
+  await persistGlobalNow()
+}
+
+// ---------------------------------------------------------------------------
+// Scene CRUD
+
+export async function createScene(name) {
+  try {
+    const data = await api('/api/scenes', { method: 'POST', body: { name } })
+    await refreshScenes()
+    await openScene(data.scene.id)
+    setStatus(`Created scene "${data.scene.name || 'Scene'}"`)
+    return data.scene
+  } catch (err) {
+    setError(err)
     return null
   }
 }
 
-export function renameSoundset(id, name) {
-  const ss = store.soundsets.find((s) => s.id === id)
-  if (!ss) return
-  ss.name = name
-  persistSoundset(ss)
+export function renameScene(name) {
+  if (!store.activeScene) return
+  const next = String(name || '').trim()
+  if (!next) return
+  store.activeScene.name = next
+  scheduleSave()
 }
 
-export async function deleteSoundset(id) {
-  const ss = store.soundsets.find((s) => s.id === id)
-  if (!ss) return
-  if (store.activeId === id) {
-    stopEverything()
-    store.activeId = null
-    store.activeMoodId = null
-  }
-  store.soundsets = store.soundsets.filter((s) => s.id !== id)
+export async function setSceneDisabled(idOrDisabled, maybeDisabled) {
+  const byId = typeof idOrDisabled === 'string'
+  const id = byId ? idOrDisabled : store.activeScene?.id
+  const disabled = byId ? Boolean(maybeDisabled) : Boolean(idOrDisabled)
+  if (!id) return
 
-  let globalChanged = false
-  for (const mapKey of ['notes', 'ccs']) {
-    if (!store.global.midi || !store.global.midi[mapKey]) continue
-    const before = Object.keys(store.global.midi[mapKey]).length
-    store.global.midi[mapKey] = removeBindings(
-      store.global.midi[mapKey],
-      (binding) => binding && binding.soundsetId === id
-    )
-    if (Object.keys(store.global.midi[mapKey]).length !== before) globalChanged = true
+  if (store.activeScene?.id === id) {
+    store.activeScene.disabled = disabled
+    const summary = store.scenes.find((scene) => scene.id === id)
+    if (summary) summary.disabled = disabled
+    scheduleSave()
+    return
   }
-  if (globalChanged) persistGlobal()
 
   try {
-    await fetch('/api/soundset/' + encodeURIComponent(ss.dir), { method: 'DELETE' })
-  } catch {
-    /* ignore */
+    const raw = await api(`/api/scenes/${encodeURIComponent(id)}`)
+    const scene = normalizeScene(raw)
+    scene.disabled = disabled
+    await api(`/api/scenes/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(scene),
+    })
+    const summary = store.scenes.find((item) => item.id === id)
+    if (summary) summary.disabled = disabled
+  } catch (err) {
+    setError(err)
   }
 }
 
-export function disableSoundset(id) {
-  const ss = store.soundsets.find((s) => s.id === id)
-  if (!ss) return
-  ss.disabled = true
-  persistSoundset(ss)
+export async function deleteScene(id) {
+  if (!id) return
+  try {
+    if (sceneTimer) {
+      clearTimeout(sceneTimer)
+      sceneTimer = null
+    }
+    if (store.activeScene?.id === id) await sceneChain.catch(() => {})
+    await api(`/api/scenes/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (store.activeScene?.id === id) {
+      engine.stopScene()
+      store.transportRunning = false
+      store.activeScene = null
+      store.selectedMoodId = null
+      store.selectedTrackId = null
+      store.selectedTrackIds = []
+    }
+    await refreshScenes()
+    setStatus('Scene deleted')
+  } catch (err) {
+    setError(err)
+  }
 }
 
-export function enableSoundset(id) {
-  const ss = store.soundsets.find((s) => s.id === id)
-  if (!ss) return
-  ss.disabled = false
-  persistSoundset(ss)
+// ---------------------------------------------------------------------------
+// Moods
+
+export function selectMood(id) {
+  const scene = store.activeScene
+  if (!scene) return
+  if (!scene.moods.some((mood) => mood.id === id)) return
+  if (id === store.selectedMoodId) return
+
+  const previous = buildPlan(store.selectedMoodId)
+  store.selectedMoodId = id
+  const next = buildPlan(id)
+
+  if (store.transportRunning) {
+    const change = moodChangePlan(
+      previous,
+      next,
+      engine.activeTrackIds('loop'),
+      engine.activeTrackIds('random')
+    )
+    for (const track of change.stopLoops) engine.stopTrack(track.trackId)
+    for (const track of change.stopRandoms) engine.stopTrack(track.trackId)
+    for (const track of change.startLoops) engine.startTrack(track)
+    for (const track of change.startRandoms) engine.startTrack(track)
+    for (const track of change.apply) engine.applyTrackParams(track)
+  }
 }
 
-// ---- MIDI ----
-
-export async function connectMidi() {
-  const ok = await connectMidiDevice()
-  store.midiConnected = ok
-  store.midiError = midi.error || ''
-  return ok
+export function createMood() {
+  const scene = store.activeScene
+  if (!scene) return null
+  const mood = normalizeMood(
+    { id: uid(), name: `Mood ${scene.moods.length + 1}` },
+    scene.tracks.map((track) => track.id)
+  )
+  scene.moods.push(mood)
+  store.selectedMoodId = mood.id
+  scheduleSave()
+  return mood
 }
 
-export function learnNote(action) {
-  store.learning = { mode: 'note', action }
+export function duplicateMood(id = store.selectedMoodId) {
+  const scene = store.activeScene
+  if (!scene) return null
+  const source = scene.moods.find((mood) => mood.id === id)
+  if (!source) return null
+  const mood = normalizeMood(
+    {
+      id: uid(),
+      name: `${source.name} copy`,
+      params: clone(source.params),
+    },
+    scene.tracks.map((track) => track.id)
+  )
+  scene.moods.push(mood)
+  store.selectedMoodId = mood.id
+  scheduleSave()
+  return mood
 }
 
-export function learnCC(action) {
-  store.learning = { mode: 'cc', action }
+export function renameMood(id, name) {
+  const scene = store.activeScene
+  if (!scene) return
+  const mood = scene.moods.find((item) => item.id === id)
+  if (!mood) return
+  const next = String(name || '').trim()
+  if (next) mood.name = next
+  scheduleSave()
 }
 
-export function learnPaletteNote(paletteId) {
-  learnNote({ type: 'palette', paletteId })
+export function deleteMood(id) {
+  const scene = store.activeScene
+  if (!scene) return
+  if (scene.moods.length <= 1) {
+    setStatus('A scene must keep at least one mood', 'error')
+    return
+  }
+  const index = scene.moods.findIndex((mood) => mood.id === id)
+  if (index < 0) return
+  const wasSelected = store.selectedMoodId === id
+  const previous = wasSelected && store.transportRunning ? buildPlan(store.selectedMoodId) : null
+  scene.moods.splice(index, 1)
+  scene.midi = removeBindingsForTargets(scene.midi, 'local', [
+    { type: 'moodSelect', moodId: id },
+  ])
+  if (scene.defaultMoodId === id) scene.defaultMoodId = scene.moods[0].id
+  if (wasSelected) store.selectedMoodId = scene.defaultMoodId
+  scheduleSave()
+
+  if (previous) {
+    const next = buildPlan(store.selectedMoodId)
+    const change = moodChangePlan(
+      previous,
+      next,
+      engine.activeTrackIds('loop'),
+      engine.activeTrackIds('random')
+    )
+    for (const track of change.stopLoops) engine.stopTrack(track.trackId)
+    for (const track of change.stopRandoms) engine.stopTrack(track.trackId)
+    for (const track of change.startLoops) engine.startTrack(track)
+    for (const track of change.startRandoms) engine.startTrack(track)
+    for (const track of change.apply) engine.applyTrackParams(track)
+  }
 }
 
-export function learnPaletteCC(paletteId) {
-  learnCC({ type: 'paletteVolume', paletteId })
+export function setDefaultMood(id) {
+  const scene = store.activeScene
+  if (!scene) return
+  if (!scene.moods.some((mood) => mood.id === id)) return
+  scene.defaultMoodId = id
+  scheduleSave()
+}
+
+// ---------------------------------------------------------------------------
+// Tracks
+
+export function trackById(trackId) {
+  return store.activeScene?.tracks.find((track) => track.id === trackId) || null
+}
+
+export function selectTrack(id, additive = false) {
+  if (!id) {
+    store.selectedTrackId = null
+    store.selectedTrackIds = []
+    return
+  }
+  if (additive) {
+    const index = store.selectedTrackIds.indexOf(id)
+    if (index >= 0) store.selectedTrackIds.splice(index, 1)
+    else store.selectedTrackIds.push(id)
+  } else {
+    store.selectedTrackIds = [id]
+  }
+  store.selectedTrackId = id
+  const track = trackById(id)
+  if (track) ensureGroupSounds(track.groupId)
+}
+
+function moodRaw(id = store.selectedMoodId) {
+  return store.activeScene?.moods.find((mood) => mood.id === id) || null
+}
+
+function findResolved(trackId) {
+  return buildPlan(store.selectedMoodId).all.find((track) => track.trackId === trackId) || null
+}
+
+function updateMoodParam(trackId, patch, removeKeys = []) {
+  const mood = moodRaw()
+  if (!mood) return null
+  const current = { ...(mood.params[trackId] || {}) }
+  for (const key of removeKeys) delete current[key]
+  Object.assign(current, patch)
+  for (const key of Object.keys(current)) {
+    if (current[key] === undefined) delete current[key]
+  }
+  if (Object.keys(current).length) mood.params[trackId] = current
+  else delete mood.params[trackId]
+  scheduleSave()
+  return current
+}
+
+export function addGroupsToScene(groupIds, kind, index) {
+  const scene = store.activeScene
+  if (!scene) return
+  const ids = Array.isArray(groupIds) ? groupIds : [groupIds]
+  const groups = []
+  const seen = new Set()
+  for (const id of ids) {
+    if (!id || seen.has(id)) continue
+    const group = groupById(id)
+    if (!group) continue
+    seen.add(id)
+    groups.push(group)
+  }
+  if (!groups.length) return
+
+  const override = KINDS.includes(kind) ? kind : undefined
+  const before = new Set(scene.tracks.map((track) => track.id))
+  let tracks = addTracksForGroups(scene.tracks, groups, override)
+  const added = tracks.filter((track) => !before.has(track.id))
+  if (override && Number.isInteger(index) && added.length) {
+    tracks = moveTracks(
+      tracks,
+      added.map((track) => track.id),
+      override,
+      index
+    )
+  }
+  scene.tracks = tracks
+  ensureSounds(groups.flatMap((group) => group.sounds))
+  refreshWarnings()
+  scheduleSave()
+  setStatus(`Added ${groups.length} group(s) to the scene`)
+}
+
+export function removeTrack(trackId) {
+  const scene = store.activeScene
+  if (!scene) return
+  const track = scene.tracks.find((item) => item.id === trackId)
+  if (!track) return
+  engine.stopTrack(trackId)
+  scene.tracks = scene.tracks.filter((item) => item.id !== trackId)
+  for (const mood of scene.moods) delete mood.params[trackId]
+  scene.midi = removeBindingsForTargets(scene.midi, 'local', [
+    { type: 'trackTrigger', trackId },
+    { type: 'trackVolume', trackId },
+  ])
+  store.selectedTrackIds = store.selectedTrackIds.filter((id) => id !== trackId)
+  if (store.selectedTrackId === trackId) store.selectedTrackId = null
+  scheduleSave()
+}
+
+export function reorderTracks(movingIds, targetKind, targetIndex) {
+  const scene = store.activeScene
+  if (!scene || !KINDS.includes(targetKind)) return
+  const ids = (Array.isArray(movingIds) ? movingIds : [movingIds]).filter(Boolean)
+  if (!ids.length) return
+  const current = scene.tracks
+    .filter((track) => track.kind === targetKind)
+    .sort((a, b) => a.order - b.order)
+    .map((track) => track.id)
+  let insertion = Math.max(0, Number(targetIndex) || 0)
+  for (const id of ids) {
+    const from = current.indexOf(id)
+    if (from >= 0 && from < insertion) insertion -= 1
+  }
+  scene.tracks = moveTracks(scene.tracks, ids, targetKind, insertion)
+  scheduleSave()
+}
+
+export function toggleTrack(trackId) {
+  const plan = buildPlan(store.selectedMoodId)
+  const result = applyManualToggle(plan, trackId, engine.activeTrackIds())
+  if (!result.track) return
+  if (result.action === 'stop') engine.stopTrack(trackId)
+  else engine.startTrack(result.track)
+}
+
+export function setTrackMoodEnabled(trackId, enabled) {
+  updateMoodParam(trackId, { enabled: Boolean(enabled) })
+  if (store.transportRunning) {
+    const track = findResolved(trackId)
+    if (track) {
+      if (!enabled) engine.stopTrack(trackId)
+      else if (track.kind !== 'oneshot' && !engine.isTrackActive(trackId)) {
+        engine.startTrack(track)
+      }
+    }
+  }
+}
+
+export function setTrackMoodGain(trackId, value) {
+  updateMoodParam(trackId, { gain: clamp01(value) })
+  const track = findResolved(trackId)
+  if (track) engine.applyTrackParams(track)
+}
+
+export function setTrackMoodReverb(trackId, value) {
+  updateMoodParam(trackId, { reverb: coerceReverb(value) })
+  const track = findResolved(trackId)
+  if (track) engine.applyTrackParams(track)
+}
+
+export function setTrackMoodPan(trackId, value) {
+  updateMoodParam(trackId, { pan: clampPan(value) })
+  const track = findResolved(trackId)
+  if (track) engine.applyTrackParams(track)
+}
+
+export function setTrackMoodTrigger(trackId, value) {
+  updateMoodParam(trackId, { trigger: triggerCopy(value) })
+  const track = findResolved(trackId)
+  if (track) engine.applyTrackParams(track)
+}
+
+export function resetTrackMoodOverride(trackId) {
+  const mood = moodRaw()
+  if (!mood) return
+  delete mood.params[trackId]
+  scheduleSave()
+  const track = findResolved(trackId)
+  if (track) engine.applyTrackParams(track)
+}
+
+export function clearTrackMoodField(trackId, field) {
+  const mood = moodRaw()
+  if (!mood) return
+  const param = mood.params[trackId]
+  if (!param) return
+  delete param[field]
+  if (!Object.keys(param).length) delete mood.params[trackId]
+  scheduleSave()
+  const track = findResolved(trackId)
+  if (track) engine.applyTrackParams(track)
+}
+
+export function setTrackDefaultTrigger(trackId, value) {
+  const track = trackById(trackId)
+  if (!track) return
+  track.trigger = track.kind === 'random' ? triggerCopy(value) : { ...ZERO_TRIGGER }
+  scheduleSave()
+  const resolved = findResolved(trackId)
+  if (resolved) engine.applyTrackParams(resolved)
+}
+
+// ---------------------------------------------------------------------------
+// Library groups
+
+function applyLibrary(library) {
+  if (!library) return
+  store.library = library
+  refreshWarnings()
+}
+
+function syncGroupVoices(groupId) {
+  if (!store.transportRunning) return
+  const plan = buildPlan(store.selectedMoodId)
+  for (const track of plan.all) {
+    if (track.groupId !== groupId) continue
+    if (engine.isTrackActive(track.trackId)) engine.applyTrackParams(track)
+  }
+}
+
+export async function createGroup(payload) {
+  clearError()
+  try {
+    const data = await api('/api/groups', { method: 'POST', body: payload || {} })
+    applyLibrary(data.library)
+    await ensureSounds(data.group?.sounds || [])
+    refreshWarnings()
+    refreshStats()
+    setStatus(`Created group "${data.group?.name || 'Group'}"`)
+    return data.group
+  } catch (err) {
+    setError(err)
+    return null
+  }
+}
+
+export async function updateGroup(id, patch) {
+  clearError()
+  try {
+    const data = await api(`/api/groups/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: patch || {},
+    })
+    applyLibrary(data.library)
+    await ensureSounds(data.group?.sounds || [])
+    refreshWarnings()
+    syncGroupVoices(id)
+    refreshStats()
+    return data.group
+  } catch (err) {
+    setError(err)
+    return null
+  }
+}
+
+export async function deleteGroup(id) {
+  clearError()
+  try {
+    const data = await api(`/api/groups/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    applyLibrary(data.library)
+    if (data.global) applyGlobal(data.global)
+    const scene = store.activeScene
+    if (scene) {
+      const removed = scene.tracks.filter((track) => track.groupId === id)
+      if (removed.length) {
+        for (const track of removed) engine.stopTrack(track.id)
+        scene.tracks = scene.tracks.filter((track) => track.groupId !== id)
+        for (const track of removed) {
+          for (const mood of scene.moods) delete mood.params[track.id]
+        }
+        store.selectedTrackId = null
+        store.selectedTrackIds = []
+        scheduleSave()
+      }
+    }
+    store.librarySelection = store.librarySelection.filter((groupId) => groupId !== id)
+    refreshStats()
+    refreshWarnings()
+    setStatus('Group deleted')
+  } catch (err) {
+    setError(err)
+  }
+}
+
+export async function mergeGroups(input) {
+  clearError()
+  try {
+    const data = await api('/api/groups/merge', { method: 'POST', body: input || {} })
+    applyLibrary(data.library)
+    if (data.global) applyGlobal(data.global)
+    const removed = new Set(data.removedIds || [])
+    const scene = store.activeScene
+    if (scene && removed.size && data.group) {
+      let changed = false
+      for (const track of scene.tracks) {
+        if (!removed.has(track.groupId)) continue
+        track.groupId = data.group.id
+        changed = true
+      }
+      if (changed) {
+        scheduleSave()
+        syncGroupVoices(data.group.id)
+      }
+    }
+    store.librarySelection = store.librarySelection.filter((id) => !removed.has(id))
+    refreshStats()
+    refreshWarnings()
+    setStatus('Groups merged')
+    return data.group
+  } catch (err) {
+    setError(err)
+    return null
+  }
+}
+
+export async function splitGroup(input) {
+  clearError()
+  try {
+    const data = await api('/api/groups/split', { method: 'POST', body: input || {} })
+    applyLibrary(data.library)
+    await ensureSounds(data.group?.sounds || [])
+    refreshWarnings()
+    refreshStats()
+    setStatus('Group split')
+    return data.group
+  } catch (err) {
+    setError(err)
+    return null
+  }
+}
+
+export async function bulkUpdateGroups(ids, patch) {
+  clearError()
+  try {
+    const data = await api('/api/groups/bulk', {
+      method: 'POST',
+      body: { ids, patch: patch || {} },
+    })
+    applyLibrary(data.library)
+    for (const group of data.groups || []) syncGroupVoices(group.id)
+    refreshStats()
+    refreshWarnings()
+    setStatus(`Updated ${data.groups?.length || 0} group(s)`)
+    return data.groups || []
+  } catch (err) {
+    setError(err)
+    return []
+  }
+}
+
+export async function addGroupSounds(id, soundIds) {
+  clearError()
+  try {
+    const data = await api(`/api/groups/${encodeURIComponent(id)}/sounds`, {
+      method: 'POST',
+      body: { soundIds },
+    })
+    applyLibrary(data.library)
+    await ensureSounds(soundIds || [])
+    refreshWarnings()
+    syncGroupVoices(id)
+    refreshStats()
+    return data.group
+  } catch (err) {
+    setError(err)
+    return null
+  }
+}
+
+export async function removeGroupSounds(id, soundIds) {
+  clearError()
+  try {
+    const data = await api(`/api/groups/${encodeURIComponent(id)}/sounds/remove`, {
+      method: 'POST',
+      body: { soundIds },
+    })
+    applyLibrary(data.library)
+    syncGroupVoices(id)
+    refreshWarnings()
+    refreshStats()
+    return data.group
+  } catch (err) {
+    setError(err)
+    return null
+  }
+}
+
+export async function createGroupsFromSelectedSounds(payload) {
+  clearError()
+  try {
+    const data = await api('/api/groups/from-sounds', { method: 'POST', body: payload || {} })
+    applyLibrary(data.library)
+    await ensureSounds(data.group?.sounds || [])
+    refreshWarnings()
+    refreshStats()
+    setStatus(`Created group "${data.group?.name || 'Group'}"`)
+    return data.group
+  } catch (err) {
+    setError(err)
+    return null
+  }
+}
+
+export function openGroupEditor(id) {
+  store.editingGroupId = id || null
+}
+
+export function closeGroupEditor() {
+  store.editingGroupId = null
+}
+
+// ---------------------------------------------------------------------------
+// Palette
+
+export function addToPalette(groupId, label = '') {
+  const group = groupById(groupId)
+  if (!group) return null
+  if (store.global.palette.some((entry) => entry.groupId === groupId)) {
+    setStatus(`"${group.name}" is already in the palette`, 'error')
+    return null
+  }
+  const entry = {
+    id: uid(),
+    groupId,
+    label: String(label || ''),
+    gain: null,
+    order: store.global.palette.length,
+  }
+  store.global.palette.push(entry)
+  persistGlobalNow()
+  ensureSounds(group.sounds).then(refreshWarnings)
+  setStatus(`Added "${group.name}" to the palette`)
+  return entry
+}
+
+export function removeFromPalette(paletteId) {
+  const index = store.global.palette.findIndex((entry) => entry.id === paletteId)
+  if (index < 0) return
+  engine.stopPalette(paletteId)
+  store.global.palette.splice(index, 1)
+  store.global.palette.forEach((entry, order) => {
+    entry.order = order
+  })
+  persistGlobalNow()
+}
+
+export function setPaletteGain(paletteId, value) {
+  const entry = store.global.palette.find((item) => item.id === paletteId)
+  if (!entry) return
+  entry.gain = clamp01(value)
+  engine.setPaletteGain(paletteId, entry.gain)
+  scheduleGlobalSave()
+}
+
+export function setPaletteLabel(paletteId, label) {
+  const entry = store.global.palette.find((item) => item.id === paletteId)
+  if (!entry) return
+  entry.label = String(label || '')
+  scheduleGlobalSave()
+}
+
+export function reorderPalette(orderedIds) {
+  const ids = Array.isArray(orderedIds) ? orderedIds : []
+  const byId = new Map(store.global.palette.map((entry) => [entry.id, entry]))
+  const next = []
+  for (const id of ids) {
+    const entry = byId.get(id)
+    if (entry) {
+      next.push(entry)
+      byId.delete(id)
+    }
+  }
+  next.push(...byId.values())
+  next.forEach((entry, index) => {
+    entry.order = index
+  })
+  store.global.palette = next
+  scheduleGlobalSave()
+}
+
+export function movePalette(paletteId, delta) {
+  const sorted = [...store.global.palette].sort(
+    (a, b) => (a.order ?? 0) - (b.order ?? 0)
+  )
+  const index = sorted.findIndex((entry) => entry.id === paletteId)
+  if (index < 0) return
+  const target = Math.min(sorted.length - 1, Math.max(0, index + delta))
+  if (target === index) return
+  const [entry] = sorted.splice(index, 1)
+  sorted.splice(target, 0, entry)
+  reorderPalette(sorted.map((item) => item.id))
+}
+
+export async function triggerPalette(paletteId) {
+  const entry = paletteEntries.value.find((item) => item.id === paletteId)
+  if (!entry) return
+  if (!entry.valid) {
+    setStatus(`Palette item "${entry.label || entry.groupName || paletteId}" is missing its group`, 'error')
+    return
+  }
+  if (engine.isPaletteActive(paletteId)) {
+    engine.stopPalette(paletteId)
+    return
+  }
+  await ensureSounds(entry.sounds)
+  const fresh = paletteEntries.value.find((item) => item.id === paletteId)
+  if (!fresh) return
+  engine.triggerPalette({
+    paletteId,
+    kind: nextPaletteKind(fresh.group),
+    label: fresh.label || fresh.groupName,
+    groupName: fresh.groupName,
+    soundData: fresh.soundData,
+    sounds: fresh.sounds,
+    selection: fresh.selection,
+    gain: fresh.gain,
+    reverb: fresh.reverb,
+    pan: fresh.pan,
+    trigger: fresh.trigger,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Transport / volumes
+
+export function play() {
+  if (!store.activeScene) return
+  const plan = buildPlan(store.selectedMoodId)
+  const initial = initialTransportPlan(plan)
+  engine.stopScene()
+  engine.unlock()
+  for (const track of initial.startLoops) engine.startTrack(track)
+  for (const track of initial.startRandoms) engine.startTrack(track)
+  store.transportRunning = true
+}
+
+export function stop() {
+  engine.stopScene()
+  store.transportRunning = false
+}
+
+export function toggleTransport() {
+  if (store.transportRunning) stop()
+  else play()
+}
+
+export function stopAll() {
+  engine.stopAll()
+  store.transportRunning = false
+  setStatus('Stopped all playback')
+}
+
+export function setMaster(value) {
+  store.master = clamp01(value)
+  store.global.master = store.master
+  engine.setMaster(store.master)
+  scheduleGlobalSave()
+}
+
+export function setBus(bus, value) {
+  if (!KINDS.includes(bus)) return
+  const next = clamp01(value)
+  store.buses = { ...store.buses, [bus]: next }
+  store.global.buses = { ...store.global.buses, [bus]: next }
+  engine.setBus(bus, next)
+  scheduleGlobalSave()
+}
+
+export function setMode(mode) {
+  store.mode = mode === 'perform' ? 'perform' : 'edit'
+  if (store.mode === 'perform') store.view = 'editor'
+}
+
+// ---------------------------------------------------------------------------
+// MIDI bindings
+
+function keyAction(midi, key) {
+  const parsed = parseBindingKey(key)
+  if (!parsed) return null
+  const canonical = bindingKey(parsed.channel, parsed.type, parsed.number)
+  const mapName = parsed.type === 'note' ? 'notes' : 'ccs'
+  return midi?.[mapName]?.[canonical] || null
+}
+
+function withoutKey(midi, key) {
+  const parsed = parseBindingKey(key)
+  if (!parsed) return midi
+  const canonical = bindingKey(parsed.channel, parsed.type, parsed.number)
+  const notes = { ...(midi?.notes || {}) }
+  const ccs = { ...(midi?.ccs || {}) }
+  delete notes[canonical]
+  delete ccs[canonical]
+  return { notes, ccs }
+}
+
+export function beginLearn(scope, action) {
+  const normalized = normalizeMidiAction(action, scope)
+  if (!normalized) {
+    setStatus('That control cannot be bound', 'error')
+    return
+  }
+  if (scope === 'local' && !store.activeScene) {
+    setStatus('Open a scene before learning a local binding', 'error')
+    return
+  }
+  store.learning = { scope, action: normalized }
+  setStatus(`Learning ${actionLabel(normalized)} — move a note or knob (Escape to cancel)`)
 }
 
 export function cancelLearn() {
   store.learning = null
+  store.collision = null
 }
 
-export function actionScope(a) {
-  if (!a) return 'local'
-  if (a.scope) return a.scope
-  if (a.type === 'stop' || a.type === 'master' || a.type === 'bus') return 'global'
-  if (a.type === 'palette' || a.type === 'paletteVolume') return 'global'
-  if (a.type === 'soundset') return a.soundsetId ? 'global' : 'local'
-  return 'local'
+export function isLearning(scope, action) {
+  if (!store.learning) return false
+  return store.learning.scope === scope && sameTarget(store.learning.action, action)
 }
 
-export function saveLearned(key, mode, action) {
-  const scope = actionScope(action)
-  const mapKey = mode === 'note' ? 'notes' : 'ccs'
+export async function receiveLearnedKey(scope, action, key) {
+  const normalized = normalizeMidiAction(action, scope)
+  if (!normalized) return
+  const parsed = parseBindingKey(key)
+  if (!parsed) return
+  const expected = actionChannelType(normalized)
+  if (parsed.type !== expected) {
+    setStatus(
+      `${normalized.type} needs a ${expected === 'cc' ? 'CC knob' : 'note key'}, got a ${parsed.type === 'cc' ? 'CC' : 'note'}`,
+      'error'
+    )
+    return
+  }
+  const canonical = bindingKey(parsed.channel, parsed.type, parsed.number)
 
-  if (scope === 'global') {
-    if (!store.global.midi) store.global.midi = { notes: {}, ccs: {} }
-    store.global.midi[mapKey] = bindAction(store.global.midi[mapKey], key, action)
-    persistGlobal()
+  if (scope === 'local') {
+    if (!store.activeScene) return
+    const existing = keyAction(store.global.midi, canonical)
+    if (existing) {
+      store.collision = {
+        scope: 'local',
+        key: canonical,
+        action: normalized,
+        globalAction: existing,
+        scenes: [],
+      }
+      return
+    }
   } else {
-    const ss = activeSoundset.value
-    if (ss) {
-      if (!ss.midi) ss.midi = { notes: {}, ccs: {} }
-      if (!ss.midi[mapKey]) ss.midi[mapKey] = {}
-      ss.midi[mapKey] = bindAction(ss.midi[mapKey], key, action)
-      persistSoundset(ss)
+    let overview = null
+    try {
+      overview = await api('/api/bindings')
+      store.bindingsOverview = overview
+    } catch (err) {
+      setError(err)
+      return
+    }
+    const scenes = []
+    for (const scene of overview?.scenes || []) {
+      const action = keyAction(scene.midi, canonical)
+      if (action) scenes.push({ sceneId: scene.sceneId, name: scene.name, action })
+    }
+    if (scenes.length) {
+      store.collision = {
+        scope: 'global',
+        key: canonical,
+        action: normalized,
+        globalAction: null,
+        scenes,
+      }
+      return
     }
   }
 
-  store.learning = null
+  await applyBinding(scope, normalized, canonical)
 }
 
-export function assignedBinding(action, mode) {
-  const mapKey = mode === 'note' ? 'notes' : 'ccs'
-  const map =
-    actionScope(action) === 'global'
-      ? store.global.midi && store.global.midi[mapKey]
-      : activeSoundset.value && activeSoundset.value.midi && activeSoundset.value.midi[mapKey]
-  return findBindingKey(map, action)
-}
-
-const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-
-function noteLabel(note) {
-  const n = Number(note)
-  if (!Number.isFinite(n)) return ''
-  const name = NOTE_NAMES[((n % 12) + 12) % 12]
-  const octave = Math.floor(n / 12) - 1
-  return `${name}${octave}`
-}
-
-export function bindingLabel(action, mode) {
-  const key = assignedBinding(action, mode)
-  if (!key) return ''
-  const [channel, value] = String(key).split(':')
-  if (mode === 'note') return noteLabel(value)
-  return `CC ${value}`
-}
-
-export function isBindingShadowed(action, mode) {
-  if (actionScope(action) !== 'global') return false
-  const key = assignedBinding(action, mode)
-  if (!key) return false
-  const ss = activeSoundset.value
-  const map = ss && ss.midi && ss.midi[mode === 'note' ? 'notes' : 'ccs']
-  return !!map && key in map
-}
-
-function runLocalNote(ss, action) {
-  if (!action) return
-  if (action.type === 'mood') {
-    applyMood(ss.id, action.moodId)
-    return
+async function applyBinding(scope, action, key) {
+  if (scope === 'local') {
+    if (!store.activeScene) return
+    store.activeScene.midi = setBinding(store.activeScene.midi, 'local', key, action)
+    store.learning = null
+    await flushSave()
+    setStatus(`Bound ${actionLabel(action)} locally`)
+  } else {
+    store.global.midi = setBinding(store.global.midi, 'global', key, action)
+    store.learning = null
+    await persistGlobalNow()
+    setStatus(`Bound ${actionLabel(action)} globally`)
   }
-  if (action.type === 'soundset') {
-    toggleSoundset(ss.id)
+  refreshWarnings()
+}
+
+export async function confirmCollision() {
+  const collision = store.collision
+  if (!collision) return
+  store.collision = null
+
+  if (collision.scope === 'local') {
+    store.global.midi = withoutKey(store.global.midi, collision.key)
+    await persistGlobalNow()
+    await applyBinding('local', collision.action, collision.key)
     return
   }
 
-  if (!action.elementId) return
-  const el = findElement(ss.id, action.elementId)
-  if (!el) return
-
-  // Dispatch by the element's CURRENT kind so reclassified elements work.
-  if (el.kind === 'loop') toggleLoopElement(ss.id, el.id)
-  else if (el.kind === 'random') toggleRandomElement(ss.id, el.id)
-  else playOneshotElement(ss.id, el.id)
-}
-
-function runGlobalNote(action) {
-  if (!action) return
-  if (action.type === 'stop') stopEverything()
-  else if (action.type === 'soundset') toggleSoundset(action.soundsetId)
-  else if (action.type === 'palette') playPaletteItem(action.paletteId)
-}
-
-function runLocalCC(ss, action, value) {
-  if (!action) return
-  if (action.type === 'element') setElementVolume(ss.id, action.elementId, value / 127)
-}
-
-function runGlobalCC(action, value) {
-  if (!action) return
-  const v = value / 127
-  if (action.type === 'master') setMaster(v)
-  else if (action.type === 'bus') setBusVolume(action.bus, v)
-  else if (action.type === 'paletteVolume') setPaletteVolume(action.paletteId, v)
-}
-
-onMidiMessage((m) => {
-  if (m.type === 'note' && m.on) {
-    const key = `${m.channel}:${m.note}`
-    if (store.learning && store.learning.mode === 'note') {
-      saveLearned(key, 'note', store.learning.action)
-      return
+  for (const item of collision.scenes || []) {
+    if (store.activeScene?.id === item.sceneId) {
+      store.activeScene.midi = withoutKey(store.activeScene.midi, collision.key)
+      await flushSave()
+      continue
     }
-    const ss = activeSoundset.value
-    const local = ss && ss.midi && ss.midi.notes && ss.midi.notes[key]
-    if (local) runLocalNote(ss, local)
-    else runGlobalNote(store.global.midi.notes[key])
-  } else if (m.type === 'cc') {
-    const key = `${m.channel}:${m.cc}`
-    if (store.learning && store.learning.mode === 'cc') {
-      saveLearned(key, 'cc', store.learning.action)
-      return
+    try {
+      const scene = await api(`/api/scenes/${encodeURIComponent(item.sceneId)}`)
+      scene.midi = withoutKey(scene.midi, collision.key)
+      await api(`/api/scenes/${encodeURIComponent(item.sceneId)}`, {
+        method: 'PUT',
+        body: JSON.stringify(scene),
+      })
+    } catch (err) {
+      setError(err)
     }
-    const ss = activeSoundset.value
-    const local = ss && ss.midi && ss.midi.ccs && ss.midi.ccs[key]
-    if (local) runLocalCC(ss, local, m.value)
-    else runGlobalCC(store.global.midi.ccs[key], m.value)
   }
+  await applyBinding('global', collision.action, collision.key)
+}
+
+export function cancelCollision() {
+  store.collision = null
+  setStatus('Binding replacement cancelled')
+}
+
+export async function removeBinding(scope, key) {
+  if (scope === 'local') {
+    if (!store.activeScene) return
+    store.activeScene.midi = withoutKey(store.activeScene.midi, key)
+    await flushSave()
+  } else {
+    store.global.midi = withoutKey(store.global.midi, key)
+    await persistGlobalNow()
+  }
+  setStatus('Binding removed')
+}
+
+export function bindingRows(scope) {
+  const midi = scope === 'local' ? store.activeScene?.midi : store.global.midi
+  const rows = []
+  for (const mapName of ['notes', 'ccs']) {
+    for (const [key, action] of Object.entries(midi?.[mapName] || {})) {
+      rows.push({ scope, key, action, map: mapName, label: actionLabel(action) })
+    }
+  }
+  return rows.sort((a, b) => a.key.localeCompare(b.key))
+}
+
+export function trackHasMidi(trackId) {
+  if (!store.activeScene) return false
+  return bindingRows('local').some(
+    (row) => row.action.type === 'trackTrigger' && row.action.trackId === trackId
+  )
+}
+
+export function trackVolumeHasMidi(trackId) {
+  if (!store.activeScene) return false
+  return bindingRows('local').some(
+    (row) => row.action.type === 'trackVolume' && row.action.trackId === trackId
+  )
+}
+
+export function keyLabel(key) {
+  const parsed = parseBindingKey(key)
+  if (!parsed) return key
+  const channel = parsed.channel + 1
+  return parsed.type === 'cc'
+    ? `Ch ${channel} · CC ${parsed.number}`
+    : `Ch ${channel} · Note ${parsed.number}`
+}
+
+export function actionLabel(action) {
+  if (!action) return 'Nothing'
+  switch (action.type) {
+    case 'stopAll':
+      return 'Stop all'
+    case 'masterVolume':
+      return 'Master volume'
+    case 'busVolume':
+      return `Bus volume: ${action.bus === 'loop' ? 'Loops' : action.bus === 'random' ? 'Random' : 'One-shots'}`
+    case 'paletteTrigger': {
+      const entry = store.global.palette.find((item) => item.id === action.paletteId)
+      const group = entry ? groupById(entry.groupId) : null
+      return `Palette trigger: ${entry?.label || group?.name || action.paletteId}`
+    }
+    case 'paletteVolume': {
+      const entry = store.global.palette.find((item) => item.id === action.paletteId)
+      const group = entry ? groupById(entry.groupId) : null
+      return `Palette volume: ${entry?.label || group?.name || action.paletteId}`
+    }
+    case 'openScene': {
+      const scene = store.scenes.find((item) => item.id === action.sceneId)
+      return `Open scene: ${scene?.name || action.sceneId}`
+    }
+    case 'trackTrigger': {
+      const track = trackById(action.trackId)
+      const group = track ? groupById(track.groupId) : null
+      return `Track trigger: ${group?.name || action.trackId}`
+    }
+    case 'trackVolume': {
+      const track = trackById(action.trackId)
+      const group = track ? groupById(track.groupId) : null
+      return `Track volume: ${group?.name || action.trackId}`
+    }
+    case 'moodSelect': {
+      const mood = store.activeScene?.moods.find((item) => item.id === action.moodId)
+      return `Mood: ${mood?.name || action.moodId}`
+    }
+    case 'sceneToggle':
+      return 'Play/stop scene'
+    default:
+      return action.type
+  }
+}
+
+export function actionTargetKey(action) {
+  return targetKey(action)
+}
+
+// ---------------------------------------------------------------------------
+// Import / curation
+
+export async function refreshStats() {
+  try {
+    const data = await api('/api/catalog/stats')
+    store.stats = data || store.stats
+    store.catalogCount = data?.total ?? store.catalogCount
+    store.importDone = Boolean(data?.importDone)
+  } catch (err) {
+    setError(err)
+  }
+}
+
+export async function loadStats() {
+  return refreshStats()
+}
+
+export function openImport() {
+  store.view = 'import'
+  store.browserTab = 'import'
+  refreshStats()
+}
+
+export function closeImport() {
+  store.view = 'editor'
+  store.browserTab = 'scenes'
+}
+
+export async function searchCatalogPage(patch = {}) {
+  const imp = store.import
+  if (patch && typeof patch === 'object') {
+    if (patch.query !== undefined) imp.query = patch.query
+    if (patch.unassigned !== undefined) imp.unassigned = Boolean(patch.unassigned)
+    if (patch.kind !== undefined) imp.kind = patch.kind
+    if (patch.category !== undefined) imp.category = patch.category
+    if (patch.tag !== undefined) imp.tag = patch.tag
+    if (patch.offset !== undefined) imp.offset = Math.max(0, Number(patch.offset) || 0)
+    if (patch.limit !== undefined) imp.limit = Math.max(1, Math.min(200, Number(patch.limit) || 50))
+  }
+  const params = new URLSearchParams()
+  if (imp.query) params.set('query', imp.query)
+  if (imp.unassigned) params.set('unassigned', 'true')
+  if (imp.kind) params.set('kind', imp.kind)
+  if (imp.category) params.set('category', imp.category)
+  if (imp.tag) params.set('tag', imp.tag)
+  params.set('offset', String(imp.offset))
+  params.set('limit', String(imp.limit))
+  imp.loading = true
+  imp.error = ''
+  try {
+    const data = await api(`/api/catalog?${params.toString()}`)
+    imp.sounds = Array.isArray(data?.sounds) ? data.sounds : []
+    imp.total = Number(data?.total) || 0
+  } catch (err) {
+    imp.error = messageFor(err)
+    setError(err)
+  } finally {
+    imp.loading = false
+  }
+}
+
+export function setImportFilters(patch) {
+  store.import.offset = 0
+  return searchCatalogPage(patch)
+}
+
+export function importPage(delta) {
+  const imp = store.import
+  const next = Math.max(0, imp.offset + delta * imp.limit)
+  return searchCatalogPage({ offset: next })
+}
+
+export function toggleImportSound(id) {
+  const list = store.import.selectedSoundIds
+  const index = list.indexOf(id)
+  if (index >= 0) list.splice(index, 1)
+  else list.push(id)
+}
+
+export function clearImportSoundSelection() {
+  store.import.selectedSoundIds = []
+}
+
+export function toggleImportGroup(id) {
+  const list = store.import.selectedGroupIds
+  const index = list.indexOf(id)
+  if (index >= 0) list.splice(index, 1)
+  else list.push(id)
+}
+
+export function clearImportGroupSelection() {
+  store.import.selectedGroupIds = []
+}
+
+export function setSplitGroup(groupId) {
+  store.import.splitGroupId = groupId || ''
+  store.import.splitSoundIds = []
+}
+
+export function toggleSplitSound(id) {
+  const list = store.import.splitSoundIds
+  const index = list.indexOf(id)
+  if (index >= 0) list.splice(index, 1)
+  else list.push(id)
+}
+
+export async function createGroupFromSelection(form = {}) {
+  const soundIds = [...store.import.selectedSoundIds]
+  if (!soundIds.length) {
+    setStatus('Select at least one sound first', 'error')
+    return null
+  }
+  const group = await createGroupsFromSelectedSounds({
+    soundIds,
+    name: form.name,
+    category: form.category,
+    tags: form.tags,
+    selection: form.selection,
+    defaultKind: form.defaultKind,
+    defaults: form.defaults,
+  })
+  if (group) {
+    clearImportSoundSelection()
+    await searchCatalogPage()
+  }
+  return group
+}
+
+export async function addSelectedSoundsToGroup(groupId) {
+  const soundIds = [...store.import.selectedSoundIds]
+  if (!soundIds.length) {
+    setStatus('Select at least one sound first', 'error')
+    return null
+  }
+  const group = await addGroupSounds(groupId, soundIds)
+  if (group) {
+    clearImportSoundSelection()
+    await searchCatalogPage()
+  }
+  return group
+}
+
+export async function bulkEditSelectedGroups(patch) {
+  const ids = [...store.import.selectedGroupIds]
+  if (!ids.length) {
+    setStatus('Select at least one group first', 'error')
+    return []
+  }
+  return bulkUpdateGroups(ids, patch)
+}
+
+export async function mergeSelectedGroups(extra = {}) {
+  const ids = [...store.import.selectedGroupIds]
+  if (ids.length < 2) {
+    setStatus('Select at least two groups to merge', 'error')
+    return null
+  }
+  const group = await mergeGroups({ groupIds: ids, ...extra })
+  if (group) clearImportGroupSelection()
+  return group
+}
+
+export async function splitSelectedGroupSounds(name) {
+  const groupId = store.import.splitGroupId
+  const soundIds = [...store.import.splitSoundIds]
+  if (!groupId || !soundIds.length) {
+    setStatus('Pick a group and at least one of its sounds to split', 'error')
+    return null
+  }
+  const group = await splitGroup({ groupId, soundIds, name })
+  if (group) {
+    store.import.splitSoundIds = []
+    await searchCatalogPage()
+  }
+  return group
+}
+
+export async function finishImport(done = true) {
+  try {
+    const data = await api('/api/import/done', { method: 'POST', body: { done } })
+    store.importDone = Boolean(data?.done)
+    store.stats = { ...store.stats, importDone: store.importDone }
+    if (store.importDone) {
+      store.view = 'editor'
+      store.browserTab = 'scenes'
+    }
+    setStatus(store.importDone ? 'Migration marked complete' : 'Migration reopened')
+  } catch (err) {
+    setError(err)
+  }
+}
+
+export function previewSound(sound) {
+  if (!sound) return
+  engine.preview(soundUrl(sound), sound.id)
+}
+
+export function stopPreview() {
+  engine.stopPreview()
+}
+
+// Engine callbacks -----------------------------------------------------------
+
+async function persistDuration(soundId, duration) {
+  if (!soundId || !Number.isFinite(duration) || duration <= 0) return
+  const existing = store.soundsById[soundId]
+  if (existing) existing.duration = duration
+  try {
+    const data = await api(`/api/sounds/${encodeURIComponent(soundId)}/duration`, {
+      method: 'POST',
+      body: { duration },
+    })
+    if (data?.sound) {
+      store.soundsById[soundId] = {
+        ...store.soundsById[soundId],
+        ...data.sound,
+        url: soundUrl(data.sound),
+      }
+    }
+  } catch {
+    /* duration persistence is best-effort */
+  }
+}
+
+engine.configure({
+  onDuration: persistDuration,
+  onError: (message) => setStatus(message, 'error'),
 })
+
+// Input adapters (Web MIDI and touch/keyboard controls) dispatch actions against
+// this facade so every input path shares the same store methods.
+Object.assign(store, {
+  stopAll,
+  setMaster,
+  setBus,
+  triggerPalette,
+  setPaletteGain,
+  openScene,
+  toggleTrack,
+  setTrackMoodGain,
+  selectMood,
+  toggleTransport,
+  receiveLearnedKey,
+})
+
+export { engine, REVERB_PRESETS, KINDS }
