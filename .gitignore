@@ -16,6 +16,11 @@ soundboard/.migration-backup/
 
 # Audio library (large, user-provided)
 soundboard/syrinscape/
+soundboard/sounds/
+soundboard/data/
+
+# Shared agent scratchpad
+MEMORY.md
 
 # Misc
 *.log
