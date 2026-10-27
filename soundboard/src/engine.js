@@ -447,7 +447,11 @@ async function fireRandom(voice) {
     if (!voice.active || voice.generation !== generation || voice.nodes !== nodes) return
     voice.nodes = null
     const record = state.tracks[voice.key] || state.palettes[voice.key]
-    if (record) record.playing = false
+    if (record) {
+      record.playing = false
+      record.position = 0
+      record.duration = 0
+    }
     scheduleRandomNext(voice)
   }
 }

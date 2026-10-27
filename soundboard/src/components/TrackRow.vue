@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import {
   store,
   selectTrack,
@@ -10,6 +10,7 @@ import {
   trackHasMidi,
 } from '../store.js'
 import { engine } from '../engine.js'
+import Modal from './Modal.vue'
 
 const props = defineProps({
   track: { type: Object, required: true },
@@ -20,6 +21,8 @@ const props = defineProps({
 const playback = computed(() => engine.state.tracks[props.track.trackId] || null)
 const active = computed(() => Boolean(playback.value))
 const hasMidi = computed(() => trackHasMidi(props.track.trackId))
+const confirmingRemove = ref(false)
+
 const percent = computed(() => {
   const item = playback.value
   if (!item || !item.duration) return 0
@@ -39,6 +42,11 @@ function dragStart(event) {
 }
 
 function remove() {
+  confirmingRemove.value = true
+}
+
+function confirmRemove() {
+  confirmingRemove.value = false
   removeTrack(props.track.trackId)
 }
 </script>

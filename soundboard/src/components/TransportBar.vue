@@ -3,7 +3,6 @@ import { computed } from 'vue'
 import {
   store,
   renameScene,
-  setDefaultMood,
   toggleTransport,
   stopAll,
   setMaster,
@@ -14,7 +13,6 @@ import {
 } from '../store.js'
 import { midi, connectMidi } from '../midi.js'
 
-const moods = computed(() => store.activeScene?.moods || [])
 const learningLabel = computed(() => {
   if (!store.learning) return ''
   return `${store.learning.scope === 'local' ? 'Local' : 'Global'} · ${store.learning.action.type}`
@@ -30,44 +28,72 @@ function onRename(event) {
 
 <template>
   <header class="transport-bar">
-    <div class="brand">
-      <span class="brand-mark">O</span>
-      <span class="brand-name">Olea Soundboard</span>
-    </div>
+    <div class="transport-top">
+      <div class="brand">
+        <span class="brand-mark">O</span>
+        <span class="brand-name">Olea Soundboard</span>
+      </div>
 
-    <div class="scene-identity">
-      <input
-        class="scene-title"
-        :value="store.activeScene?.name || 'No scene'"
-        :disabled="!store.activeScene"
-        title="Scene name"
-        @change="onRename"
-      />
-      <label class="inline-field" title="Default mood for this scene">
-        <span class="small muted">Default</span>
-        <select
-          :value="store.activeScene?.defaultMoodId || ''"
+      <div class="scene-identity">
+        <input
+          class="scene-title"
+          :value="store.activeScene?.name || 'No scene'"
           :disabled="!store.activeScene"
-          @change="setDefaultMood($event.target.value)"
-        >
-          <option v-for="mood in moods" :key="mood.id" :value="mood.id">{{ mood.name }}</option>
-        </select>
-      </label>
-    </div>
+          title="Scene name"
+          @change="onRename"
+        />
+      </div>
 
-    <div class="transport-actions">
-      <button
-        class="btn-play"
-        :class="{ playing: store.transportRunning }"
-        :disabled="!store.activeScene"
-        :title="store.transportRunning ? 'Stop the scene' : 'Play the selected mood'"
-        @click="toggleTransport"
-      >
-        {{ store.transportRunning ? '■ Stop' : '▶ Play' }}
-      </button>
-      <button class="btn-danger" title="Stop scene, palette and one-shots" @click="stopAll">
-        Stop all
-      </button>
+      <div class="transport-actions">
+        <button
+          class="btn-play"
+          :class="{ playing: store.transportRunning }"
+          :disabled="!store.activeScene"
+          :title="store.transportRunning ? 'Stop the scene' : 'Play the selected mood'"
+          @click="toggleTransport"
+        >
+          {{ store.transportRunning ? '■ Stop' : '▶ Play' }}
+        </button>
+        <button class="btn-danger" title="Stop scene, palette and one-shots" @click="stopAll">
+          Stop all
+        </button>
+      </div>
+
+      <div class="mode-switch" role="group" aria-label="Interface mode">
+        <button
+          :class="{ active: store.mode === 'edit' }"
+          title="Desktop editing layout"
+          @click="setMode('edit')"
+        >
+          Edit
+        </button>
+        <button
+          :class="{ active: store.mode === 'perform' }"
+          title="Touch performance layout"
+          @click="setMode('perform')"
+        >
+          Perform
+        </button>
+      </div>
+
+      <div class="midi-chip">
+        <span class="midi-dot" :class="{ on: midi.connected }"></span>
+        <span class="small" :title="midi.error || 'Web MIDI status'">
+          {{ midi.connected ? `${midi.inputs.length} MIDI` : 'MIDI off' }}
+        </span>
+        <button v-if="!midi.connected" class="btn-xs" @click="connectMidi(store)">Connect</button>
+        <button class="btn-xs" title="Global MIDI bindings" @click="toggleMidiPanel">
+          MIDI bindings
+        </button>
+        <button
+          v-if="store.learning"
+          class="btn-xs learning"
+          title="Cancel MIDI learn"
+          @click="cancelLearn"
+        >
+          {{ learningLabel }}…
+        </button>
+      </div>
     </div>
 
     <div class="mix-strip">
@@ -100,46 +126,6 @@ function onRename(event) {
         />
         <span class="fader-value">{{ Math.round(store.buses[bus] * 100) }}</span>
       </label>
-    </div>
-
-    <div class="mode-switch" role="group" aria-label="Interface mode">
-      <button
-        :class="{ active: store.mode === 'edit' }"
-        title="Desktop editing layout"
-        @click="setMode('edit')"
-      >
-        Edit
-      </button>
-      <button
-        :class="{ active: store.mode === 'perform' }"
-        title="Touch performance layout"
-        @click="setMode('perform')"
-      >
-        Perform
-      </button>
-    </div>
-
-    <div class="midi-chip">
-      <span class="midi-dot" :class="{ on: midi.connected }"></span>
-      <span class="small" :title="midi.error || 'Web MIDI status'">
-        {{ midi.connected ? `${midi.inputs.length} MIDI` : 'MIDI off' }}
-      </span>
-      <button v-if="!midi.connected" class="btn-xs" @click="connectMidi(store)">Connect</button>
-      <button
-        class="btn-xs"
-        title="Global MIDI bindings"
-        @click="toggleMidiPanel"
-      >
-        MIDI bindings
-      </button>
-      <button
-        v-if="store.learning"
-        class="btn-xs learning"
-        title="Cancel MIDI learn"
-        @click="cancelLearn"
-      >
-        {{ learningLabel }}…
-      </button>
     </div>
   </header>
 </template>
