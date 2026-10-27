@@ -20,6 +20,7 @@ import {
 } from '../lib/v3/schema.js'
 import {
   addTracksForGroups,
+  dropInsertionIndex,
   moveTracks,
 } from '../lib/v3/order.js'
 import {
@@ -406,12 +407,12 @@ export async function openScene(id) {
   try {
     const raw = await api(`/api/scenes/${encodeURIComponent(id)}`)
     const scene = normalizeScene(raw)
+    await ensureSceneSounds(scene)
     store.activeScene = scene
     const mood = scene.moods.find((item) => item.id === scene.defaultMoodId) || scene.moods[0]
     store.selectedMoodId = mood?.id || null
     store.selectedTrackId = null
     store.selectedTrackIds = []
-    await ensureSceneSounds(scene)
     refreshWarnings()
     return scene
   } catch (err) {
@@ -557,11 +558,15 @@ export async function setSceneDisabled(idOrDisabled, maybeDisabled) {
 export async function deleteScene(id) {
   if (!id) return
   try {
-    if (sceneTimer) {
-      clearTimeout(sceneTimer)
-      sceneTimer = null
+    if (store.activeScene?.id === id) {
+      if (sceneTimer) {
+        clearTimeout(sceneTimer)
+        sceneTimer = null
+      }
+      await sceneChain.catch(() => {})
+    } else {
+      await flushSave()
     }
-    if (store.activeScene?.id === id) await sceneChain.catch(() => {})
     await api(`/api/scenes/${encodeURIComponent(id)}`, { method: 'DELETE' })
     if (store.activeScene?.id === id) {
       engine.stopScene()
@@ -739,7 +744,7 @@ function updateMoodParam(trackId, patch, removeKeys = []) {
   return current
 }
 
-export function addGroupsToScene(groupIds, kind, index) {
+export async function addGroupsToScene(groupIds, kind, index) {
   const scene = store.activeScene
   if (!scene) return
   const ids = Array.isArray(groupIds) ? groupIds : [groupIds]
@@ -767,7 +772,7 @@ export function addGroupsToScene(groupIds, kind, index) {
     )
   }
   scene.tracks = tracks
-  ensureSounds(groups.flatMap((group) => group.sounds))
+  await ensureSounds(groups.flatMap((group) => group.sounds))
   refreshWarnings()
   scheduleSave()
   setStatus(`Added ${groups.length} group(s) to the scene`)
@@ -790,6 +795,34 @@ export function removeTrack(trackId) {
   scheduleSave()
 }
 
+export function removeMissingTracks() {
+  const scene = store.activeScene
+  if (!scene) return 0
+  const groups = groupsByIdMap()
+  const missing = scene.tracks.filter((track) => !groups.has(track.groupId))
+  if (!missing.length) return 0
+  const ids = new Set(missing.map((track) => track.id))
+  for (const id of ids) engine.stopTrack(id)
+  scene.tracks = scene.tracks.filter((track) => !ids.has(track.id))
+  for (const mood of scene.moods) {
+    for (const id of ids) delete mood.params[id]
+  }
+  scene.midi = removeBindingsForTargets(
+    scene.midi,
+    'local',
+    missing.flatMap((track) => [
+      { type: 'trackTrigger', trackId: track.id },
+      { type: 'trackVolume', trackId: track.id },
+    ])
+  )
+  store.selectedTrackIds = store.selectedTrackIds.filter((id) => !ids.has(id))
+  if (ids.has(store.selectedTrackId)) store.selectedTrackId = null
+  scheduleSave()
+  refreshWarnings()
+  setStatus(`Removed ${ids.size} missing track(s)`)
+  return ids.size
+}
+
 export function reorderTracks(movingIds, targetKind, targetIndex) {
   const scene = store.activeScene
   if (!scene || !KINDS.includes(targetKind)) return
@@ -799,16 +832,25 @@ export function reorderTracks(movingIds, targetKind, targetIndex) {
     .filter((track) => track.kind === targetKind)
     .sort((a, b) => a.order - b.order)
     .map((track) => track.id)
-  let insertion = Math.max(0, Number(targetIndex) || 0)
-  for (const id of ids) {
-    const from = current.indexOf(id)
-    if (from >= 0 && from < insertion) insertion -= 1
-  }
+  const insertion = dropInsertionIndex(current, ids, targetIndex)
   scene.tracks = moveTracks(scene.tracks, ids, targetKind, insertion)
+  if (store.transportRunning) {
+    for (const id of ids) {
+      const track = findResolved(id)
+      if (!track) continue
+      if (engine.isTrackActive(id)) engine.stopTrack(id)
+      if (track.enabled && track.kind !== 'oneshot') engine.startTrack(track)
+    }
+  }
   scheduleSave()
 }
 
-export function toggleTrack(trackId) {
+export async function toggleTrack(trackId) {
+  const scene = store.activeScene
+  const track = scene?.tracks.find((item) => item.id === trackId)
+  if (!track) return
+  const group = groupById(track.groupId)
+  if (group) await ensureSounds(group.sounds)
   const plan = buildPlan(store.selectedMoodId)
   const result = applyManualToggle(plan, trackId, engine.activeTrackIds())
   if (!result.track) return
@@ -951,6 +993,14 @@ export async function deleteGroup(id) {
         for (const track of removed) {
           for (const mood of scene.moods) delete mood.params[track.id]
         }
+        scene.midi = removeBindingsForTargets(
+          scene.midi,
+          'local',
+          removed.flatMap((track) => [
+            { type: 'trackTrigger', trackId: track.id },
+            { type: 'trackVolume', trackId: track.id },
+          ])
+        )
         store.selectedTrackId = null
         store.selectedTrackIds = []
         scheduleSave()
@@ -1124,6 +1174,10 @@ export function removeFromPalette(paletteId) {
   store.global.palette.forEach((entry, order) => {
     entry.order = order
   })
+  store.global.midi = removeBindingsForTargets(store.global.midi, 'global', [
+    { type: 'paletteTrigger', paletteId },
+    { type: 'paletteVolume', paletteId },
+  ])
   persistGlobalNow()
 }
 
@@ -1206,8 +1260,10 @@ export async function triggerPalette(paletteId) {
 // ---------------------------------------------------------------------------
 // Transport / volumes
 
-export function play() {
-  if (!store.activeScene) return
+export async function play() {
+  const scene = store.activeScene
+  if (!scene) return
+  await ensureSceneSounds(scene)
   const plan = buildPlan(store.selectedMoodId)
   const initial = initialTransportPlan(plan)
   engine.stopScene()

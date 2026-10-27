@@ -43,6 +43,17 @@ function clampIndex(value, min, max) {
   return Math.min(max, Math.max(min, Math.trunc(n)))
 }
 
+export function dropInsertionIndex(currentIds, movingIds, targetIndex) {
+  const ids = Array.isArray(currentIds) ? currentIds : []
+  const moving = new Set(Array.isArray(movingIds) ? movingIds : [movingIds])
+  const original = clampIndex(targetIndex, 0, ids.length)
+  let before = 0
+  for (let i = 0; i < original; i += 1) {
+    if (moving.has(ids[i])) before += 1
+  }
+  return Math.max(0, original - before)
+}
+
 export function moveTracks(tracks, movingIds, targetKind, targetIndexWithinKind = 0) {
   if (!KINDS.includes(targetKind)) throw new Error(`Invalid target kind: ${targetKind}`)
 

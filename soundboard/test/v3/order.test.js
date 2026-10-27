@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   GROUP_ORDER,
   addTracksForGroups,
+  dropInsertionIndex,
   groupTracks,
   moveTracks,
   nextOrder,
@@ -111,4 +112,17 @@ test('nextOrder and addTracksForGroups append new tracks', () => {
 test('addTracksForGroups honours an explicit kind override', () => {
   const added = addTracksForGroups([], [{ id: 'g1', defaultKind: 'loop' }], 'oneshot')
   assert.equal(added[0].kind, 'oneshot')
+})
+
+
+test('dropInsertionIndex compensates for moving items before the drop target', () => {
+  const current = ['a', 'b', 'c', 'd']
+
+  assert.equal(dropInsertionIndex(current, ['a', 'b'], 2), 0)
+  assert.equal(dropInsertionIndex(current, ['c'], 1), 1)
+  assert.equal(dropInsertionIndex(current, ['a'], 3), 2)
+  assert.equal(dropInsertionIndex(current, ['b', 'd'], 3), 2)
+  assert.equal(dropInsertionIndex(current, [], 2), 2)
+  assert.equal(dropInsertionIndex(current, ['a'], 99), 3)
+  assert.equal(dropInsertionIndex(current, ['a'], -5), 0)
 })

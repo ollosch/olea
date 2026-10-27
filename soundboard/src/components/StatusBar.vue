@@ -1,5 +1,5 @@
 <script setup>
-import { store, clearError } from '../store.js'
+import { store, clearError, removeMissingTracks } from '../store.js'
 import { engine } from '../engine.js'
 import { midi, connectMidi } from '../midi.js'
 
@@ -43,6 +43,14 @@ function enableAudio() {
     <div v-if="store.warnings.length" class="warnings">
       <span class="warn-label">Warnings</span>
       <span v-for="warning in store.warnings" :key="warning" class="warning">{{ warning }}</span>
+      <button
+        v-if="store.warnings.some((warning) => warning.startsWith('Missing library group'))"
+        class="btn-xs"
+        title="Remove scene tracks whose library group was deleted"
+        @click="removeMissingTracks"
+      >
+        Remove missing tracks
+      </button>
     </div>
   </footer>
 </template>

@@ -13,6 +13,7 @@
 import { reactive } from 'vue'
 import {
   BUSES,
+  KINDS,
   REVERB_PRESETS,
   clamp01,
   clampPan,
@@ -576,10 +577,23 @@ function activeTrackIds(kind) {
   return ids
 }
 
+function sameTrigger(a, b) {
+  if (!a && !b) return true
+  if (!a || !b) return false
+  return ['min', 'max', 'startMin', 'startMax'].every(
+    (key) => Number(a[key] || 0) === Number(b[key] || 0)
+  )
+}
+
 function applyTrackParams(track) {
   if (!track || !track.trackId) return
   const voice = trackVoices.get(track.trackId)
   if (!voice) return
+  if (KINDS.includes(track.kind) && track.kind !== voice.kind) {
+    stopVoice(voice)
+    return
+  }
+  const previousTrigger = voice.trigger
   voice.gain = clamp01(track.gain ?? voice.gain)
   voice.pan = clampPan(track.pan ?? voice.pan)
   voice.selection = track.selection || voice.selection
@@ -587,6 +601,10 @@ function applyTrackParams(track) {
   voice.sounds = Array.isArray(track.sounds) ? track.sounds : voice.sounds
   voice.trigger = track.trigger ?? voice.trigger
   voice.label = track.groupName || voice.label
+
+  if (voice.kind === 'random' && voice.timer && !sameTrigger(previousTrigger, voice.trigger)) {
+    scheduleRandomNext(voice)
+  }
 
   const record = state.tracks[voice.key]
   if (record) {
@@ -754,6 +772,20 @@ function tick() {
   }
 }
 
+function dispose() {
+  stopAll()
+  if (progressTimer) {
+    clearInterval(progressTimer)
+    progressTimer = null
+  }
+  if (ctx) {
+    ctx.close?.().catch(() => {})
+    ctx = null
+  }
+  state.ready = false
+  state.unlocked = false
+}
+
 export const engine = {
   state,
   configure,
@@ -775,6 +807,7 @@ export const engine = {
   preview,
   stopPreview,
   stopAll,
+  dispose,
 }
 
 export default engine

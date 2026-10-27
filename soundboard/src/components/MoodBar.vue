@@ -26,7 +26,7 @@ function removeSelected() {
 
 <template>
   <section v-if="store.activeScene" class="mood-bar">
-    <div class="mood-chips">
+    <div v-if="store.activeScene.moods.length > 1" class="mood-chips">
       <button
         v-for="mood in store.activeScene.moods"
         :key="mood.id"

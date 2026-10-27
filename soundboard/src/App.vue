@@ -7,6 +7,7 @@ import {
   cancelLearn,
 } from './store.js'
 import { connectMidi } from './midi.js'
+import { engine } from './engine.js'
 import TransportBar from './components/TransportBar.vue'
 import BrowserPanel from './components/BrowserPanel.vue'
 import SceneEditor from './components/SceneEditor.vue'
@@ -32,6 +33,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  engine.dispose()
 })
 </script>
 
