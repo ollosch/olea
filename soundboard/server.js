@@ -1,241 +1,317 @@
+// Olea Soundboard v3 HTTP API and audio server.
+//
+// `createApp(store)` builds the Express app. Running this file directly starts a
+// server using OLEA_DATA_DIR / OLEA_SOUNDS_DIR / PORT.
+
 import express from 'express'
-import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createLibraryService } from './lib/library-service.js'
-import {
-  AUDIO_RE,
-  isInside,
-  listAudioFiles,
-  toPosixPath,
-  walkDirs,
-} from './lib/path-utils.js'
+import { findByHash, findSound } from './lib/v3/catalog.js'
+import { createStore } from './lib/v3/store.js'
+import { isValidHash, soundPath } from './lib/v3/storage.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
-function envPath(...names) {
-  for (const name of names) {
-    const value = process.env[name]
-    if (value) return path.resolve(value)
+function stringParam(value) {
+  return typeof value === 'string' ? value : ''
+}
+
+function parseOffset(value) {
+  const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN
+  if (!Number.isFinite(n) || n < 0) return 0
+  return Math.floor(n)
+}
+
+function parseLimit(value, fallback = 50) {
+  const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(200, Math.max(1, Math.floor(n)))
+}
+
+function parseBoolean(value) {
+  return value === true || value === '1' || value === 'true' || value === 'yes'
+}
+
+function statusForError(err) {
+  if (Number.isInteger(err?.status) && err.status >= 400 && err.status < 600) return err.status
+  if (err?.type === 'entity.parse.failed') return 400
+  switch (err?.code) {
+    case 'not-found':
+      return 404
+    case 'conflict':
+      return 409
+    case 'validation':
+    case 'invalid-path':
+    case 'invalid-extension':
+    case 'bad-request':
+      return 400
+    default:
+      return 500
   }
-  return null
 }
 
-const AUDIO_DIR =
-  envPath('OLEA_AUDIO_DIR', 'AUDIO_DIR') || path.join(__dirname, 'syrinscape')
-const GLOBAL_FILE =
-  envPath('OLEA_GLOBAL_FILE', 'GLOBAL_FILE') || path.join(__dirname, 'global.json')
-const LIBRARY_FILE =
-  envPath('OLEA_LIBRARY_FILE', 'LIBRARY_FILE') || path.join(__dirname, 'library.json')
-const LIBRARY_DIR =
-  envPath('OLEA_LIBRARY_DIR', 'LIBRARY_DIR') || path.join(AUDIO_DIR, '_library')
-const DIST = path.join(__dirname, 'dist')
-const PORT = Number(process.env.PORT) || 8091
-
-const service = createLibraryService({
-  audioDir: AUDIO_DIR,
-  libraryDir: LIBRARY_DIR,
-  libraryFile: LIBRARY_FILE,
-  globalFile: GLOBAL_FILE,
-})
-
-// ---- in-process cache ---------------------------------------------------
-
-let cache = null
-
-function invalidateCache() {
-  cache = null
+function errorBody(err) {
+  const body = { error: err?.message || 'Internal server error' }
+  if (Array.isArray(err?.errors)) body.errors = err.errors
+  return body
 }
 
-function getData() {
-  if (!cache) {
-    cache = {
-      soundsets: service.scanSoundsets(),
-      library: service.readLibrary(),
-      global: service.readGlobal(),
-    }
-  }
-  return cache
-}
+export function createApp(store, options = {}) {
+  if (!store) throw new Error('createApp requires a store')
+  const app = express()
+  const distDir = options.distDir || path.join(__dirname, 'dist')
+  const soundsDir = options.soundsDir || store.soundsDir
 
-// ---- file picker --------------------------------------------------------
+  const handle = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
 
-function sceneName(dirName) {
-  return dirName.replace(/^Syrinscape\s*-\s*/i, '').trim()
-}
+  app.use(express.json({ limit: '8mb' }))
 
-function filesWithSizes(dirAbs) {
-  return listAudioFiles(dirAbs).map(({ file, size }) => ({
-    name: file.replace(AUDIO_RE, ''),
-    file,
-    size,
-  }))
-}
-
-function scanFiles() {
-  const folders = []
-
-  let dirs = []
-  try {
-    dirs = fs
-      .readdirSync(AUDIO_DIR, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-  } catch {
-    return folders
-  }
-
-  for (const entry of dirs) {
-    const abs = path.join(AUDIO_DIR, entry.name)
-    if (service.isLibraryPath(abs)) continue
-
-    const files = filesWithSizes(abs)
-    if (!files.length) continue
-    folders.push({ dir: entry.name, name: sceneName(entry.name), files })
-  }
-
-  // Library folders are listed recursively below the library root.
-  if (fs.existsSync(LIBRARY_DIR)) {
-    const libraryDirs = [{ abs: LIBRARY_DIR, rel: '' }]
-    for (const dir of walkDirs(LIBRARY_DIR)) libraryDirs.push(dir)
-
-    for (const dir of libraryDirs) {
-      if (!fs.existsSync(dir.abs) || !isInside(LIBRARY_DIR, dir.abs)) continue
-      const files = filesWithSizes(dir.abs)
-      if (!files.length) continue
-
-      const rel = dir.rel
-        ? `${path.basename(LIBRARY_DIR)}/${dir.rel}`
-        : path.basename(LIBRARY_DIR)
-      folders.push({
-        dir: toPosixPath(rel),
-        name: path.basename(dir.abs).replace(/-/g, ' '),
-        files,
+  app.get(
+    '/api/bootstrap',
+    handle(async (req, res) => {
+      const catalog = store.catalog()
+      res.json({
+        catalog: { version: catalog.version, count: catalog.sounds.length },
+        library: store.library(),
+        global: store.global(),
+        scenes: store.listScenes(),
+        stats: store.stats(),
       })
-    }
-  }
-
-  folders.sort((a, b) => a.name.localeCompare(b.name) || a.dir.localeCompare(b.dir))
-  return folders
-}
-
-function statusFor(code) {
-  if (code === 'already-library') return 409
-  if (code === 'promote-failed') return 500
-  return 400
-}
-
-const app = express()
-app.use(express.json({ limit: '4mb' }))
-
-app.get('/api/library', (req, res) => {
-  const data = getData()
-  res.json({ soundsets: data.soundsets, library: data.library, global: data.global })
-})
-
-app.get('/api/files', (req, res) => res.json({ folders: scanFiles() }))
-
-app.get('/api/soundset/:id', (req, res) => {
-  try {
-    res.json(service.readSoundset(req.params.id))
-  } catch (err) {
-    const status = err.code === 'not-found' ? 404 : err.code === 'read-error' ? 500 : 400
-    res.status(status).json({ error: err.message })
-  }
-})
-
-app.post('/api/soundset/:id', (req, res) => {
-  try {
-    const soundset = service.writeSoundset(req.params.id, req.body)
-    invalidateCache()
-    res.json({ ok: true, soundset })
-  } catch (err) {
-    const status = err.code === 'unsafe-path' ? 400 : 500
-    res.status(status).json({ ok: false, error: err.message })
-  }
-})
-
-app.delete('/api/soundset/:id', (req, res) => {
-  try {
-    service.deleteSoundset(req.params.id)
-    invalidateCache()
-    res.json({ ok: true })
-  } catch (err) {
-    const status =
-      err.code === 'not-found' ? 404 : err.code === 'unsafe-path' ? 400 : 500
-    res.status(status).json({ error: err.message })
-  }
-})
-
-app.get('/api/global', (req, res) => res.json(service.readGlobal()))
-
-app.post('/api/global', (req, res) => {
-  try {
-    const global = service.writeGlobal(req.body)
-    invalidateCache()
-    res.json({ ok: true, global })
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message })
-  }
-})
-
-app.post('/api/library', (req, res) => {
-  try {
-    const library = service.writeLibrary(req.body)
-    invalidateCache()
-    res.json({ ok: true, library })
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message })
-  }
-})
-
-app.post('/api/library/promote', (req, res) => {
-  try {
-    const result = service.promote(req.body || {})
-    if (!result.ok) {
-      return res.status(statusFor(result.code)).json(result)
-    }
-
-    invalidateCache()
-    const data = getData()
-    res.json({
-      ok: true,
-      ...data,
-      soundset: result.soundset,
-      soundsetDir: result.soundsetDir,
-      group: result.group,
-      warnings: result.warnings,
     })
-  } catch (err) {
-    invalidateCache()
-    res.status(500).json({ ok: false, error: err.message })
-  }
-})
+  )
 
-app.get('/api/refs', (req, res) => {
-  try {
-    res.json({ ok: true, broken: service.checkRefs() })
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message })
-  }
-})
+  app.get('/api/library', (req, res) => res.json(store.library()))
+  app.get('/api/global', (req, res) => res.json(store.global()))
 
-// Audio files — express.static streams with Range support (seeking).
-app.use('/audio', express.static(AUDIO_DIR, { maxAge: '1h' }))
-
-// Built frontend.
-app.use(express.static(DIST))
-
-// SPA fallback: any non-API/audio GET returns index.html.
-app.use((req, res, next) => {
-  if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.startsWith('/audio/')) {
-    return next()
-  }
-  res.sendFile(path.join(DIST, 'index.html'), (err) => {
-    if (err) res.status(404).end()
+  app.get('/api/scenes', (req, res) => res.json(store.listScenes()))
+  app.get('/api/scenes/:id', (req, res) => {
+    const scene = store.scene(req.params.id)
+    if (!scene) return res.status(404).json({ error: 'Scene not found' })
+    res.json(scene)
   })
-})
 
-app.listen(PORT, () => {
-  console.log(`Olea soundboard listening on http://localhost:${PORT}`)
-})
+  app.get(
+    '/api/catalog',
+    handle(async (req, res) => {
+      const result = store.searchSounds({
+        query: stringParam(req.query.query ?? req.query.q),
+        offset: parseOffset(req.query.offset),
+        limit: parseLimit(req.query.limit),
+        unassigned: parseBoolean(req.query.unassigned),
+        kind: stringParam(req.query.kind),
+        category: stringParam(req.query.category),
+        tag: stringParam(req.query.tag),
+        groupId: stringParam(req.query.groupId),
+      })
+      res.json(result)
+    })
+  )
+
+  app.get('/api/catalog/stats', (req, res) => res.json(store.stats()))
+
+  app.get('/api/sounds/:id', (req, res) => {
+    const sound = findSound(store.catalog(), req.params.id)
+    if (!sound) return res.status(404).json({ error: 'Sound not found' })
+    res.json(sound)
+  })
+
+  app.put(
+    '/api/global',
+    handle(async (req, res) => {
+      const global = await store.saveGlobal(req.body ?? {})
+      res.json({ global })
+    })
+  )
+
+  app.post(
+    '/api/groups',
+    handle(async (req, res) => {
+      const group = await store.createGroup(req.body ?? {})
+      res.json({ group, library: store.library() })
+    })
+  )
+
+  app.patch(
+    '/api/groups/:id',
+    handle(async (req, res) => {
+      const group = await store.updateGroup(req.params.id, req.body ?? {})
+      res.json({ group, library: store.library() })
+    })
+  )
+
+  app.delete(
+    '/api/groups/:id',
+    handle(async (req, res) => {
+      res.json(await store.deleteGroup(req.params.id))
+    })
+  )
+
+  app.post(
+    '/api/groups/:id/sounds',
+    handle(async (req, res) => {
+      const group = await store.addGroupSounds(req.params.id, req.body?.soundIds)
+      res.json({ group, library: store.library() })
+    })
+  )
+
+  app.post(
+    '/api/groups/:id/sounds/remove',
+    handle(async (req, res) => {
+      const group = await store.removeGroupSounds(req.params.id, req.body?.soundIds)
+      res.json({ group, library: store.library() })
+    })
+  )
+
+  app.post(
+    '/api/groups/merge',
+    handle(async (req, res) => {
+      res.json(await store.mergeGroups(req.body ?? {}))
+    })
+  )
+
+  app.post(
+    '/api/groups/split',
+    handle(async (req, res) => {
+      res.json(await store.splitGroup(req.body ?? {}))
+    })
+  )
+
+  app.post(
+    '/api/groups/bulk',
+    handle(async (req, res) => {
+      const ids = req.body?.ids ?? req.body?.groupIds
+      res.json(await store.bulkUpdateGroups(ids, req.body?.patch ?? {}))
+    })
+  )
+
+  app.post(
+    '/api/groups/from-sounds',
+    handle(async (req, res) => {
+      const group = await store.createGroupsFromSounds(req.body ?? {})
+      res.json({ group, library: store.library() })
+    })
+  )
+
+  app.post(
+    '/api/scenes',
+    handle(async (req, res) => {
+      const scene = await store.createScene(req.body ?? {})
+      res.json({ scene })
+    })
+  )
+
+  app.put(
+    '/api/scenes/:id',
+    handle(async (req, res) => {
+      const scene = await store.saveScene(req.params.id, req.body ?? {})
+      res.json({ scene })
+    })
+  )
+
+  app.delete(
+    '/api/scenes/:id',
+    handle(async (req, res) => {
+      const scene = await store.deleteScene(req.params.id)
+      res.json({ ok: true, scene })
+    })
+  )
+
+  app.post(
+    '/api/sounds/:id/duration',
+    handle(async (req, res) => {
+      const raw = req.body?.duration
+      const duration = typeof raw === 'number' ? raw : Number(raw)
+      if (!Number.isFinite(duration) || duration <= 0) {
+        return res.status(400).json({ error: 'duration must be a finite number greater than 0' })
+      }
+      const sound = await store.setSoundDuration(req.params.id, duration)
+      if (!sound) return res.status(404).json({ error: 'Sound not found' })
+      res.json({ sound })
+    })
+  )
+
+  app.post(
+    '/api/import/done',
+    handle(async (req, res) => {
+      const raw = req.body?.done
+      const done = raw === undefined ? true : raw
+      if (typeof done !== 'boolean') {
+        return res.status(400).json({ error: 'done must be a boolean' })
+      }
+      res.json({ done: await store.markImportDone(done) })
+    })
+  )
+
+  app.get(
+    '/audio/:hash',
+    handle(async (req, res) => {
+      const hash = req.params.hash
+      if (!isValidHash(hash)) return res.status(400).json({ error: 'Invalid audio hash' })
+
+      const sound = findByHash(store.catalog(), hash)
+      if (!sound) return res.status(404).json({ error: 'Sound not found' })
+
+      let file
+      try {
+        file = soundPath(soundsDir, hash, sound.ext)
+      } catch (err) {
+        return res.status(400).json({ error: err.message })
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      res.sendFile(file, (err) => {
+        if (!err || res.headersSent) return
+        const status =
+          err.code === 'ENOENT' || err.statusCode === 404
+            ? 404
+            : Number.isInteger(err.statusCode) && err.statusCode >= 400
+              ? err.statusCode
+              : 500
+        res
+          .status(status)
+          .json({ error: status === 404 ? 'Audio file not found' : 'Failed to serve audio' })
+      })
+    })
+  )
+
+  app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }))
+  app.use('/audio', (req, res) => res.status(404).json({ error: 'Not found' }))
+
+  app.use(express.static(distDir))
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api') || req.path.startsWith('/audio')) {
+      return next()
+    }
+    res.sendFile(path.join(distDir, 'index.html'), (err) => {
+      if (err && !res.headersSent) res.status(404).end()
+    })
+  })
+
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err)
+    res.status(statusForError(err)).json(errorBody(err))
+  })
+
+  return app
+}
+
+export default createApp
+
+const isMain =
+  typeof process.argv[1] === 'string' &&
+  path.resolve(process.argv[1]) === path.resolve(__filename)
+
+if (isMain) {
+  const dataDir = path.resolve(process.env.OLEA_DATA_DIR || path.join(__dirname, 'data'))
+  const soundsDir = path.resolve(process.env.OLEA_SOUNDS_DIR || path.join(__dirname, 'sounds'))
+  const port = Number(process.env.PORT) || 8091
+
+  const store = createStore({ dataDir, soundsDir })
+  await store.init()
+  const app = createApp(store)
+  app.listen(port, () => {
+    console.log(`Olea soundboard listening on http://localhost:${port}`)
+  })
+}
