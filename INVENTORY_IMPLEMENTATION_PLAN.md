@@ -86,9 +86,11 @@ Routes in `inventory/pb_hooks/main.pb.js`:
   - Cannot promote a player to GM while they still hold items or money in that game.
 - `POST /api/inventory/give` — GM grants a catalog item, or owner/GM transfers an existing entry.
   Recipients must be players; transfers always land on person.
-- `POST /api/inventory/use` — owner only, charges only.
-- `POST /api/inventory/drop` — owner or GM; this is also the GM “take” action (deletes instance).
-- `POST /api/inventory/move` — owner only; `{ inventoryId, location }`.
+- `POST /api/inventory/use` — owner only; charges use one charge, stacks consume one unit.
+- `POST /api/inventory/drop` — owner or GM; the GM “take” action deletes the whole instance; an
+  owner may drop part of a stack with `quantity`.
+- `POST /api/inventory/move` — owner only; `{ inventoryId, location, quantity? }`; quantity splits
+  a stack.
 - `POST /api/money/give` — player-to-player; optional source `location`, destination is person.
 - `POST /api/money/gm` — GM adjusts a player’s money; `location` can be person/stash.
 - `POST /api/money/move` — player moves own money between person/stash.
@@ -166,7 +168,8 @@ All items below are implemented.
   - Handle no players gracefully.
 - `InventoryPanel`:
   - Split into On person / Stash sections with weight totals.
-  - Player actions: Use (charges, person only), Give, Move to stash/pocket, Drop.
+  - Player actions: Use (charges or one unit of a stack, person only), Give, Move to
+    stash/pocket (partial for stacks), Drop (partial for stacks).
   - GM actions: Take (delete) only; no Give here (catalog Give is used instead).
   - Recipients only include players, never GMs.
 - `WalletPanel`:

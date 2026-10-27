@@ -144,9 +144,12 @@ All except `/api/login` require `$apis.requireAuth("players")` (auth token → `
   `itemId` → GM grants a catalog item (quantity only for stack). `inventoryId` → transfer existing
   entry (owner or GM; quantity splits a stack). Recipients must be players; transfers land on
   `person`.
-- `POST /api/inventory/use` — `{inventoryId}`; owner only; decrements `charges_current` (blocked at 0).
-- `POST /api/inventory/drop` — `{inventoryId}`; owner or GM; deletes (GM "take").
-- `POST /api/inventory/move` — `{inventoryId, location}`; owner only; moves person/stash.
+- `POST /api/inventory/use` — `{inventoryId}`; owner only; decrements `charges_current` for charges
+  or consumes one unit of a stack (entry is deleted at 0).
+- `POST /api/inventory/drop` — `{inventoryId, quantity?}`; owner or GM. GM "take" deletes the whole
+  instance; an owner may drop part of a stack.
+- `POST /api/inventory/move` — `{inventoryId, location, quantity?}`; owner only; moves person/stash;
+  quantity splits a stack and merges into an existing stack at the destination.
 - `POST /api/money/give` — `{game, toPlayerId, currencyId, amount, location?}`; player→player
   transfer. Source defaults to `person`; destination is always `person`.
 - `POST /api/money/gm` — `{game, playerId, currencyId, amount, location?}`; GM give (+) or take

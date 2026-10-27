@@ -106,8 +106,11 @@ Inventory:
 - `giveItem({ itemId, toPlayerId, quantity? })` — GM grants a catalog item
 - `giveItem({ inventoryId, toPlayerId, quantity? })` — owner/GM transfers an existing entry;
   `quantity` only for stacks
-- `useItem(inventoryId)`, `dropItem(inventoryId)` — drop is also the GM "take" action
-- `moveItem(inventoryId, location)` — owner only; `location` is `"person" | "stash"`
+- `useItem(inventoryId)` — charges use one charge; stacks consume one unit (deleted at 0)
+- `dropItem(inventoryId, quantity?)` — drop is also the GM "take" action (GM always removes the
+  whole instance); an owner may drop part of a stack
+- `moveItem(inventoryId, location, quantity?)` — owner only; `location` is `"person" | "stash"`;
+  a `quantity` splits a stack
 
 Money:
 
@@ -136,7 +139,8 @@ Not needed directly — prefer the store actions above.
 ## Display rules
 
 - `single`: show no quantity/charges, just the name.
-- `stack`: show `quantity` (e.g. "×5"); weight is `item.weight * quantity`.
+- `stack`: show `quantity` (e.g. "×5"); weight is `item.weight * quantity`. "Use 1" consumes one
+  unit; moving or dropping can be partial.
 - `charges`: show `charges_current / max_charges` (e.g. "4/5 charges"); weight counts once.
 - Show weight with `system.weight_unit` (`lb` or `kg`).
 - GMs have no inventory/wallet: never show a GM's own inventory or wallet.
