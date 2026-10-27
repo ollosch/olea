@@ -19,6 +19,9 @@ export const api = {
   createGame(data) {
     return post('/api/games', data)
   },
+  deleteGame(id) {
+    return del(`/api/games/${id}`)
+  },
   addMember(data) {
     return post('/api/members', data)
   },
@@ -37,10 +40,19 @@ export const api = {
   dropItem(inventoryId) {
     return post('/api/inventory/drop', { inventoryId })
   },
+  moveItem(inventoryId, location) {
+    return post('/api/inventory/move', { inventoryId, location })
+  },
   giveMoney(data) {
     return post('/api/money/give', data)
   },
   gmMoney(data) {
     return post('/api/money/gm', data)
+  },
+  moveMoney(data) {
+    return post('/api/money/move', data)
+  },
+  importSystem(systemId, data) {
+    return post(`/api/systems/${systemId}/import`, data)
   },
 }

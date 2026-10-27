@@ -577,6 +577,7 @@ onRecordCreateRequest(
     const u = require(__hooks + "/utils.js");
     u.requireGlobalGM(e.app, e.auth.get("id"));
     if (!e.record.get("kind")) e.record.set("kind", "single");
+    u.validateItemCurrency(e.app, e.record);
     e.next();
   },
   "items"
@@ -586,6 +587,7 @@ onRecordUpdateRequest(
   (e) => {
     const u = require(__hooks + "/utils.js");
     u.requireGlobalGM(e.app, e.auth.get("id"));
+    u.validateItemCurrency(e.app, e.record);
     e.next();
   },
   "items"

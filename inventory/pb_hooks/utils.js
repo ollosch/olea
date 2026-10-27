@@ -211,6 +211,20 @@ function importSystemData(app, systemId, payload) {
   return { currencies: currencies.length, items: itemCount };
 }
 
+function validateItemCurrency(app, record) {
+  const currencyId = record.get("value_currency");
+  if (!currencyId) return;
+  let currency = null;
+  try {
+    currency = app.findRecordById("currencies", currencyId);
+  } catch (err) {
+    bad("Value currency does not exist");
+  }
+  if (currency.get("system") !== record.get("system")) {
+    bad("Value currency must belong to the item's system");
+  }
+}
+
 function createSystem(app, data) {
   const body = data || {};
   const name = String(body.name || "").trim();
@@ -244,5 +258,6 @@ module.exports = {
   createInventoryEntry,
   currencyLookup,
   importSystemData,
+  validateItemCurrency,
   createSystem,
 };
