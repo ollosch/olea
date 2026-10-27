@@ -27,7 +27,6 @@ import {
 const CROSSFADE = 1.8
 const WET_RATIO = 0.4
 const REVERB_RETURN_LEVEL = 0.5
-const START_FADE = 0.35
 const STOP_FADE = 0.25
 
 const REVERB_PARAMS = {
@@ -304,15 +303,19 @@ function applyVoiceReverb(voice, preset) {
   }
 }
 
-function createSegment(voice, buffer, { loop, meta }) {
+function createSegment(voice, buffer, { loop, meta, fadeIn = 0 }) {
   const src = ctx.createBufferSource()
   src.buffer = buffer
   src.loop = loop
 
   const gain = ctx.createGain()
   const now = ctx.currentTime
-  gain.gain.setValueAtTime(0.0001, now)
-  gain.gain.linearRampToValueAtTime(voice.gain, now + START_FADE)
+  if (fadeIn > 0) {
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.linearRampToValueAtTime(voice.gain, now + fadeIn)
+  } else {
+    gain.gain.setValueAtTime(voice.gain, now)
+  }
 
   let pan = null
   if (typeof ctx.createStereoPanner === 'function') {
@@ -330,8 +333,12 @@ function createSegment(voice, buffer, { loop, meta }) {
   const conv = getReverb(voice.bus, voice.reverb)
   if (conv) {
     wet = ctx.createGain()
-    wet.gain.setValueAtTime(0.0001, now)
-    wet.gain.linearRampToValueAtTime(voice.gain * WET_RATIO, now + START_FADE)
+    if (fadeIn > 0) {
+      wet.gain.setValueAtTime(0.0001, now)
+      wet.gain.linearRampToValueAtTime(voice.gain * WET_RATIO, now + fadeIn)
+    } else {
+      wet.gain.setValueAtTime(voice.gain * WET_RATIO, now)
+    }
     src.connect(wet)
     wet.connect(conv)
   }
@@ -401,7 +408,11 @@ async function playLoopSegment(voice) {
 
   const previous = voice.nodes
   if (previous) fadeOutNodes(previous, CROSSFADE)
-  createSegment(voice, audio, { loop: true, meta: pick.meta })
+  createSegment(voice, audio, {
+    loop: true,
+    meta: pick.meta,
+    fadeIn: previous ? CROSSFADE : 0,
+  })
   scheduleLoopAdvance(voice, audio.duration)
 }
 
