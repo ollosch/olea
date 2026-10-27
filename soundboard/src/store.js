@@ -185,6 +185,100 @@ export function groupById(id) {
   return store.library.groups.find((group) => group.id === id) || null
 }
 
+export function mergeGroupsIntoCache(groups) {
+  if (!Array.isArray(groups) || !groups.length) return
+  const map = new Map(store.library.groups.map((group) => [group.id, group]))
+  for (const group of groups) {
+    if (group?.id) map.set(group.id, group)
+  }
+  store.library = { ...store.library, version: 3, groups: [...map.values()] }
+  if (store.libraryPage.length) {
+    store.libraryPage = store.libraryPage.map((group) => map.get(group.id) || group)
+  }
+}
+
+export function removeGroupsFromCache(ids) {
+  const remove = new Set(Array.isArray(ids) ? ids : [ids])
+  if (!remove.size) return
+  store.library = {
+    ...store.library,
+    groups: store.library.groups.filter((group) => !remove.has(group.id)),
+  }
+  store.libraryPage = store.libraryPage.filter((group) => !remove.has(group.id))
+  store.librarySelection = store.librarySelection.filter((id) => !remove.has(id))
+}
+
+async function fetchGroupsByIds(ids) {
+  const missing = []
+  const seen = new Set()
+  const cache = new Set(store.library.groups.map((group) => group.id))
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (typeof id !== 'string' || !id || seen.has(id) || cache.has(id)) continue
+    seen.add(id)
+    missing.push(id)
+  }
+  for (let i = 0; i < missing.length; i += 500) {
+    const chunk = missing.slice(i, i + 500)
+    const params = new URLSearchParams({ ids: chunk.join(',') })
+    const data = await api(`/api/groups?${params.toString()}`)
+    mergeGroupsIntoCache(data?.groups || [])
+  }
+}
+
+export async function ensureGroups(ids) {
+  try {
+    await fetchGroupsByIds(ids)
+  } catch (err) {
+    setError(err)
+  }
+}
+
+export async function ensureSceneGroups(scene) {
+  if (!scene) return
+  await ensureGroups((scene.tracks || []).map((track) => track.groupId))
+}
+
+export async function ensurePaletteGroups() {
+  await ensureGroups((store.global.palette || []).map((entry) => entry.groupId))
+}
+
+export async function refreshLibraryPage(options = {}) {
+  const next = {
+    ...store.libraryFilters,
+    ...(options.query !== undefined ? { query: String(options.query) } : {}),
+    ...(options.category !== undefined ? { category: String(options.category) } : {}),
+    ...(options.tag !== undefined ? { tag: String(options.tag) } : {}),
+    ...(options.kind !== undefined ? { kind: String(options.kind) } : {}),
+  }
+  const offset = Number.isFinite(Number(options.offset)) ? Math.max(0, Number(options.offset)) : 0
+  const limit = Number.isFinite(Number(options.limit)) ? Number(options.limit) : store.libraryLimit
+  const params = new URLSearchParams()
+  if (next.query) params.set('query', next.query)
+  if (next.category) params.set('category', next.category)
+  if (next.tag) params.set('tag', next.tag)
+  if (next.kind) params.set('kind', next.kind)
+  params.set('offset', String(offset))
+  params.set('limit', String(limit))
+
+  store.libraryLoading = true
+  try {
+    const data = await api(`/api/library?${params.toString()}`)
+    store.libraryFilters = next
+    store.libraryOffset = data?.offset ?? offset
+    store.libraryLimit = data?.limit ?? limit
+    store.libraryTotal = data?.total ?? 0
+    store.libraryFacets = data?.facets || { categories: [], tags: [] }
+    store.libraryPage = Array.isArray(data?.groups) ? data.groups : []
+    mergeGroupsIntoCache(store.libraryPage)
+    return store.libraryPage
+  } catch (err) {
+    setError(err)
+    return []
+  } finally {
+    store.libraryLoading = false
+  }
+}
+
 export function soundUrl(sound) {
   if (!sound) return ''
   return sound.url || `/audio/${sound.hash}`
@@ -364,7 +458,9 @@ function applyGlobal(global) {
 
 function applyBootstrap(data) {
   store.scenes = Array.isArray(data?.scenes) ? data.scenes : []
-  store.library = data?.library || { version: 3, groups: [] }
+  store.library = { version: 3, groups: [] }
+  store.libraryPage = []
+  store.libraryTotal = data?.library?.count ?? data?.stats?.groups ?? 0
   applyGlobal(data?.global)
   store.stats = data?.stats || store.stats
   store.catalogCount = data?.catalog?.count ?? store.stats.total ?? 0
@@ -377,6 +473,8 @@ export async function bootstrap() {
   try {
     const data = await api('/api/bootstrap')
     applyBootstrap(data)
+    await refreshLibraryPage({ offset: 0 })
+    await ensurePaletteGroups()
     const first = store.scenes.find((scene) => !scene.disabled) || store.scenes[0] || null
     if (first) await openScene(first.id)
     await ensurePaletteSounds()
@@ -409,6 +507,7 @@ export async function openScene(id) {
   try {
     const raw = await api(`/api/scenes/${encodeURIComponent(id)}`)
     const scene = normalizeScene(raw)
+    await ensureSceneGroups(scene)
     await ensureSceneSounds(scene)
     store.activeScene = scene
     const mood = scene.moods.find((item) => item.id === scene.defaultMoodId) || scene.moods[0]
@@ -930,12 +1029,6 @@ export function setTrackDefaultTrigger(trackId, value) {
 // ---------------------------------------------------------------------------
 // Library groups
 
-function applyLibrary(library) {
-  if (!library) return
-  store.library = library
-  refreshWarnings()
-}
-
 function syncGroupVoices(groupId) {
   if (!store.transportRunning) return
   const plan = buildPlan(store.selectedMoodId)
@@ -949,8 +1042,9 @@ export async function createGroup(payload) {
   clearError()
   try {
     const data = await api('/api/groups', { method: 'POST', body: payload || {} })
-    applyLibrary(data.library)
+    mergeGroupsIntoCache([data.group])
     await ensureSounds(data.group?.sounds || [])
+    await refreshLibraryPage({ offset: store.libraryOffset })
     refreshWarnings()
     refreshStats()
     setStatus(`Created group "${data.group?.name || 'Group'}"`)
@@ -968,7 +1062,7 @@ export async function updateGroup(id, patch) {
       method: 'PATCH',
       body: patch || {},
     })
-    applyLibrary(data.library)
+    mergeGroupsIntoCache([data.group])
     await ensureSounds(data.group?.sounds || [])
     refreshWarnings()
     syncGroupVoices(id)
@@ -984,7 +1078,8 @@ export async function deleteGroup(id) {
   clearError()
   try {
     const data = await api(`/api/groups/${encodeURIComponent(id)}`, { method: 'DELETE' })
-    applyLibrary(data.library)
+    removeGroupsFromCache([id])
+    await refreshLibraryPage({ offset: store.libraryOffset })
     if (data.global) applyGlobal(data.global)
     const scene = store.activeScene
     if (scene) {
@@ -1021,9 +1116,11 @@ export async function mergeGroups(input) {
   clearError()
   try {
     const data = await api('/api/groups/merge', { method: 'POST', body: input || {} })
-    applyLibrary(data.library)
-    if (data.global) applyGlobal(data.global)
     const removed = new Set(data.removedIds || [])
+    mergeGroupsIntoCache([data.group])
+    removeGroupsFromCache([...removed])
+    await refreshLibraryPage({ offset: store.libraryOffset })
+    if (data.global) applyGlobal(data.global)
     const scene = store.activeScene
     if (scene && removed.size && data.group) {
       let changed = false
@@ -1052,7 +1149,8 @@ export async function splitGroup(input) {
   clearError()
   try {
     const data = await api('/api/groups/split', { method: 'POST', body: input || {} })
-    applyLibrary(data.library)
+    mergeGroupsIntoCache([data.group, data.source].filter(Boolean))
+    await refreshLibraryPage({ offset: store.libraryOffset })
     await ensureSounds(data.group?.sounds || [])
     refreshWarnings()
     refreshStats()
@@ -1071,7 +1169,7 @@ export async function bulkUpdateGroups(ids, patch) {
       method: 'POST',
       body: { ids, patch: patch || {} },
     })
-    applyLibrary(data.library)
+    mergeGroupsIntoCache(data.groups || [])
     for (const group of data.groups || []) syncGroupVoices(group.id)
     refreshStats()
     refreshWarnings()
@@ -1090,7 +1188,7 @@ export async function addGroupSounds(id, soundIds) {
       method: 'POST',
       body: { soundIds },
     })
-    applyLibrary(data.library)
+    mergeGroupsIntoCache([data.group])
     await ensureSounds(soundIds || [])
     refreshWarnings()
     syncGroupVoices(id)
@@ -1109,7 +1207,7 @@ export async function removeGroupSounds(id, soundIds) {
       method: 'POST',
       body: { soundIds },
     })
-    applyLibrary(data.library)
+    mergeGroupsIntoCache([data.group])
     syncGroupVoices(id)
     refreshWarnings()
     refreshStats()
@@ -1124,8 +1222,9 @@ export async function createGroupsFromSelectedSounds(payload) {
   clearError()
   try {
     const data = await api('/api/groups/from-sounds', { method: 'POST', body: payload || {} })
-    applyLibrary(data.library)
+    mergeGroupsIntoCache([data.group])
     await ensureSounds(data.group?.sounds || [])
+    await refreshLibraryPage({ offset: store.libraryOffset })
     refreshWarnings()
     refreshStats()
     setStatus(`Created group "${data.group?.name || 'Group'}"`)

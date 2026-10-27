@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   store,
   addGroupsToScene,
@@ -7,58 +7,59 @@ import {
   deleteGroup,
   createGroup,
   openGroupEditor,
+  refreshLibraryPage,
 } from '../store.js'
 
-const query = ref('')
-const categoryFilter = ref('')
-const tagFilter = ref('')
-const kindFilter = ref('')
+const query = ref(store.libraryFilters.query)
+const categoryFilter = ref(store.libraryFilters.category)
+const tagFilter = ref(store.libraryFilters.tag)
+const kindFilter = ref(store.libraryFilters.kind)
 const newGroupName = ref('')
 const creating = ref(false)
+let filterTimer = null
 
-const categories = computed(() => {
-  const names = new Set()
-  for (const group of store.library.groups) {
-    if (group.category) names.add(group.category)
-  }
-  return [...names].sort((a, b) => a.localeCompare(b)).map((name) => ({
+const categories = computed(() =>
+  (store.libraryFacets.categories || []).map((name) => ({
     name,
     depth: name.split('/').length - 1,
   }))
+)
+
+const tags = computed(() => store.libraryFacets.tags || [])
+
+const filteredGroups = computed(() => store.libraryPage)
+const pageStart = computed(() => (store.libraryTotal ? store.libraryOffset + 1 : 0))
+const pageEnd = computed(() =>
+  Math.min(store.libraryTotal, store.libraryOffset + store.libraryPage.length)
+)
+const canPrev = computed(() => store.libraryOffset > 0)
+const canNext = computed(() => store.libraryOffset + store.libraryLimit < store.libraryTotal)
+
+function applyFilters(offset = 0) {
+  refreshLibraryPage({
+    query: query.value,
+    category: categoryFilter.value,
+    tag: tagFilter.value,
+    kind: kindFilter.value,
+    offset,
+  })
+}
+
+watch([query, categoryFilter, tagFilter, kindFilter], () => {
+  if (filterTimer) clearTimeout(filterTimer)
+  filterTimer = setTimeout(() => applyFilters(0), 250)
 })
 
-const tags = computed(() => {
-  const set = new Set()
-  for (const group of store.library.groups) {
-    for (const tag of group.tags || []) set.add(tag)
-  }
-  return [...set].sort((a, b) => a.localeCompare(b))
-})
+function prevPage() {
+  applyFilters(Math.max(0, store.libraryOffset - store.libraryLimit))
+}
 
-const filteredGroups = computed(() => {
-  const q = query.value.trim().toLowerCase()
-  return store.library.groups
-    .filter((group) => {
-      if (kindFilter.value && group.defaultKind !== kindFilter.value) return false
-      if (categoryFilter.value) {
-        if (
-          group.category !== categoryFilter.value &&
-          !group.category.startsWith(`${categoryFilter.value}/`)
-        ) {
-          return false
-        }
-      }
-      if (tagFilter.value) {
-        const wanted = tagFilter.value.toLowerCase()
-        if (!group.tags.some((tag) => tag.toLowerCase() === wanted)) return false
-      }
-      if (!q) return true
-      const haystack = [group.name, group.category, ...(group.tags || [])]
-        .join(' ')
-        .toLowerCase()
-      return haystack.includes(q)
-    })
-    .sort((a, b) => a.name.localeCompare(b.name))
+function nextPage() {
+  applyFilters(store.libraryOffset + store.libraryLimit)
+}
+
+onMounted(() => {
+  if (!store.libraryPage.length) applyFilters(0)
 })
 
 const selectedGroups = computed(() =>
@@ -166,6 +167,19 @@ async function createBlankGroup() {
           Create
         </button>
       </form>
+    </div>
+
+    <div class="library-pager row gap-sm wrap">
+      <button class="btn-xs" :disabled="!canPrev || store.libraryLoading" @click="prevPage">
+        ← Previous
+      </button>
+      <span class="small muted">
+        Showing {{ pageStart }}–{{ pageEnd }} of {{ store.libraryTotal }}
+        · max {{ store.libraryLimit }} per page
+      </span>
+      <button class="btn-xs" :disabled="!canNext || store.libraryLoading" @click="nextPage">
+        Next →
+      </button>
     </div>
 
     <ul class="group-list">

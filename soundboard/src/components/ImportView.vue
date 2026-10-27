@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   store,
   searchCatalogPage,
@@ -23,6 +23,7 @@ import {
   stopPreview,
   groupById,
   setStatus,
+  refreshLibraryPage,
 } from '../store.js'
 import { engine } from '../engine.js'
 import { REVERB_PRESETS, coerceReverb } from '../../lib/v3/schema.js'
@@ -32,6 +33,7 @@ const groupFilter = ref('')
 const targetGroupId = ref('')
 const splitName = ref('')
 const busy = ref(false)
+let groupFilterTimer = null
 
 const createForm = reactive({
   name: '',
@@ -81,16 +83,31 @@ const canNext = computed(
   () => importState.value.offset + importState.value.limit < importState.value.total
 )
 
-const filteredGroups = computed(() => {
-  const q = groupFilter.value.trim().toLowerCase()
-  return [...store.library.groups]
-    .filter((group) => {
-      if (!q) return true
-      return `${group.name} ${group.category} ${group.tags.join(' ')}`
-        .toLowerCase()
-        .includes(q)
-    })
-    .sort((a, b) => a.name.localeCompare(b.name))
+const filteredGroups = computed(() => store.libraryPage)
+const groupPageStart = computed(() => (store.libraryTotal ? store.libraryOffset + 1 : 0))
+const groupPageEnd = computed(() =>
+  Math.min(store.libraryTotal, store.libraryOffset + store.libraryPage.length)
+)
+const groupCanPrev = computed(() => store.libraryOffset > 0)
+const groupCanNext = computed(
+  () => store.libraryOffset + store.libraryLimit < store.libraryTotal
+)
+
+function loadGroups(offset = 0) {
+  refreshLibraryPage({ query: groupFilter.value, offset })
+}
+
+function prevGroupPage() {
+  loadGroups(Math.max(0, store.libraryOffset - store.libraryLimit))
+}
+
+function nextGroupPage() {
+  loadGroups(store.libraryOffset + store.libraryLimit)
+}
+
+watch(groupFilter, () => {
+  if (groupFilterTimer) clearTimeout(groupFilterTimer)
+  groupFilterTimer = setTimeout(() => loadGroups(0), 250)
 })
 
 const splitGroup = computed(() =>
@@ -246,6 +263,7 @@ function chooseSplit(group) {
 
 onMounted(() => {
   if (store.catalogCount > 0) searchCatalogPage()
+  loadGroups(0)
 })
 </script>
 
@@ -492,6 +510,18 @@ onMounted(() => {
       <aside class="import-groups card">
         <h2>Groups</h2>
         <input v-model="groupFilter" class="text-input" type="search" placeholder="Filter groups…" />
+
+        <div class="library-pager row gap-sm wrap">
+          <button class="btn-xs" :disabled="!groupCanPrev || store.libraryLoading" @click="prevGroupPage">
+            ← Previous
+          </button>
+          <span class="small muted">
+            {{ groupPageStart }}–{{ groupPageEnd }} of {{ store.libraryTotal }}
+          </span>
+          <button class="btn-xs" :disabled="!groupCanNext || store.libraryLoading" @click="nextGroupPage">
+            Next →
+          </button>
+        </div>
 
         <div class="row gap-sm wrap group-select-actions">
           <button class="btn-xs" @click="clearImportGroupSelection">

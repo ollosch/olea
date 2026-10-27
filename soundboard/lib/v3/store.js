@@ -379,6 +379,65 @@ export function createStore({ dataDir, soundsDir } = {}) {
     return out
   }
 
+  function searchGroups(options = {}) {
+    const opts = isObj(options) ? options : {}
+    const query = typeof opts.query === 'string' ? opts.query.trim().toLowerCase() : ''
+    const category = typeof opts.category === 'string' ? opts.category.trim() : ''
+    const tag = typeof opts.tag === 'string' ? opts.tag.trim().toLowerCase() : ''
+    const kind = typeof opts.kind === 'string' ? opts.kind.trim() : ''
+    const all = state.library.groups
+    const categories = [...new Set(all.map((group) => group.category).filter(Boolean))].sort(
+      (a, b) => a.localeCompare(b)
+    )
+    const tags = [
+      ...new Set(all.flatMap((group) => (Array.isArray(group.tags) ? group.tags : []))),
+    ].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+
+    const filtered = all.filter((group) => {
+      if (kind && group.defaultKind !== kind) return false
+      if (category) {
+        if (group.category !== category && !group.category.startsWith(`${category}/`)) {
+          return false
+        }
+      }
+      if (tag && !group.tags.some((item) => item.toLowerCase() === tag)) return false
+      if (!query) return true
+      const haystack = [group.name, group.category, ...(group.tags || [])]
+        .join(' ')
+        .toLowerCase()
+      return haystack.includes(query)
+    })
+    filtered.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+
+    const total = filtered.length
+    const rawOffset = Number(opts.offset)
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0
+    const rawLimit = Number(opts.limit)
+    const limit = Number.isFinite(rawLimit)
+      ? Math.min(200, Math.max(1, Math.floor(rawLimit)))
+      : 200
+
+    return {
+      version: VERSION,
+      groups: filtered.slice(offset, offset + limit),
+      total,
+      offset,
+      limit,
+      facets: { categories, tags },
+    }
+  }
+
+  function lookupGroups(ids) {
+    if (!Array.isArray(ids)) return []
+    const wanted = new Set(ids.filter((id) => typeof id === 'string' && id))
+    if (!wanted.size) return []
+    const out = []
+    for (const group of state.library.groups) {
+      if (wanted.has(group.id)) out.push(group)
+    }
+    return out
+  }
+
   function searchSounds(options = {}) {
     const opts = isObj(options) ? options : {}
     return searchCatalog(state.catalog, {
@@ -1001,6 +1060,8 @@ export function createStore({ dataDir, soundsDir } = {}) {
     warnings,
     stats,
     searchSounds,
+    searchGroups,
+    lookupGroups,
     lookupSounds,
     setSoundDuration,
     addSounds,

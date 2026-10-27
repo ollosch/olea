@@ -74,7 +74,7 @@ export function createApp(store, options = {}) {
       const catalog = store.catalog()
       res.json({
         catalog: { version: catalog.version, count: catalog.sounds.length },
-        library: store.library(),
+        library: { version: store.library().version, count: store.library().groups.length },
         global: store.global(),
         scenes: store.listScenes(),
         stats: store.stats(),
@@ -82,7 +82,34 @@ export function createApp(store, options = {}) {
     })
   )
 
-  app.get('/api/library', (req, res) => res.json(store.library()))
+  app.get(
+    '/api/library',
+    handle(async (req, res) => {
+      res.json(
+        store.searchGroups({
+          query: stringParam(req.query.query ?? req.query.q),
+          offset: parseOffset(req.query.offset),
+          limit: parseLimit(req.query.limit, 200),
+          category: stringParam(req.query.category),
+          tag: stringParam(req.query.tag),
+          kind: stringParam(req.query.kind),
+        })
+      )
+    })
+  )
+
+  app.get('/api/groups', (req, res) => {
+    const raw = req.query.ids
+    const ids = Array.isArray(raw)
+      ? raw.flatMap((value) => String(value).split(','))
+      : String(raw ?? '').split(',')
+    const clean = ids.map((id) => id.trim()).filter(Boolean)
+    if (clean.length > 2000) {
+      return res.status(400).json({ error: 'At most 2000 group ids per request' })
+    }
+    res.json({ groups: store.lookupGroups(clean) })
+  })
+
   app.get('/api/global', (req, res) => res.json(store.global()))
 
   app.get('/api/scenes', (req, res) => res.json(store.listScenes()))
@@ -142,7 +169,7 @@ export function createApp(store, options = {}) {
     '/api/groups',
     handle(async (req, res) => {
       const group = await store.createGroup(req.body ?? {})
-      res.json({ group, library: store.library() })
+      res.json({ group })
     })
   )
 
@@ -150,14 +177,15 @@ export function createApp(store, options = {}) {
     '/api/groups/:id',
     handle(async (req, res) => {
       const group = await store.updateGroup(req.params.id, req.body ?? {})
-      res.json({ group, library: store.library() })
+      res.json({ group })
     })
   )
 
   app.delete(
     '/api/groups/:id',
     handle(async (req, res) => {
-      res.json(await store.deleteGroup(req.params.id))
+      const { library, ...result } = await store.deleteGroup(req.params.id)
+      res.json(result)
     })
   )
 
@@ -165,7 +193,7 @@ export function createApp(store, options = {}) {
     '/api/groups/:id/sounds',
     handle(async (req, res) => {
       const group = await store.addGroupSounds(req.params.id, req.body?.soundIds)
-      res.json({ group, library: store.library() })
+      res.json({ group })
     })
   )
 
@@ -173,21 +201,23 @@ export function createApp(store, options = {}) {
     '/api/groups/:id/sounds/remove',
     handle(async (req, res) => {
       const group = await store.removeGroupSounds(req.params.id, req.body?.soundIds)
-      res.json({ group, library: store.library() })
+      res.json({ group })
     })
   )
 
   app.post(
     '/api/groups/merge',
     handle(async (req, res) => {
-      res.json(await store.mergeGroups(req.body ?? {}))
+      const { library, ...result } = await store.mergeGroups(req.body ?? {})
+      res.json(result)
     })
   )
 
   app.post(
     '/api/groups/split',
     handle(async (req, res) => {
-      res.json(await store.splitGroup(req.body ?? {}))
+      const { library, ...result } = await store.splitGroup(req.body ?? {})
+      res.json(result)
     })
   )
 
@@ -195,7 +225,8 @@ export function createApp(store, options = {}) {
     '/api/groups/bulk',
     handle(async (req, res) => {
       const ids = req.body?.ids ?? req.body?.groupIds
-      res.json(await store.bulkUpdateGroups(ids, req.body?.patch ?? {}))
+      const { library, ...result } = await store.bulkUpdateGroups(ids, req.body?.patch ?? {})
+      res.json(result)
     })
   )
 
@@ -203,7 +234,7 @@ export function createApp(store, options = {}) {
     '/api/groups/from-sounds',
     handle(async (req, res) => {
       const group = await store.createGroupsFromSounds(req.body ?? {})
-      res.json({ group, library: store.library() })
+      res.json({ group })
     })
   )
 

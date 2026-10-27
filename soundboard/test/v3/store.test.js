@@ -4,6 +4,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { createStore } from '../../lib/v3/store.js'
+import { newGroup } from '../../lib/v3/schema.js'
 import {
   catalogPath,
   globalPath,
@@ -335,4 +336,47 @@ test('validateAll reports missing groups, sounds, and palette references without
   assert.deepEqual(report.palette, [{ paletteId: 'p1', groupId: 'missing-group' }])
   assert.equal(report.scenes.length, 1)
   assert.equal(report.scenes[0].ok, false)
+})
+
+test('searchGroups pages, filters, and returns facets', async (t) => {
+  const { store } = await setup(t)
+  const groups = Array.from({ length: 205 }, (_, index) =>
+    newGroup({
+      name: `Group ${String(index).padStart(3, '0')}`,
+      category: index % 2 ? 'Creatures/Dogs' : 'Places/Forest',
+      tags: [index % 2 ? 'Dog' : 'night'],
+      sounds: ['s1'],
+      defaultKind: index % 3 === 0 ? 'loop' : 'oneshot',
+    })
+  )
+  await store.saveLibrary({ version: 3, groups })
+
+  const first = store.searchGroups({ limit: 500 })
+  assert.equal(first.total, 205)
+  assert.equal(first.groups.length, 200)
+  assert.equal(first.limit, 200)
+  assert.equal(first.offset, 0)
+  assert.deepEqual(first.facets.categories, ['Creatures/Dogs', 'Places/Forest'])
+
+  const second = store.searchGroups({ offset: 200 })
+  assert.equal(second.groups.length, 5)
+
+  const query = store.searchGroups({ query: 'GROUP 01' })
+  assert.equal(query.total, 10)
+
+  const category = store.searchGroups({ category: 'Creatures' })
+  assert.equal(category.total, 102)
+
+  const tag = store.searchGroups({ tag: 'dog' })
+  assert.equal(tag.total, 102)
+
+  const kind = store.searchGroups({ kind: 'loop' })
+  assert.equal(kind.total, 69)
+
+  const ids = first.groups.slice(0, 3).map((group) => group.id)
+  assert.deepEqual(
+    store.lookupGroups(ids).map((group) => group.id),
+    ids
+  )
+  assert.deepEqual(store.lookupGroups(['missing']), [])
 })

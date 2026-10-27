@@ -340,8 +340,12 @@ failures. Status codes: `400` validation/bad path, `404` missing, `409` conflict
 
 Read:
 
-- `GET /api/bootstrap` — `{ catalog: { version, count }, library, global, scenes, stats }`
-- `GET /api/library`, `GET /api/global`
+- `GET /api/bootstrap` — `{ catalog: { version, count }, library: { version, count }, global, scenes, stats }`
+  (the full library is not sent in bootstrap)
+- `GET /api/library?query&offset&limit&category&tag&kind` — paged groups (max `limit=200`) with
+  `{ version, groups, total, offset, limit, facets: { categories, tags } }`
+- `GET /api/groups?ids=a,b,c` — bulk group lookup for scenes/palette (max 2000 ids per request)
+- `GET /api/global`
 - `GET /api/scenes` — summaries `{ id, name, disabled, trackCount, moodCount, defaultMoodId }`
 - `GET /api/scenes/:id` — full scene (`404` if absent)
 - `GET /api/bindings` — `{ global, scenes: [{ sceneId, name, midi }], conflicts }`
@@ -354,15 +358,15 @@ Read:
 Write (JSON body):
 
 - `PUT /api/global` → `{ global }`
-- `POST /api/groups` → `{ group, library }`
-- `PATCH /api/groups/:id` → `{ group, library }`
+- `POST /api/groups` → `{ group }`
+- `PATCH /api/groups/:id` → `{ group }`
 - `DELETE /api/groups/:id` → delete result with `paletteRemoved`, `bindingsRemoved`
-- `POST /api/groups/:id/sounds` `{ soundIds }` → `{ group, library }`
-- `POST /api/groups/:id/sounds/remove` `{ soundIds }` → `{ group, library }`
-- `POST /api/groups/merge` → `{ group, library, global, removedIds, paletteRemoved, bindingsRemoved }`
-- `POST /api/groups/split` → `{ group, source, library }`
-- `POST /api/groups/bulk` `{ ids|groupIds, patch }` → `{ groups, library }`
-- `POST /api/groups/from-sounds` → `{ group, library }`
+- `POST /api/groups/:id/sounds` `{ soundIds }` → `{ group }`
+- `POST /api/groups/:id/sounds/remove` `{ soundIds }` → `{ group }`
+- `POST /api/groups/merge` → `{ group, global, removedIds, paletteRemoved, bindingsRemoved }`
+- `POST /api/groups/split` → `{ group, source }`
+- `POST /api/groups/bulk` `{ ids|groupIds, patch }` → `{ groups }`
+- `POST /api/groups/from-sounds` → `{ group }`
 - `POST /api/scenes` `{ name }` → `{ scene }` (creates one `Default` mood)
 - `PUT /api/scenes/:id` → `{ scene }` (`400` with `errors` when invalid)
 - `DELETE /api/scenes/:id` → `{ ok: true, scene }`

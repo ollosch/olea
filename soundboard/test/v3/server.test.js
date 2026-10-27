@@ -105,6 +105,45 @@ test('bootstrap and paged catalog search', async (t) => {
   assert.equal((await fetch(`${base}/api/sounds/missing`)).status, 404)
 })
 
+test('library endpoint pages and bulk group lookup', async (t) => {
+  const { base } = await setup(t, [{ id: 's1' }, { id: 's2' }])
+
+  for (const [index, name] of ['Dogs', 'Wolves', 'Cats'].entries()) {
+    const response = await jsonPost(`${base}/api/groups`, {
+      name,
+      category: index === 2 ? 'Creatures/Cats' : 'Creatures/Dogs',
+      tags: [index === 0 ? 'bark' : 'animal'],
+      sounds: [index === 1 ? 's2' : 's1'],
+    })
+    assert.equal(response.status, 200)
+  }
+
+  const bootstrap = await fetch(`${base}/api/bootstrap`).then((res) => res.json())
+  assert.deepEqual(bootstrap.library, { version: 3, count: 3 })
+  assert.equal(bootstrap.library.groups, undefined)
+
+  const page = await fetch(`${base}/api/library?limit=2&offset=1`).then((res) => res.json())
+  assert.equal(page.total, 3)
+  assert.equal(page.offset, 1)
+  assert.equal(page.limit, 2)
+  assert.equal(page.groups.length, 2)
+  assert.deepEqual(page.facets.categories, ['Creatures/Cats', 'Creatures/Dogs'])
+
+  const search = await fetch(`${base}/api/library?query=cat&tag=animal`).then((res) =>
+    res.json()
+  )
+  assert.equal(search.total, 1)
+  assert.equal(search.groups[0].name, 'Cats')
+
+  const ids = page.groups.map((group) => group.id).join(',')
+  const lookup = await fetch(`${base}/api/groups?ids=${ids}`).then((res) => res.json())
+  assert.equal(lookup.groups.length, 2)
+  assert.deepEqual(
+    lookup.groups.map((group) => group.id).sort(),
+    page.groups.map((group) => group.id).sort()
+  )
+})
+
 test('group creation and scene save/reject through HTTP', async (t) => {
   const { base } = await setup(t, [{ id: 's1' }, { id: 's2' }])
 
