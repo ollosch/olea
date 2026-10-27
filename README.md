@@ -45,34 +45,49 @@ Open `http://localhost:8090` / `http://localhost:8091` on the host, or
 
 ## Soundboard
 
-Serves the `soundboard/syrinscape/` audio tree. State is JSON only — see `soundboard/SCHEMA.md`:
+Express + Vue 3 on port **8091**. V3 is a clean rewrite: all audio lives in a content-addressed
+store, and all state is JSON — see `soundboard/SCHEMA.md`.
 
-- **Scenes** — one folder + `config.json` per soundscape. Audio is grouped into **elements**: loop
-  (continuous ambience), random (auto-triggered at bounded intervals), or one-shot (manual effect).
-- **Library** — reusable groups in `soundboard/library.json`, with audio under
-  `syrinscape/_library/`. Scenes add library groups as **includes**, so editing a group updates every
-  scene that uses it.
-- **Palette** — pin library groups for always-available playback and MIDI control.
-- **Review** — imported packs without authoritative XML are marked `reviewed: false`; use this tab to
-  bulk reclassify, set random intervals/reverb, merge tracks, or promote groups to the library.
+- **Library** — reusable **groups** of one or more sounds, with a category, tags, playback
+  selection, defaults, and an optional kind hint. Audio is stored once by content hash under
+  `soundboard/sounds/<2>/<hash>.<ext>`; metadata lives in `soundboard/data/catalog.json` and
+  `soundboard/data/library.json`.
+- **Scenes** — a scene is a set of **tracks** that reference library groups, plus moods and local
+  MIDI bindings. Each track owns its authoritative kind (`loop`, `random`, or `oneshot`) and its
+  scene-wide order. Scene files live in `soundboard/data/scenes/`; there is no scene-local audio.
+- **Moods** — sparse per-track performance presets for enabled state, gain, reverb, pan, and random
+  trigger interval. Selecting a mood never starts or stops transport. Every scene has a default
+  mood; a new mood starts from group defaults, while **Duplicate mood** copies an existing preset.
+- **Palette** — globally pinned library groups for quick access, with optional per-entry gain.
+  Palette items never auto-start; they always require an explicit trigger.
+- **Edit vs perform** — edit mode is desktop/mouse-oriented for browsing, drag-and-drop, grouping,
+  moods, and bindings. Perform mode is touch/MIDI-first and exposes scene/mood selection, transport,
+  master and bus volumes, and trigger/palette pads.
+- **Import and curation** — the one-off importer hashes and imports the source tree, writes the
+  catalog, and proposes library groups. The curation view supports search, preview, categories,
+  tags, merge/split, and bulk edit; mark import done when the library is verified.
+- **MIDI** — explicit global (stop, master/bus/palette volume, palette trigger, open scene) and
+  scene-local (track trigger/volume, mood select, scene transport) actions. Local bindings do not
+  silently shadow global ones; collisions require explicit confirmation.
 
-On first run, import existing Syrinscape packs with `node soundboard/import.js` (it reads each pack's
-`.xml` and writes a `config.json`; campaign packs with multiple chapters are split into a subfolder
-per chapter). Packs without real XML use size/name heuristics and are flagged for review.
-
-If you are upgrading existing v1 data, run the migration **once** before starting the v2 server:
+On first run, import existing audio into the v3 store:
 
 ```bash
-node soundboard/tools/migrate-v2.js --dry-run   # inspect
-node soundboard/tools/migrate-v2.js             # JSON backup, then write v2 files
+cd soundboard
+npm run import-v3 -- --dry-run   # scan and preview; writes nothing
+npm run import-v3                # copy/link blobs, write catalog, propose groups
 ```
 
-- Set the audio folder with `OLEA_AUDIO_DIR=/path/to/folder ./soundboard/start.sh`.
-- MIDI mappings live in each scene's `config.json` (local), `soundboard/global.json` (app-level), and
-  palette entries. Assign them in the UI via "learn" mode. Local scene bindings win over global ones.
-- **Edit** (scene header): add from the library, create custom groups, merge/reclassify selected
-  elements, promote to the library, hide/delete, and edit moods.
-- Any scene can be **disabled**, **renamed**, or **deleted** (removes the folder and its files).
+The default source is `soundboard/syrinscape/`, with data in `soundboard/data/` and blobs in
+`soundboard/sounds/`. Use `--source <dir>` for another tree and `--no-duration` to skip `ffprobe`.
+`--no-groups` imports blobs/catalog only and `--limit <n>` caps files; `--help` lists everything.
+Re-running the importer is safe and idempotent. It never deletes or modifies source audio: verify
+the catalog and library, then remove the old audio tree yourself. Old v2 `config.json`/`library.json`
+data is deprecated and is not read or migrated.
+
+- Override paths with `OLEA_DATA_DIR` / `OLEA_SOUNDS_DIR`, and the port with `PORT`.
+- MIDI learn is available in the UI. Local scene bindings are checked against global bindings and
+  cannot silently override them.
 - **Web MIDI** works in Chrome/Edge out of the box. In Firefox, enable `dom.webmidi.enabled` in
   `about:config` or install a Web MIDI add-on.
 
@@ -93,9 +108,7 @@ cd soundboard && npm install && npm run dev          # frontend dev (Vite proxie
 cd soundboard && npm run build                       # rebuild into soundboard/dist/
 cd soundboard && npm test                            # Node test runner
 node soundboard/server.js                            # or ./soundboard/start.sh
-node soundboard/tools/audit-syrinscape.js            # read-only pack/config audit
-node soundboard/tools/reclassify.js                  # dry-run heuristic reclassification
-node soundboard/tools/promote-library.js manifest.json [--apply]
+cd soundboard && npm run import-v3 -- --help         # one-off content-addressed importer
 ```
 
 ## Layout
@@ -109,16 +122,16 @@ equipment/       # equipment manager (PocketBase + Vue 3)
   pocketbase     #   the PocketBase binary (downloaded by download-pocketbase.sh)
   pb_data/       #   runtime database + storage (gitignored)
 soundboard/      # soundboard (Express server.js + Vue 3 frontend)
-  src/           #   Vue 3 source (scenes, library, palette, review)
-  lib/           #   schema, resolution, heuristics, edit, library service
-  tools/         #   audit, migrate-v2, reclassify, promote-library
+  src/           #   Vue 3 source (edit mode, perform mode, import/curation)
+  lib/v3/        #   schema, resolution, ordering, bindings, catalog, storage, store, import
+  tools/         #   import-v3.js (one-off content-addressed importer)
   test/          #   node --test suites
-  import.js      #   Syrinscape XML -> config.json importer
-  SCHEMA.md      #   the config.json / library.json / global.json schema
-  syrinscape/    #   audio library (gitignored, user-provided)
-  library.json   #   shared library groups (gitignored, runtime-created)
-  global.json    #   buses, palette, global MIDI (gitignored, runtime-created)
-  server.js      #   Express backend
+  data/          #   runtime JSON: catalog, library, global, scenes/ (gitignored)
+  sounds/        #   content-addressed audio blobs (gitignored)
+  syrinscape/    #   old source audio tree (gitignored, user-provided; import source)
+  SCHEMA.md      #   v3 catalog/library/scene/global schema and workflow
+  server.js      #   Express API + /audio/<hash>
+  start.sh       #   start the soundboard server
 start.sh         # starts both apps
 ```
 

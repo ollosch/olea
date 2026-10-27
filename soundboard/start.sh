@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the Olea soundboard (Express server: frontend + audio library).
+# Start the Olea soundboard (Express server: frontend + content-addressed store).
 set -euo pipefail
 cd "$(dirname "$0")"
 
