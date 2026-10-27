@@ -134,6 +134,10 @@ label {
   gap: 0.5rem;
 }
 
+.row > select {
+  width: auto;
+}
+
 .grow {
   flex: 1;
 }
