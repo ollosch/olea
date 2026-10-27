@@ -27,7 +27,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../pb_public',
+    outDir: './pb_public',
     emptyOutDir: true,
   },
 })

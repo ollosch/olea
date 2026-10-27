@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the Olea equipment manager (PocketBase serves API + built frontend).
+# Start the Olea inventory manager (PocketBase serves API + built frontend).
 set -euo pipefail
 cd "$(dirname "$0")"
 

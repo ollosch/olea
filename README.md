@@ -2,7 +2,7 @@
 
 Two small, local-only tools for running a TTRPG campaign (DnD, Numenera, Call of Cthulhu, …):
 
-1. **Equipment & money manager** — PocketBase + Vue 3, port **8090** (`equipment/`).
+1. **Inventory & money manager** — PocketBase + Vue 3, port **8090** (`inventory/`).
 2. **Soundboard** — Express + Vue 3, port **8091** (`soundboard/`). Plays Syrinscape-style
    soundscapes (looping ambience + one-shot effects) and can be driven by a MIDI controller
    (e.g. AKAI MPK Mini: pads/keys → triggers, knobs → volume).
@@ -50,27 +50,32 @@ or turn the knob. Note actions accept notes; volume actions accept CC only.
 ## Equipment & money manager
 
 - **Roles:** GM and Player. Roles are per-game — you can be GM in one game and a Player in another.
-- **Games:** support multiple independent groups. Each game defines its own currencies
-  (e.g. DnD's cp/sp/gp/pp, Numenera's shin, CoC's cents/dollars).
-- **Items:** the GM maintains a shared catalog. Players hold *instances* of those items, which can
-  be a single item, a stack (quantity), or a charge-based item (uses).
-- **Money:** each player has a wallet per game; transfers work between players, and the GM can
-  give or take money from anyone. Totals are shown raw **and** as an optimized "fewest coins" value.
+  A GM has no inventory or wallet in that game.
+- **Systems:** shared catalogs of currencies and items (e.g. DnD's cp/sp/gp/pp, Numenera's shin,
+  CoC's cents/dollars). Every game references a system, and all games using it share the same
+  catalog. Systems are editable by any GM.
+- **Games:** support multiple independent groups. Each game references one system.
+- **Items:** players hold *instances* of catalog items, which can be a single item, a stack
+  (quantity), or a charge-based item (uses). Items live either on the player's person or in their
+  stash.
+- **Money:** each player has a wallet per game, split between person and stash. Transfers work
+  between players, and the GM can give or take money from anyone. Totals are shown raw **and** as
+  an optimized "fewest coins" value.
 - **Real-time:** changes appear on every connected device instantly.
 - **Print:** a player's inventory + cash can be printed as a clean sheet (items with weight/value,
   no descriptions or images).
 
 ## How it works
 
-The equipment app is a single **PocketBase** binary (embedded SQLite, real-time subscriptions, file
-storage) that also serves the built **Vue 3** frontend (in `equipment/pb_public/`). Identity is
+The inventory app is a single **PocketBase** binary (embedded SQLite, real-time subscriptions, file
+storage) that also serves the built **Vue 3** frontend (in `inventory/pb_public/`). Identity is
 name-only ("pick a name"), which is fine for a trusted home network — there is no password system.
 
 ## Running it
 
 ```bash
 ./start.sh                    # starts BOTH apps
-./equipment/start.sh          # equipment manager → http://0.0.0.0:8090
+./inventory/start.sh          # inventory manager → http://0.0.0.0:8090
 ./soundboard/start.sh         # soundboard       → http://0.0.0.0:8091
 ```
 
@@ -78,10 +83,10 @@ Open `http://localhost:8090` / `http://localhost:8091` on the host, or
 `http://<host-ip>:<port>` from another device on the same network. Find the host IP with
 `ip addr` / `ipconfig`.
 
-- Equipment data (SQLite + uploaded images) lives in `equipment/pb_data/` — back it up to back up
+- Inventory data (SQLite + uploaded images) lives in `inventory/pb_data/` — back it up to back up
   everything.
 - First run: the PocketBase admin dashboard is optional. To create an admin account run
-  `./equipment/pocketbase superuser upsert EMAIL PASSWORD` and open `http://localhost:8090/_/`.
+  `./inventory/pocketbase superuser upsert EMAIL PASSWORD` and open `http://localhost:8090/_/`.
 
 ## Soundboard
 
@@ -146,12 +151,12 @@ each element's sound set. It is idempotent: re-running skips scenes that already
 
 ## Development
 
-Equipment manager:
+Inventory manager:
 
 ```bash
-cd equipment/frontend && npm install && npm run dev  # frontend dev (Vite proxies /api)
-cd equipment/frontend && npm run build               # rebuild into equipment/pb_public/
-./equipment/pocketbase serve --http=127.0.0.1:8090 --dev   # backend (terminal 2)
+cd inventory && npm install && npm run dev          # frontend dev (Vite proxies /api)
+cd inventory && npm run build                       # rebuild into inventory/pb_public/
+./inventory/pocketbase serve --http=127.0.0.1:8090 --dev   # backend (terminal 2)
 ```
 
 Soundboard:
@@ -167,8 +172,9 @@ cd soundboard && npm run import-v3 -- --help         # one-off content-addressed
 ## Layout
 
 ```
-equipment/       # equipment manager (PocketBase + Vue 3)
-  frontend/      #   Vue 3 source (Vite + Pinia + Vue Router, plain JS)
+inventory/       # inventory manager (PocketBase + Vue 3)
+  src/           #   Vue 3 source (Vite + Pinia + Vue Router, plain JS)
+  public/        #   static assets
   pb_hooks/      #   backend routes + logic (PocketBase JS hooks)
   pb_migrations/ #   database schema + access rules
   pb_public/     #   built frontend (generated by `npm run build`)
@@ -191,5 +197,5 @@ start.sh         # starts both apps
 ## Re-downloading PocketBase
 
 ```bash
-./equipment/download-pocketbase.sh
+./inventory/download-pocketbase.sh
 ```

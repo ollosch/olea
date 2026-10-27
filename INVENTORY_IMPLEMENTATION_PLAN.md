@@ -12,20 +12,20 @@ Also do NOT migrate any data. The app is NOT live yet. All data can be deleted.
 
 - Branch: `redesign`
 - Work already changed:
-  - `equipment/pb_migrations/1791200000_init.js` — rewritten for systems, shared catalogs and stash.
-  - `equipment/pb_hooks/utils.js` — rewritten helpers (roles, wallets by location, system import).
-  - `equipment/pb_hooks/main.pb.js` — rewritten routes/hooks (game delete, systems, stash, roles).
+  - `inventory/pb_migrations/1791200000_init.js` — rewritten for systems, shared catalogs and stash.
+  - `inventory/pb_hooks/utils.js` — rewritten helpers (roles, wallets by location, system import).
+  - `inventory/pb_hooks/main.pb.js` — rewritten routes/hooks (game delete, systems, stash, roles).
   - The temporary `1793099500_created_updated_wallet_game.js` migration was deleted.
 - Migration was tested on an empty temp DB (`/tmp/opencode/olea-new`) and applied cleanly.
 - The rewritten API endpoints have **not** been fully end-to-end tested yet. The interrupted test
   script was going to cover: create game with inline system, add players, give/take items, stash
   moves, money transfers, permissions, cascade delete, JSON import.
-- `equipment/pb_data/` still contains the old schema/data and migration history. It must be reset.
+- `inventory/pb_data/` still contains the old schema/data and migration history. It must be reset.
 - A PocketBase dev server may still be running on port `8090` against that stale DB. Stop it before
   resetting. (It was PID 606127 at the time of writing.)
 - Frontend is still the old code: game-scoped items/currencies, no systems, no stash, GM treated as
   a member with inventory/wallet.
-- `equipment/frontend/CONTRACT.md` is now outdated. Update or delete it when the frontend is done.
+- `inventory/CONTRACT.md` is now outdated. Update or delete it when the frontend is done.
 
 ## Decisions confirmed by the user
 
@@ -79,7 +79,7 @@ Cascade behavior:
 
 ## Implemented backend API/hooks
 
-Routes in `equipment/pb_hooks/main.pb.js`:
+Routes in `inventory/pb_hooks/main.pb.js`:
 
 - `POST /api/login` — unchanged, name-only login.
 - `POST /api/games` — body either `{ name, description?, systemId }` or
@@ -108,7 +108,7 @@ Record hooks:
 - Standard collection CRUD is used for systems/currencies/items; custom routes are used for
   games/members/inventory/money because of permission logic.
 
-Helpers in `equipment/pb_hooks/utils.js`:
+Helpers in `inventory/pb_hooks/utils.js`:
 - `requireMember`, `requireGM`, `requirePlayer`, `requireGlobalGM`, `isGlobalGM`
 - `findWallet` / `ensureWallet` / `adjustWallet` with `location`
 - `createInventoryEntry` with `location`
@@ -196,20 +196,20 @@ Helpers in `equipment/pb_hooks/utils.js`:
 1. Stop the old server on `8090`.
 2. Wipe the stale database (allowed; no data to preserve):
    ```bash
-   rm -rf equipment/pb_data
+   rm -rf inventory/pb_data
    ```
 3. Start PocketBase so the new init migration runs:
    ```bash
-   ./equipment/start.sh
+   ./inventory/start.sh
    ```
 4. Rebuild the frontend:
    ```bash
-   cd equipment/frontend && npm run build
+   cd inventory && npm run build
    ```
    `pb_public/` is served by PocketBase, so the build must happen before/while the server serves it.
 5. But the dev DB can instead be reset with the built-in migration check:
    ```bash
-   ./equipment/pocketbase migrate up
+   ./inventory/pocketbase migrate up
    ```
 6. End-to-end test:
    - Login as a brand-new name.
@@ -231,8 +231,8 @@ Recommended final layout (agreed direction, confirm exact names in the new promp
 
 ```text
 olea/
-  inventory/            # renamed from equipment/
-    src/                # Vue source, promoted from equipment/frontend/src
+  inventory/            # renamed from inventory/
+    src/                # Vue source, promoted from inventory/src
     public/
     index.html
     package.json
@@ -261,7 +261,7 @@ Rename steps (do this **before** frontend edits to avoid updating paths twice):
 - Update `.gitignore` paths.
 - Update `README.md` layout and commands.
 - Update this plan’s paths.
-- Update/replace `inventory/CONTRACT.md` (currently `equipment/frontend/CONTRACT.md`), which
+- Update/replace `inventory/CONTRACT.md` (currently `inventory/CONTRACT.md`), which
   describes the old data model. Either delete it or rewrite it for systems/shared catalogs, GM vs
   player roles, stash locations, and the new store/actions.
 
@@ -271,4 +271,4 @@ Start with something like:
 
 > Read `INVENTORY_IMPLEMENTATION_PLAN.md`. The backend schema/hooks are already rewritten but not
 > fully tested. Do the folder rename first, then update the frontend, reset the DB, rebuild, and
-> test end-to-end. The old `equipment/frontend/CONTRACT.md` is obsolete.
+> test end-to-end. The old `inventory/CONTRACT.md` is obsolete.

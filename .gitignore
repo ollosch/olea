@@ -1,10 +1,10 @@
-# Equipment app
-equipment/pb_data/
-equipment/pocketbase
-equipment/pb_public/
-equipment/frontend/node_modules/
-equipment/frontend/dist/
-equipment/frontend/dev-dist/
+# Inventory app
+inventory/pb_data/
+inventory/pocketbase
+inventory/pb_public/
+inventory/node_modules/
+inventory/dist/
+inventory/dev-dist/
 
 # Soundboard
 soundboard/node_modules/
