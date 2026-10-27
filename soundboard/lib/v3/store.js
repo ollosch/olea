@@ -366,6 +366,19 @@ export function createStore({ dataDir, soundsDir } = {}) {
     return map
   }
 
+  function lookupSounds(ids) {
+    if (!Array.isArray(ids)) return []
+    const seen = new Set()
+    const out = []
+    for (const id of ids) {
+      if (typeof id !== 'string' || seen.has(id)) continue
+      seen.add(id)
+      const sound = findSound(state.catalog, id)
+      if (sound) out.push(sound)
+    }
+    return out
+  }
+
   function searchSounds(options = {}) {
     const opts = isObj(options) ? options : {}
     return searchCatalog(state.catalog, {
@@ -988,6 +1001,7 @@ export function createStore({ dataDir, soundsDir } = {}) {
     warnings,
     stats,
     searchSounds,
+    lookupSounds,
     setSoundDuration,
     addSounds,
     saveCatalog,

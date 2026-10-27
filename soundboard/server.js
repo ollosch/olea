@@ -112,6 +112,18 @@ export function createApp(store, options = {}) {
 
   app.get('/api/catalog/stats', (req, res) => res.json(store.stats()))
 
+  app.get('/api/sounds', (req, res) => {
+    const raw = req.query.ids
+    const ids = Array.isArray(raw)
+      ? raw.flatMap((value) => String(value).split(','))
+      : String(raw ?? '').split(',')
+    const clean = ids.map((id) => id.trim()).filter(Boolean)
+    if (clean.length > 1000) {
+      return res.status(400).json({ error: 'At most 1000 sound ids per request' })
+    }
+    res.json({ sounds: store.lookupSounds(clean) })
+  })
+
   app.get('/api/sounds/:id', (req, res) => {
     const sound = findSound(store.catalog(), req.params.id)
     if (!sound) return res.status(404).json({ error: 'Sound not found' })
