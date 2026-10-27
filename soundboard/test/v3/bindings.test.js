@@ -37,6 +37,12 @@ test('normalizeMidiAction enforces scope, action shape, and ids', () => {
     bus: 'random',
   })
   assert.equal(normalizeMidiAction(ACTION.busVolume('effects'), 'global'), null)
+  assert.deepEqual(normalizeMidiAction(ACTION.sceneToggle(), 'global'), {
+    type: 'sceneToggle',
+  })
+  assert.deepEqual(normalizeMidiAction(ACTION.sceneToggle(), 'local'), {
+    type: 'sceneToggle',
+  })
   assert.deepEqual(normalizeMidiAction(ACTION.trackTrigger('t1'), 'local'), {
     type: 'trackTrigger',
     trackId: 't1',

@@ -282,6 +282,7 @@ Actions are explicit; scope is not inferred from the key type.
 | Palette trigger | note | `{ "type": "paletteTrigger", "paletteId": "..." }` |
 | Palette volume | CC | `{ "type": "paletteVolume", "paletteId": "..." }` |
 | Open scene | note | `{ "type": "openScene", "sceneId": "..." }` |
+| Play/stop active scene | note | `{ "type": "sceneToggle" }` |
 
 **Scene-local** (`scene.midi`):
 
@@ -290,10 +291,13 @@ Actions are explicit; scope is not inferred from the key type.
 | Track trigger (toggle) | note | `{ "type": "trackTrigger", "trackId": "..." }` |
 | Track volume | CC | `{ "type": "trackVolume", "trackId": "..." }` |
 | Mood select | note | `{ "type": "moodSelect", "moodId": "..." }` |
-| Scene transport toggle | note | `{ "type": "sceneToggle" }` |
 
+- Legacy scene-local `{ "type": "sceneToggle" }` bindings are still accepted when loading old v2
+  imports, but the UI now creates play/stop as a global binding.
 - Normalization drops wrong-scope actions, unknown actions, note/CC type mismatches, and missing
   target IDs. CC values `0..127` map to `0..1`.
+- In the UI, global bindings live in the top-bar MIDI panel, track bindings are in the selected
+  track inspector, and mood keys are in the mood bar.
 - Trigger actions **toggle**: loop/random start or stop; a one-shot stops if already playing and
   otherwise plays. Different tracks may overlap, but at most one sound per track is active.
 - **Shadowing is forbidden.** The same physical key may not be bound globally and locally without

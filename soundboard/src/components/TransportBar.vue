@@ -10,6 +10,7 @@ import {
   setBus,
   setMode,
   cancelLearn,
+  toggleMidiPanel,
 } from '../store.js'
 import { midi, connectMidi } from '../midi.js'
 
@@ -124,6 +125,13 @@ function onRename(event) {
         {{ midi.connected ? `${midi.inputs.length} MIDI` : 'MIDI off' }}
       </span>
       <button v-if="!midi.connected" class="btn-xs" @click="connectMidi(store)">Connect</button>
+      <button
+        class="btn-xs"
+        title="Global MIDI bindings"
+        @click="toggleMidiPanel"
+      >
+        MIDI bindings
+      </button>
       <button
         v-if="store.learning"
         class="btn-xs learning"

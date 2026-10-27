@@ -18,7 +18,7 @@ const props = defineProps({
 })
 
 const playback = computed(() => engine.state.tracks[props.track.trackId] || null)
-const active = computed(() => engine.isTrackActive(props.track.trackId))
+const active = computed(() => Boolean(playback.value))
 const hasMidi = computed(() => trackHasMidi(props.track.trackId))
 const percent = computed(() => {
   const item = playback.value

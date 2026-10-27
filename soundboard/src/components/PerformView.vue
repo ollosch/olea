@@ -20,7 +20,7 @@ const moods = computed(() => store.activeScene?.moods || [])
 const showMood = computed(() => moods.value.length > 1)
 
 function active(trackId) {
-  return engine.isTrackActive(trackId)
+  return Boolean(engine.state.tracks[trackId])
 }
 
 function trackProgress(trackId) {

@@ -133,7 +133,7 @@ async function unlock() {
   return state.unlocked
 }
 
-function rampTo(param, value, seconds = 0.08) {
+function rampTo(param, value, seconds = 0.03) {
   if (!ctx || !param) return
   const t = ctx.currentTime
   param.cancelScheduledValues(t)
@@ -141,7 +141,7 @@ function rampTo(param, value, seconds = 0.08) {
   param.linearRampToValueAtTime(Number.isFinite(value) ? value : 0, t + seconds)
 }
 
-function ramp(param, value, seconds = 0.08) {
+function ramp(param, value, seconds = 0.03) {
   rampTo(param, clamp01(value), seconds)
 }
 

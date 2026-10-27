@@ -85,6 +85,7 @@ export const store = reactive({
   learning: null,
   collision: null,
   bindingsOverview: null,
+  showMidiPanel: false,
   lastSavedAt: null,
   librarySelection: [],
   editingGroupId: null,
@@ -400,6 +401,7 @@ export async function refreshScenes() {
 export async function openScene(id) {
   if (!id) return null
   await flushSave()
+  transportGeneration += 1
   engine.stopScene()
   store.transportRunning = false
   store.sceneLoading = true
@@ -1260,21 +1262,32 @@ export async function triggerPalette(paletteId) {
 // ---------------------------------------------------------------------------
 // Transport / volumes
 
+let transportGeneration = 0
+
 export async function play() {
   const scene = store.activeScene
   if (!scene) return
+  const generation = ++transportGeneration
+  store.transportRunning = true
+  engine.unlock()
   await ensureSceneSounds(scene)
+  if (generation !== transportGeneration || store.activeScene?.id !== scene.id) return
   const plan = buildPlan(store.selectedMoodId)
   const initial = initialTransportPlan(plan)
   engine.stopScene()
-  engine.unlock()
   let started = 0
   for (const track of initial.startLoops) if (engine.startTrack(track)) started += 1
   for (const track of initial.startRandoms) if (engine.startTrack(track)) started += 1
-  store.transportRunning = started > 0
+  if (started === 0) {
+    store.transportRunning = false
+    if (initial.startLoops.length + initial.startRandoms.length === 0) {
+      setStatus('This mood has no enabled loops or random tracks', 'error')
+    }
+  }
 }
 
 export function stop() {
+  transportGeneration += 1
   engine.stopScene()
   store.transportRunning = false
 }
@@ -1285,6 +1298,7 @@ export function toggleTransport() {
 }
 
 export function stopAll() {
+  transportGeneration += 1
   engine.stopAll()
   store.transportRunning = false
   setStatus('Stopped all playback')
@@ -1504,6 +1518,35 @@ export function trackVolumeHasMidi(trackId) {
   )
 }
 
+export function bindingKeyFor(scope, action) {
+  const row = bindingRows(scope).find((item) => sameTarget(item.action, action))
+  return row?.key || ''
+}
+
+export function trackBindingKey(trackId, type = 'trigger') {
+  const action =
+    type === 'volume'
+      ? { type: 'trackVolume', trackId }
+      : { type: 'trackTrigger', trackId }
+  return bindingKeyFor('local', action)
+}
+
+export function moodBindingKey(moodId) {
+  return bindingKeyFor('local', { type: 'moodSelect', moodId })
+}
+
+export function openMidiPanel() {
+  store.showMidiPanel = true
+}
+
+export function closeMidiPanel() {
+  store.showMidiPanel = false
+}
+
+export function toggleMidiPanel() {
+  store.showMidiPanel = !store.showMidiPanel
+}
+
 export function keyLabel(key) {
   const parsed = parseBindingKey(key)
   if (!parsed) return key
@@ -1551,7 +1594,7 @@ export function actionLabel(action) {
       return `Mood: ${mood?.name || action.moodId}`
     }
     case 'sceneToggle':
-      return 'Play/stop scene'
+      return 'Play/stop active scene'
     default:
       return action.type
   }

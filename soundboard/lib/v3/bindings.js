@@ -34,6 +34,7 @@ const GLOBAL_ACTIONS = new Set([
   'paletteTrigger',
   'paletteVolume',
   'openScene',
+  'sceneToggle',
 ])
 
 const LOCAL_ACTIONS = new Set(['trackTrigger', 'trackVolume', 'moodSelect', 'sceneToggle'])

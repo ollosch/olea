@@ -1,4 +1,5 @@
 <script setup>
+import { computed } from 'vue'
 import {
   store,
   selectedMood,
@@ -8,7 +9,23 @@ import {
   renameMood,
   deleteMood,
   setDefaultMood,
+  beginLearn,
+  moodBindingKey,
+  isLearning,
+  keyLabel,
+  removeBinding,
 } from '../store.js'
+
+const moodAction = computed(() =>
+  selectedMood.value ? { type: 'moodSelect', moodId: selectedMood.value.id } : null
+)
+const moodKey = computed(() =>
+  selectedMood.value ? moodBindingKey(selectedMood.value.id) : ''
+)
+
+function learnMood() {
+  if (moodAction.value) beginLearn('local', moodAction.value)
+}
 
 function rename(event) {
   if (!selectedMood.value) return
@@ -57,6 +74,26 @@ function removeSelected() {
       >
         Duplicate
       </button>
+      <span v-if="selectedMood" class="mood-midi row gap-xs">
+        <span v-if="moodKey" class="badge">{{ keyLabel(moodKey) }}</span>
+        <span v-else class="small muted">mood MIDI: unbound</span>
+        <button
+          class="btn-xs"
+          :class="{ learning: moodAction && isLearning('local', moodAction) }"
+          title="Learn a note for this mood"
+          @click="learnMood"
+        >
+          Learn mood key
+        </button>
+        <button
+          v-if="moodKey"
+          class="btn-xs danger"
+          title="Remove mood binding"
+          @click="removeBinding('local', moodKey)"
+        >
+          ×
+        </button>
+      </span>
       <button
         class="btn-sm"
         :disabled="!selectedMood || selectedMood.id === store.activeScene.defaultMoodId"

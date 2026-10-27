@@ -17,10 +17,12 @@ import ImportView from './components/ImportView.vue'
 import CollisionDialog from './components/CollisionDialog.vue'
 import GroupEditor from './components/GroupEditor.vue'
 import StatusBar from './components/StatusBar.vue'
+import BindingsPanel from './components/BindingsPanel.vue'
 
 function onKeydown(event) {
   if (event.key !== 'Escape') return
   if (store.collision) cancelCollision()
+  else if (store.showMidiPanel) store.showMidiPanel = false
   else if (store.editingGroupId) store.editingGroupId = null
   else if (store.learning) cancelLearn()
 }
@@ -64,5 +66,6 @@ onBeforeUnmount(() => {
     <StatusBar />
     <CollisionDialog v-if="store.collision" />
     <GroupEditor v-if="store.editingGroupId" />
+    <BindingsPanel v-if="store.showMidiPanel" />
   </div>
 </template>
