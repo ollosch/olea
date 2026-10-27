@@ -62,33 +62,6 @@ function percent(item) {
       </label>
     </header>
 
-    <section class="perform-mix">
-      <label class="perform-fader">
-        <span>Master</span>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          :value="store.master"
-          @input="setMaster(Number($event.target.value))"
-        />
-        <strong>{{ Math.round(store.master * 100) }}</strong>
-      </label>
-      <label v-for="bus in ['loop', 'random', 'oneshot']" :key="bus" class="perform-fader">
-        <span>{{ bus === 'loop' ? 'Loops' : bus === 'random' ? 'Random' : 'One-shots' }}</span>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          :value="store.buses[bus]"
-          @input="setBus(bus, Number($event.target.value))"
-        />
-        <strong>{{ Math.round(store.buses[bus] * 100) }}</strong>
-      </label>
-    </section>
-
     <div class="perform-columns">
       <section class="perform-column perform-tracks">
         <h2>Tracks</h2>
