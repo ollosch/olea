@@ -122,4 +122,15 @@ function confirmRemove() {
 
     <button class="btn-xs danger" title="Remove track from scene" @click.stop="remove">×</button>
   </div>
+
+  <Modal v-if="confirmingRemove" title="Remove track" @close="confirmingRemove = false">
+    <p>
+      Remove “{{ track.groupName }}” from this scene? The library group itself is not deleted.
+    </p>
+
+    <template #actions>
+      <button class="btn-sm" @click="confirmingRemove = false">Cancel</button>
+      <button class="btn-primary danger" @click="confirmRemove">Remove track</button>
+    </template>
+  </Modal>
 </template>
