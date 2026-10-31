@@ -8,6 +8,9 @@ import type { CatalogRecord } from '../lib/catalog'
 type Game = { id: string; name: string; system: string; expand?: { system?: { key: string; name: string } } }
 type Encounter = { id: string; game: string; name: string }
 type Entry = { id: string; encounter: string; creature: string; name: string; quantity: number; notes: string; custom: boolean; expand?: { creature?: CatalogRecord } }
+type Character = { id: string; name: string; game: string }
+type Combat = { id: string; encounter: string; active: boolean; round: number; turn: number; tie_order: string; name: string; visible: boolean; show_initiative: boolean; show_enemy_names: boolean; show_hp: boolean; show_conditions: boolean }
+type Combatant = { id: string; combat: string; character: string; prepared: string; name: string; enemy: boolean; current_hp: number; max_hp: number; hp_known: boolean; initiative: number; initiative_known: boolean; initiative_modifier: number; initiative_modifier_override: boolean; conditions: string; notes: string; sort_order: number; expand?: { character?: Character; prepared?: Entry } }
 
 const route = useRoute()
 const gameId = computed(() => String(route.params.gameId))
@@ -27,6 +30,23 @@ const customName = ref('')
 const customQuantity = ref(1)
 const customNotes = ref('')
 const entryDrafts = ref<Record<string, { quantity: number; notes: string }>>({})
+const combat = ref<Combat | null>(null)
+const combatants = ref<Combatant[]>([])
+const gameCharacters = ref<Character[]>([])
+const addCharactersOpen = ref(false)
+const newParticipantName = ref('')
+const combatDrafts = ref<Record<string, { initiative: number | ''; current_hp: number | ''; max_hp: number | ''; conditions: string; notes: string }>>({})
+const orderedCombatants = computed(() => {
+  const tieOrder = combat.value?.tie_order ? JSON.parse(combat.value.tie_order) as string[] : []
+  return [...combatants.value].sort((a, b) => {
+    if (a.initiative_known !== b.initiative_known) return a.initiative_known ? -1 : 1
+    if (a.initiative_known && b.initiative_known && a.initiative !== b.initiative) return b.initiative - a.initiative
+    const ai = tieOrder.indexOf(a.id), bi = tieOrder.indexOf(b.id)
+    if (ai >= 0 || bi >= 0) return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi)
+    return a.sort_order - b.sort_order || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
+  })
+})
+const activeCombatant = computed(() => orderedCombatants.value[combat.value?.turn ?? 0] ?? null)
 
 onMounted(load)
 
@@ -42,6 +62,7 @@ async function load() {
     encounters.value = encounterRecords
     if (!encounterRecords.some((entry) => entry.id === selectedId.value)) selectedId.value = encounterRecords[0]?.id ?? ''
     await loadEntries()
+    await loadCombat()
   } catch { error.value = 'Encounters could not be loaded. Check the connection and try again.' }
   finally { loading.value = false }
 }
@@ -54,9 +75,110 @@ async function loadEntries() {
   entryDrafts.value = Object.fromEntries(entries.value.map((entry) => [entry.id, { quantity: entry.quantity, notes: entry.notes ?? '' }]))
 }
 
+async function loadCombat() {
+  if (!selectedId.value) { combat.value = null; combatants.value = []; return }
+  const active = await pb.collection('combats').getList<Combat>(1, 1, { filter: pb.filter('encounter = {:encounter} && active = true', { encounter: selectedId.value }), sort: '-updated', requestKey: null })
+  combat.value = active.items[0] ?? null
+  if (combat.value) {
+    combatants.value = await pb.collection('combatants').getFullList<Combatant>({ filter: pb.filter('combat = {:combat}', { combat: combat.value.id }), sort: 'sort_order,name', expand: 'character,prepared', requestKey: null })
+    syncCombatDrafts()
+  } else combatants.value = []
+  gameCharacters.value = game.value ? await pb.collection('characters').getFullList<Character>({ filter: pb.filter('game = {:game}', { game: game.value.id }), sort: 'name', requestKey: null }) : []
+}
+
+function syncCombatDrafts() {
+  combatDrafts.value = Object.fromEntries(combatants.value.map((entry) => [entry.id, { initiative: entry.initiative_known ? entry.initiative : '', current_hp: entry.hp_known ? entry.current_hp : '', max_hp: entry.hp_known ? entry.max_hp : '', conditions: entry.conditions ?? '', notes: entry.notes ?? '' }]))
+}
+
+async function startCombat() {
+  if (!selected.value || !entries.value.length) return
+  try {
+    const created = await pb.collection('combats').create<Combat>({ encounter: selected.value.id, active: true, round: 1, turn: 0, tie_order: '[]', name: selected.value.name })
+    combat.value = created
+    for (const [index, entry] of entries.value.entries()) {
+      for (let count = 0; count < entry.quantity; count++) {
+        const label = entry.quantity > 1 ? `${entry.name} ${count + 1}` : entry.name
+        await pb.collection('combatants').create({ combat: created.id, prepared: entry.id, name: label, enemy: true, notes: entry.notes ?? '', sort_order: index * 100 + count })
+      }
+    }
+    await loadCombat()
+  } catch { error.value = 'Combat could not be started.' }
+}
+
+async function addCharacter(character: Character) {
+  if (!combat.value || combatants.value.some((entry) => entry.character === character.id)) return
+  try {
+    await pb.collection('combatants').create({ combat: combat.value.id, character: character.id, name: character.name, enemy: false, sort_order: combatants.value.length })
+    await loadCombat()
+  } catch { error.value = 'The character could not be added to combat.' }
+}
+
+async function addCustomCombatant() {
+  if (!combat.value || !newParticipantName.value.trim()) return
+  try {
+    await pb.collection('combatants').create({ combat: combat.value.id, name: newParticipantName.value.trim(), enemy: false, sort_order: combatants.value.length })
+    newParticipantName.value = ''; await loadCombat()
+  } catch { error.value = 'The participant could not be added.' }
+}
+
+async function saveCombatant(participant: Combatant) {
+  const draft = combatDrafts.value[participant.id]
+  if (!draft) return
+  if (draft.initiative !== '' && !Number.isFinite(Number(draft.initiative))) { error.value = 'Initiative must be a number.'; return }
+  const hpKnown = draft.current_hp !== '' || draft.max_hp !== ''
+  const currentHP = draft.current_hp === '' ? 0 : Number(draft.current_hp)
+  const maxHP = draft.max_hp === '' ? 0 : Number(draft.max_hp)
+  if (hpKnown && (!Number.isFinite(currentHP) || !Number.isFinite(maxHP) || currentHP < 0 || maxHP < 0)) { error.value = 'HP values must be nonnegative numbers.'; return }
+  try {
+    await pb.collection('combatants').update(participant.id, { initiative: draft.initiative === '' ? 0 : Number(draft.initiative), initiative_known: draft.initiative !== '', current_hp: currentHP, max_hp: maxHP, hp_known: hpKnown, conditions: draft.conditions, notes: draft.notes })
+    await loadCombat()
+  } catch { error.value = 'The combatant could not be saved.' }
+}
+
+async function removeCombatant(participant: Combatant) {
+  try { await pb.collection('combatants').delete(participant.id); await loadCombat() }
+  catch { error.value = 'The combatant could not be removed.' }
+}
+
+async function updateCombat(fields: Partial<Combat>) {
+  if (!combat.value) return
+  try { combat.value = await pb.collection('combats').update<Combat>(combat.value.id, fields); await loadCombat() }
+  catch { error.value = 'Combat tracker could not be updated.' }
+}
+
+async function moveTurn(direction: number) {
+  if (!combat.value || !orderedCombatants.value.length) return
+  let turn = combat.value.turn + direction
+  let round = combat.value.round
+  if (turn >= orderedCombatants.value.length) { turn = 0; round += 1 }
+  if (turn < 0) { turn = orderedCombatants.value.length - 1; round = Math.max(1, round - 1) }
+  await updateCombat({ turn, round })
+}
+
+async function resetCombat() {
+  if (!combat.value) return
+  try {
+    for (const participant of combatants.value) await pb.collection('combatants').update(participant.id, { initiative: 0, initiative_known: false, current_hp: 0, max_hp: 0, hp_known: false, conditions: '' })
+    await updateCombat({ active: false, round: 1, turn: 0, tie_order: '[]' })
+  } catch { error.value = 'Combat could not be reset.' }
+}
+
+async function endCombat() { if (combat.value) await updateCombat({ active: false }) }
+
+async function setTieOrder(participant: Combatant, direction: number) {
+  if (!combat.value) return
+  const tied = orderedCombatants.value.filter((entry) => entry.initiative_known === participant.initiative_known && (!entry.initiative_known || entry.initiative === participant.initiative))
+  const tieOrder = orderedCombatants.value.map((entry) => entry.id)
+  const index = tieOrder.indexOf(participant.id)
+  const swap = index + direction
+  if (swap < 0 || swap >= tieOrder.length || !tied.some((entry) => entry.id === tieOrder[swap])) return
+  ;[tieOrder[index], tieOrder[swap]] = [tieOrder[swap], tieOrder[index]]
+  await updateCombat({ tie_order: JSON.stringify(tieOrder) })
+}
+
 async function selectEncounter(id: string) {
   selectedId.value = id
-  try { await loadEntries() } catch { error.value = 'Encounter entries could not be loaded.' }
+  try { await loadEntries(); await loadCombat() } catch { error.value = 'Encounter entries could not be loaded.' }
 }
 
 function beginCreate() { editingId.value = ''; name.value = ''; formOpen.value = true }
@@ -138,6 +260,15 @@ async function removeEntry(entry: Entry) {
         <section v-if="selected" class="encounter-content">
           <div class="spellbook-heading"><div><p class="eyebrow">PREPARATION</p><h2>{{ selected.name }}</h2></div><div class="row-actions"><button class="secondary-button" type="button" @click="beginRename(selected)">Rename</button><button class="secondary-button" type="button" @click="duplicateEncounter(selected)">Duplicate</button><button class="danger-button" type="button" @click="deleteEncounter(selected)">Delete</button></div></div>
           <div class="heading-actions"><button class="primary-button" type="button" @click="pickerOpen = !pickerOpen">＋ Add catalog creature</button><button class="secondary-button" type="button" @click="customOpen = !customOpen">＋ Add custom participant</button></div>
+          <section class="combat-panel">
+            <div class="spellbook-heading"><div><p class="eyebrow">LIVE PLAY</p><h2>{{ combat?.active ? 'Combat in progress' : 'Manual tracker' }}</h2></div><div class="row-actions"><button v-if="!combat?.active" class="primary-button" type="button" :disabled="!entries.length" @click="startCombat">Start combat</button><template v-else><span class="round-pill">Round {{ combat.round }}</span><button class="secondary-button" type="button" @click="resetCombat">Reset</button><button class="danger-button" type="button" @click="endCombat">End combat</button></template></div></div>
+            <template v-if="combat?.active">
+              <div class="turn-controls"><button class="secondary-button" type="button" :disabled="!orderedCombatants.length" @click="moveTurn(-1)">← Previous</button><p v-if="activeCombatant"><strong>Active:</strong> {{ activeCombatant.name }}</p><p v-else>No participants yet</p><button class="secondary-button" type="button" :disabled="!orderedCombatants.length" @click="moveTurn(1)">Next →</button></div>
+              <div class="participant-add"><label class="filter-field">Add character<select class="select-input" :disabled="gameCharacters.every((character) => combatants.some((entry) => entry.character === character.id))" @change="addCharacter(gameCharacters.find((character) => character.id === ($event.target as HTMLSelectElement).value)!); ($event.target as HTMLSelectElement).value = ''"><option value="">Choose a character</option><option v-for="character in gameCharacters.filter((entry) => !combatants.some((participant) => participant.character === entry.id))" :key="character.id" :value="character.id">{{ character.name }}</option></select></label><form class="custom-participant-form" @submit.prevent="addCustomCombatant"><label class="filter-field">Add custom participant<input v-model="newParticipantName" class="text-input" maxlength="255" placeholder="Name" /></label><button class="secondary-button" type="submit">Add</button></form></div>
+              <div v-if="orderedCombatants.length" class="combatant-list"><article v-for="participant in orderedCombatants" :key="participant.id" class="combatant-card" :class="{ active: activeCombatant?.id === participant.id }"><div class="combatant-title"><div><strong>{{ participant.name }}</strong><small>{{ participant.enemy ? 'Enemy' : participant.character ? 'Character' : 'Participant' }}<template v-if="participant.prepared && participant.expand?.prepared?.expand?.creature"> · {{ participant.expand.prepared.expand.creature.source }}</template></small></div><div class="row-actions"><span class="initiative-pill">{{ participant.initiative_known ? `Init ${participant.initiative}` : 'No initiative' }}</span><button class="icon-button tie-button" type="button" aria-label="Move up within initiative tie" title="Move up within tie" @click="setTieOrder(participant, -1)">↑</button><button class="icon-button tie-button" type="button" aria-label="Move down within initiative tie" title="Move down within tie" @click="setTieOrder(participant, 1)">↓</button><button class="danger-button" type="button" @click="removeCombatant(participant)">Remove</button></div></div><div class="combatant-fields"><label class="filter-field">Initiative<input v-model.number="combatDrafts[participant.id]!.initiative" class="text-input" type="number" step="any" placeholder="—" /></label><label class="filter-field">Current HP<input v-model.number="combatDrafts[participant.id]!.current_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Max HP<input v-model.number="combatDrafts[participant.id]!.max_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Conditions<input v-model="combatDrafts[participant.id]!.conditions" class="text-input" placeholder="e.g. prone" /></label><label class="filter-field">Notes<input v-model="combatDrafts[participant.id]!.notes" class="text-input" placeholder="Notes" /></label><button class="secondary-button" type="button" @click="saveCombatant(participant)">Save</button></div></article></div>
+              <p v-else class="muted-hint">No live participants. Add game characters or custom participants.</p>
+            </template>
+          </section>
           <div v-if="pickerOpen" class="editor-panel"><div class="catalog-panel-heading"><h2>Choose a creature</h2><button class="secondary-button" type="button" @click="pickerOpen = false">Close</button></div><CatalogPicker :system-id="game.system" type="creature" @select="addCreature" /></div>
           <form v-if="customOpen" class="editor-panel" @submit.prevent="addCustom"><h2>Custom participant</h2><label class="field-label" for="custom-creature-name">Name</label><input id="custom-creature-name" v-model="customName" class="text-input" maxlength="255" required /><label class="field-label" for="custom-creature-quantity">Quantity</label><input id="custom-creature-quantity" v-model.number="customQuantity" class="text-input" type="number" min="1" max="100" step="1" required /><label class="field-label" for="custom-creature-notes">Notes</label><textarea id="custom-creature-notes" v-model="customNotes" class="text-area" /><div class="form-actions"><button class="secondary-button" type="button" @click="customOpen = false">Cancel</button><button class="primary-button" type="submit">Add participant</button></div></form>
           <div v-if="entries.length" class="encounter-entry-list"><article v-for="entry in entries" :key="entry.id" class="inventory-row"><div class="inventory-item-copy"><strong>{{ entry.name }}</strong><small>{{ entry.custom ? 'Custom participant' : `${entry.expand?.creature?.source ?? 'Catalog'}${entry.expand?.creature?.creature_type ? ` · ${entry.expand.creature.creature_type}` : ''}${entry.expand?.creature?.challenge_rating ? ` · CR ${entry.expand.creature.challenge_rating}` : ''}` }}</small></div><div class="encounter-entry-edit"><label class="filter-field">Quantity<input v-model.number="entryDrafts[entry.id]!.quantity" class="text-input" type="number" min="1" max="100" step="1" /></label><label class="filter-field">Notes<input v-model="entryDrafts[entry.id]!.notes" class="text-input" maxlength="100000" /></label></div><div class="row-actions"><button class="secondary-button" type="button" @click="saveEntry(entry)">Save</button><button class="danger-button" type="button" @click="removeEntry(entry)">Remove</button></div></article></div>

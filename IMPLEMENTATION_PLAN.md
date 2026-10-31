@@ -92,7 +92,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **20 — Encounter preparation**
   Add GM create, rename, duplicate and delete operations for game encounters. Extend the catalog picker to support creatures and their system-specific filters. Add monster types through the picker, with quantity, optional notes and manual/custom participant entries. An encounter can be just a print grouping and can be deleted after printing. Ensure owned encounter records are deleted with their game; verify encounters remain independent and carry their game's system.
 
-- [ ] **21 — Individual combatants and manual tracker**
+- [x] **21 — Individual combatants and manual tracker**
   Start an encounter with independently editable participants and per-creature current/max HP, initiative, conditions and notes. Include game characters and custom participants when the GM chooses. Implement stable order, manual tie handling, round/active turn, next/previous, reset and end. Keep preparation separate from live state so an encounter can be reused. Verify repeated creatures have independent HP and condition state.
 
 - [ ] **22 — Dice and 5e monster HP**
