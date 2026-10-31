@@ -75,6 +75,33 @@ func TestItemPartialMovePreservesTotal(t *testing.T) {
 	}
 }
 
+func TestNestedContainerTransferKeepsContentsTogether(t *testing.T) {
+	app := testApp(t)
+	_, inventory, stash := fixture(t, app, 1)
+	bag := makeRecord(t, app, "inventory_items", map[string]any{"inventory": inventory.Id, "name": "Bag", "quantity": 1, "is_container": true})
+	box := makeRecord(t, app, "inventory_items", map[string]any{"inventory": inventory.Id, "container": bag.Id, "name": "Box", "quantity": 1, "is_container": true})
+	coin := makeRecord(t, app, "inventory_items", map[string]any{"inventory": inventory.Id, "container": box.Id, "name": "Token", "quantity": 2})
+	if err := Item(app, ItemRequest{ItemID: bag.Id, Quantity: 1, Destination: Endpoint{Stash: stash.Id}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{bag.Id, box.Id, coin.Id} {
+		item, err := app.FindRecordById("inventory_items", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if item.GetString("stash") != stash.Id || item.GetString("inventory") != "" {
+			t.Fatalf("item %s did not move to stash", id)
+		}
+	}
+	movedCoin, err := app.FindRecordById("inventory_items", coin.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if movedCoin.GetString("container") != box.Id || movedCoin.GetInt("quantity") != 2 {
+		t.Fatal("nested contents were changed")
+	}
+}
+
 func TestConcurrentMovesCannotDuplicateItem(t *testing.T) {
 	app := testApp(t)
 	item, inventory, stash := fixture(t, app, 1)
@@ -172,5 +199,39 @@ func TestCoinTransferMovesBalanceAtomically(t *testing.T) {
 	}
 	if updatedInventory.GetInt("sp") != 5 || updatedStash.GetInt("sp") != 7 {
 		t.Fatalf("unexpected coin balances: source %d, destination %d", updatedInventory.GetInt("sp"), updatedStash.GetInt("sp"))
+	}
+}
+
+func TestDeletingGameCascadesOwnedData(t *testing.T) {
+	app := testApp(t)
+	item, inventory, stash := fixture(t, app, 1)
+	character, err := app.FindRecordById("characters", inventory.GetString("character"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	game, err := app.FindRecordById("games", character.GetString("game"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := makeRecord(t, app, "spellbooks", map[string]any{"character": character.Id, "name": "Book"})
+	spell := makeRecord(t, app, "catalog", map[string]any{"system": game.GetString("system"), "type": "spell", "source": "TEST", "source_id": "spark", "name": "Spark", "original_json": map[string]any{"entries": []string{"A spark."}}})
+	entry := makeRecord(t, app, "spellbook_spells", map[string]any{"spellbook": book.Id, "spell": spell.Id})
+	personal := makeRecord(t, app, "stashes", map[string]any{"game": game.Id, "kind": "personal", "name": "Personal", "owner": character.Id})
+	stashItem := makeRecord(t, app, "inventory_items", map[string]any{"stash": stash.Id, "name": "Torch", "quantity": 1})
+	if err := app.Delete(game); err != nil {
+		t.Fatal(err)
+	}
+	for name, ids := range map[string][]string{
+		"characters": {character.Id}, "inventories": {inventory.Id}, "stashes": {stash.Id, personal.Id},
+		"inventory_items": {item.Id, stashItem.Id}, "spellbooks": {book.Id}, "spellbook_spells": {entry.Id},
+	} {
+		for _, id := range ids {
+			if _, err := app.FindRecordById(name, id); err == nil {
+				t.Errorf("%s %s survived game deletion", name, id)
+			}
+		}
+	}
+	if _, err := app.FindRecordById("catalog", spell.Id); err != nil {
+		t.Fatal("catalog should survive game deletion:", err)
 	}
 }

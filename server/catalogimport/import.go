@@ -87,6 +87,19 @@ func Parse(input io.Reader) (Document, error) {
 // Alternate descriptions and notes are deliberately left untouched on reimport.
 func Import(app core.App, systemKey string, document Document) (Summary, error) {
 	var summary Summary
+	err := app.RunInTransaction(func(tx core.App) error {
+		var err error
+		summary, err = importRecords(tx, systemKey, document)
+		return err
+	})
+	if err != nil {
+		return Summary{}, err
+	}
+	return summary, nil
+}
+
+func importRecords(app core.App, systemKey string, document Document) (Summary, error) {
+	var summary Summary
 	system, err := app.FindFirstRecordByData("systems", "key", systemKey)
 	if err != nil {
 		return summary, fmt.Errorf("find system %q: %w", systemKey, err)

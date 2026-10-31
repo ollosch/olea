@@ -183,11 +183,7 @@ func resolveStore(app core.App, endpoint Endpoint) (*resolvedStore, error) {
 		return nil, fmt.Errorf("%w: store not found", ErrInvalid)
 	}
 	store := &resolvedStore{record: record}
-	if collection == "stashes" {
-		store.game = record.GetString("game")
-	} else {
-		store.game = record.GetString("game")
-	}
+	store.game = record.GetString("game")
 	items, err := app.FindRecordsByFilter("inventory_items", "inventory = {:id} || stash = {:id}", "", 0, 0, dbx.Params{"id": record.Id})
 	if err != nil {
 		return nil, err

@@ -90,19 +90,19 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 ## Encounters and live play
 
 - [ ] **20 — Encounter preparation**
-  Add GM create, rename, duplicate and delete operations for game encounters. Add monster types through the catalog picker, with quantity, optional notes and manual/custom participant entries. An encounter can be just a print grouping and can be deleted after printing. Verify encounters remain independent and carry their game's system.
+  Add GM create, rename, duplicate and delete operations for game encounters. Extend the catalog picker to support creatures and their system-specific filters. Add monster types through the picker, with quantity, optional notes and manual/custom participant entries. An encounter can be just a print grouping and can be deleted after printing. Ensure owned encounter records are deleted with their game; verify encounters remain independent and carry their game's system.
 
 - [ ] **21 — Individual combatants and manual tracker**
   Start an encounter with independently editable participants and per-creature current/max HP, initiative, conditions and notes. Include game characters and custom participants when the GM chooses. Implement stable order, manual tie handling, round/active turn, next/previous, reset and end. Keep preparation separate from live state so an encounter can be reused. Verify repeated creatures have independent HP and condition state.
 
 - [ ] **22 — Dice and 5e monster HP**
-  Add a bounded dice-expression evaluator sufficient for `NdM`, optional signed constant and clear invalid-input handling; no arbitrary code evaluation. For encounter monsters, offer average, individual rolls and manual HP, displaying each result before confirming. Test with deterministic injected rolls, invalid formulas and representative 5e data. Leave unsupported formulas editable manually.
+  Add a bounded dice-expression evaluator sufficient for `NdM`, optional signed constant and clear invalid-input handling; no arbitrary code evaluation. For encounter monsters, offer average, individual rolls and manual HP, displaying each result before confirming. PocketBase number fields default missing values to zero: distinguish an absent imported HP average from zero using source data or explicit presence metadata. Test with deterministic injected rolls, invalid formulas and representative 5e data. Leave unsupported formulas editable manually.
 
 - [ ] **23 — 5e initiative rolls**
-  Compute a default initiative modifier from a 5e monster's Dexterity where available, allow an override, and roll individually or once for a selected group. Manual results and manual player-character initiative remain available. Verify negative modifiers, missing Dexterity, ties, group rolls and rerolls without overwriting unrelated combatants.
+  Compute a default initiative modifier from a 5e monster's Dexterity where available, allow an override, and roll individually or once for a selected group. Distinguish missing Dexterity from PocketBase's default numeric zero using source data or explicit presence metadata. Manual results and manual player-character initiative remain available. Verify negative modifiers, missing Dexterity, ties, group rolls and rerolls without overwriting unrelated combatants.
 
 - [ ] **24 — Realtime and reconnect**
-  Subscribe to relevant PocketBase records for the active screen, update views after GM/player edits and clean up subscriptions. On reconnect/refocus, refetch authoritative state so missed events are not mistaken for current data. Show connection state and reject/clearly surface failed writes. Verify with two browser contexts, including a deliberate disconnect/reconnect.
+  Subscribe to relevant PocketBase records for the active screen, update views after GM/player edits and clean up subscriptions. On reconnect/refocus, refetch authoritative state so missed events are not mistaken for current data. Prevent stale direct quantity, container and coin edits from overwriting concurrent changes or transfers; surface conflicts and refresh rather than silently losing changes. Show connection state and reject/clearly surface failed writes. Verify with two browser contexts, concurrent edits/transfers, and a deliberate disconnect/reconnect.
 
 - [ ] **25 — Optional player encounter view**
   Add per-game settings for whether players see the active encounter, initiative, enemy names, HP and conditions; all default off. Provide an optional player-facing display that respects those settings in the normal UI. Explicitly document that these settings hide UI details but are not security controls on a trusted LAN. Verify hidden and visible combinations.
@@ -145,7 +145,7 @@ STOP IMPLEMENTATION HERE. THE DATA FOR LAND OF EEM AND DOLMENWOOD IS NOT YET AVA
 ---
 
 - [ ] **35 — Land of Eem system support**
-  Follow the same data-first approach as step 33 for Land of Eem, including appropriate system-specific filters and manual fallbacks. If data is unavailable, document the blocker. Verify with synthetic fixtures and available local examples.
+  Follow the same data-first approach as step 32 for Land of Eem, including appropriate system-specific filters and manual fallbacks. If data is unavailable, document the blocker. Verify with synthetic fixtures and available local examples.
 
 - [ ] **36 — Dolmenwood system support**
   Inspect user-provided data before choosing an importer. Add local import, relevant catalog fields, filters, readable views, currency/encumbrance configuration and roll behavior only where source data supports them; preserve manual fallback. If data is unavailable, document what is needed and stop instead of inventing rules. Verify with synthetic fixtures and available local examples.

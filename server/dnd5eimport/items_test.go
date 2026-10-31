@@ -50,3 +50,14 @@ func TestParseItemsSupportsAppendAndInsertModes(t *testing.T) {
 		t.Fatalf("array mods not applied: append=%s insert=%s", result.Document.Records[1].Original, result.Document.Records[2].Original)
 	}
 }
+
+func TestParseItemsReportsInvalidModificationDefinition(t *testing.T) {
+	input := `{"item":[{"name":"Base","source":"TEST","entries":["text"]},{"name":"Bad copy","source":"TEST","_copy":{"name":"Base","source":"TEST","_mod":"unknown"}}]}`
+	result, err := ParseItems(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Document.Records) != 1 || result.Skipped != 1 || !strings.Contains(result.Warnings[0], "_mod must be an object") {
+		t.Fatalf("invalid modification was not reported: %#v", result)
+	}
+}

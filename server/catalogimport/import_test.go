@@ -3,6 +3,9 @@ package catalogimport
 import (
 	"strings"
 	"testing"
+
+	"github.com/pocketbase/pocketbase"
+	_ "olea/migrations"
 )
 
 func TestParseSyntheticRecords(t *testing.T) {
@@ -13,6 +16,28 @@ func TestParseSyntheticRecords(t *testing.T) {
 	}
 	if len(document.Records) != 2 || document.Records[0].Name != "Spark" || document.Records[1].ChallengeRating != "1/8" {
 		t.Fatalf("unexpected parsed records: %#v", document.Records)
+	}
+}
+
+func TestImportRollsBackOnFailure(t *testing.T) {
+	app := pocketbase.NewWithConfig(pocketbase.Config{DefaultDataDir: t.TempDir(), HideStartBanner: true})
+	if err := app.Bootstrap(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.RunAppMigrations(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = app.ResetBootstrapState() })
+	doc, err := Parse(strings.NewReader(`{"records":[{"type":"item","source":"TEST","source_id":"first","name":"First","original":{}},{"type":"item","source":"TEST","source_id":"second","name":"Second","original":{}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Records[1].Name = ""
+	if _, err := Import(app, "dnd5e", doc); err == nil {
+		t.Fatal("expected invalid record to fail")
+	}
+	if _, err := app.FindFirstRecordByData("catalog", "source_id", "first"); err == nil {
+		t.Fatal("partial import was not rolled back")
 	}
 }
 

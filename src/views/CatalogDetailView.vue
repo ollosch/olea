@@ -71,6 +71,13 @@ function cancelNotes() {
   notesDraft.value = record.value?.notes ?? ''
   editingNotes.value = false
 }
+
+function hasCreatureStat(key: 'hp' | 'dex'): boolean {
+  if (!record.value?.original_json || typeof record.value.original_json !== 'object') return false
+  const original = record.value.original_json as Record<string, unknown>
+  if (key === 'dex') return typeof original.dex === 'number'
+  return !!original.hp && typeof original.hp === 'object' && typeof (original.hp as Record<string, unknown>).average === 'number'
+}
 </script>
 
 <template>
@@ -86,7 +93,7 @@ function cancelNotes() {
       </header>
       <dl class="catalog-stats">
         <template v-if="record.type === 'spell'"><div><dt>Level</dt><dd>{{ record.level === '0' ? 'Cantrip' : record.level }}</dd></div><div><dt>School</dt><dd>{{ record.school || '—' }}</dd></div></template>
-        <template v-else-if="record.type === 'creature'"><div><dt>Type</dt><dd>{{ record.creature_type || '—' }}</dd></div><div><dt>Challenge rating</dt><dd>{{ record.challenge_rating || '—' }}</dd></div><div v-if="record.hp_average !== undefined"><dt>Hit points</dt><dd>{{ record.hp_average }}<template v-if="record.hp_formula"> ({{ record.hp_formula }})</template></dd></div><div v-if="record.dexterity !== undefined"><dt>Dexterity</dt><dd>{{ record.dexterity }}</dd></div></template>
+        <template v-else-if="record.type === 'creature'"><div><dt>Type</dt><dd>{{ record.creature_type || '—' }}</dd></div><div><dt>Challenge rating</dt><dd>{{ record.challenge_rating || '—' }}</dd></div><div v-if="hasCreatureStat('hp') || record.hp_formula"><dt>Hit points</dt><dd>{{ hasCreatureStat('hp') ? record.hp_average : '—' }}<template v-if="record.hp_formula"> ({{ record.hp_formula }})</template></dd></div><div v-if="hasCreatureStat('dex')"><dt>Dexterity</dt><dd>{{ record.dexterity }}</dd></div></template>
         <template v-else><div v-if="record.item_type !== undefined"><dt>Type</dt><dd>{{ itemTypeLabel(record.item_type) || String(record.item_type) }}</dd></div><div v-if="record.item_weight !== undefined"><dt>Weight</dt><dd>{{ record.item_weight }} lb.</dd></div><div v-if="record.item_value !== undefined"><dt>Value</dt><dd>{{ record.item_value }} cp</dd></div><div v-if="record.rarity"><dt>Rarity</dt><dd>{{ record.rarity }}</dd></div></template>
       </dl>
       <p v-if="saveError" class="alert-message" role="alert">{{ saveError }}</p>
@@ -103,7 +110,7 @@ function cancelNotes() {
         <p v-else-if="record.notes" class="catalog-notes">{{ record.notes }}</p>
         <p v-else class="muted-hint">No at-table notes yet.</p>
       </section>
-      <section class="catalog-content-panel"><div class="catalog-panel-heading"><h2>Description</h2><span class="content-label">Source text</span></div><EntryContent :value="recordDescription(record)" /></section>
+      <section class="catalog-content-panel"><div class="catalog-panel-heading"><h2>Description</h2><span class="content-label">Source text</span></div><EntryContent :value="recordDescription(record, false)" /></section>
       <section class="catalog-content-panel">
         <div class="catalog-panel-heading">
           <div><h2>{{ record.alternate_description.trim() ? 'Alternate description' : 'Custom description' }}</h2><span class="content-label">{{ record.alternate_description.trim() ? 'Preferred at-table text' : 'Optional override' }}</span></div>

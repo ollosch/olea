@@ -28,6 +28,7 @@ const perPage = 30
 const loading = ref(false)
 const error = ref('')
 let requestId = 0
+let choicesId = 0
 
 const system = computed(() => systems.value.find((entry) => entry.id === systemId.value))
 const isDnd5e = computed(() => system.value?.key === 'dnd5e')
@@ -47,6 +48,7 @@ onMounted(async () => {
 })
 
 watch([systemId, selectedType], () => { page.value = 1; clearFilters(); void loadChoices() })
+watch([query, source, level, school, creatureType, minCR, maxCR, itemType, rarity], () => { page.value = 1 })
 watch([systemId, selectedType, query, source, level, school, creatureType, minCR, maxCR, itemType, rarity, page], loadRecords)
 
 function readSystemKey(): string {
@@ -61,12 +63,14 @@ function clearFilters() {
 }
 
 async function loadChoices() {
+  const token = ++choicesId
   if (!systemId.value) return
   try {
     const all = await pb.collection('catalog').getFullList<CatalogRecord>({
       filter: pb.filter('system = {:system} && type = {:type}', { system: systemId.value, type: selectedType.value }),
-      fields: 'source,school,creature_type,item_type,rarity', sort: 'source,name',
+      fields: 'source,school,creature_type,item_type,rarity', sort: 'source,name', requestKey: null,
     })
+    if (token !== choicesId) return
     sources.value = unique(all.map((record) => record.source))
     schools.value = unique(all.map((record) => record.school).filter(Boolean))
     creatureTypes.value = unique(all.map((record) => record.creature_type).filter(Boolean))
@@ -101,7 +105,7 @@ async function loadRecords() {
   try {
     const filter = pb.filter(terms.join(' && '), params)
     if (selectedType.value === 'creature' || (selectedType.value === 'item' && (itemType.value || rarity.value))) {
-      const all = await pb.collection('catalog').getFullList<CatalogRecord>({ filter, sort: 'name', expand: 'system' })
+      const all = await pb.collection('catalog').getFullList<CatalogRecord>({ filter, sort: 'name', expand: 'system', requestKey: null })
       if (token !== requestId) return
       const filtered = all.filter((record) => {
         if (selectedType.value === 'creature') {
@@ -117,7 +121,7 @@ async function loadRecords() {
       totalItems.value = filtered.length
       records.value = filtered.slice((page.value - 1) * perPage, page.value * perPage)
     } else {
-      const result = await pb.collection('catalog').getList<CatalogRecord>(page.value, perPage, { filter, sort: 'name', expand: 'system' })
+      const result = await pb.collection('catalog').getList<CatalogRecord>(page.value, perPage, { filter, sort: 'name', expand: 'system', requestKey: null })
       if (token !== requestId) return
       records.value = result.items
       totalItems.value = result.totalItems
@@ -133,7 +137,7 @@ function unique(values: string[]) { return [...new Set(values)].sort((a, b) => a
 function validCR(value: string) {
   if (!/^(?:\d+(?:\.\d+)?|\d+\/\d+)$/.test(value.trim())) return false
   const [numerator, denominator] = value.split('/').map(Number)
-  return !denominator || denominator > 0 && numerator >= 0
+  return numerator >= 0 && (denominator === undefined || denominator > 0)
 }
 </script>
 

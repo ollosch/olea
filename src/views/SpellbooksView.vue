@@ -22,6 +22,7 @@ const pickerOpen = ref(false)
 const loading = ref(true)
 const error = ref('')
 const selectedBook = computed(() => books.value.find((book) => book.id === selectedBookId.value) ?? null)
+let spellLoadToken = 0
 
 onMounted(load)
 
@@ -45,9 +46,13 @@ async function loadBooks() {
 }
 
 async function loadSpells() {
+  const token = ++spellLoadToken
   if (!selectedBookId.value) { spells.value = []; return }
-  try { spells.value = await pb.collection('spellbook_spells').getFullList<BookSpell>({ filter: pb.filter('spellbook = {:book}', { book: selectedBookId.value }), sort: 'spell.name', expand: 'spell' }) }
-  catch { error.value = 'Spells in this book could not be loaded.' }
+  spells.value = []
+  try {
+    const result = await pb.collection('spellbook_spells').getFullList<BookSpell>({ filter: pb.filter('spellbook = {:book}', { book: selectedBookId.value }), sort: 'spell.name', expand: 'spell', requestKey: null })
+    if (token === spellLoadToken) spells.value = result
+  } catch { if (token === spellLoadToken) error.value = 'Spells in this book could not be loaded.' }
 }
 
 async function createBook() {
@@ -102,5 +107,6 @@ async function removeSpell(entry: BookSpell) {
         </template><div v-else class="empty-state compact-empty"><div class="empty-state-icon" aria-hidden="true">✧</div><h2>Create a spellbook</h2><p>A character can keep any number of separate named spellbooks.</p></div></div>
       </div>
     </template>
+    <p v-else-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>
   </section>
 </template>

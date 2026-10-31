@@ -72,7 +72,7 @@ async function refreshActiveProfile() {
     await applyProfileAccent(token)
   } catch {
     // Keep the browser-local choice if no active record is available.
-    if (token === profileLookup) applyLocalAccent()
+    if (token === profileLookup) { activeProfileId.value = ''; accent.value = browserAccent.value; applyLocalAccent() }
   }
 }
 
@@ -157,7 +157,7 @@ function resetAccent() {
                 <DialogClose class="icon-button" aria-label="Close appearance settings">×</DialogClose>
               </div>
               <DialogDescription class="dialog-description">
-                Choose an accent for this browser. Your choice stays on this device.
+                Choose an accent for the active profile or this browser.
               </DialogDescription>
               <label class="color-setting" for="accent-color">
                 <span><strong>Accent color</strong><small>{{ activeProfileId ? 'Saved to your local profile.' : 'Saved on this browser until a profile is active.' }}</small></span>
@@ -191,7 +191,7 @@ function resetAccent() {
         </div>
       </nav>
       <main id="main" class="page" tabindex="-1">
-        <RouterView />
+        <RouterView v-slot="{ Component, route: currentRoute }"><component :is="Component" :key="currentRoute.path" /></RouterView>
       </main>
     </div>
     <footer class="footer"><span>OLEA <span class="footer-divider">/</span> A TTRPG COMPANION</span><span>Made for stories shared around a table.</span></footer>

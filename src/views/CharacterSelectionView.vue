@@ -53,8 +53,8 @@ function clearSelection() {
   window.dispatchEvent(new Event('olea-character-selected'))
 }
 
-function viewGame(character: CharacterRecord) {
-  router.push({ name: 'game-characters', params: { gameId: character.game } })
+function viewCharacter(character: CharacterRecord) {
+  router.push({ name: 'character-overview', params: { characterId: character.id } })
 }
 </script>
 
@@ -74,7 +74,7 @@ function viewGame(character: CharacterRecord) {
       <h2>{{ selectedCharacter.name }}</h2>
       <p>{{ selectedCharacter.expand?.game?.name ?? 'Game' }}</p>
       <div class="selection-actions">
-        <button class="primary-button" type="button" @click="viewGame(selectedCharacter)">Character overview</button>
+        <button class="primary-button" type="button" @click="viewCharacter(selectedCharacter)">Character overview</button>
         <button class="secondary-button" type="button" @click="clearSelection">Switch character</button>
       </div>
     </div>

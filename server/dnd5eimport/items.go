@@ -170,6 +170,9 @@ func normalizeItem(item itemRecord) (catalogimport.InputRecord, error) {
 
 func applyItemMods(item itemRecord, raw any) error {
 	mods := stringMap(raw)
+	if raw != nil && mods == nil {
+		return fmt.Errorf("_mod must be an object")
+	}
 	for key, definition := range mods {
 		switch key {
 		case "entries":
@@ -200,8 +203,17 @@ func applyEntryMod(item itemRecord, definition any) error {
 			ok = true
 		}
 		if mode == "replaceTxt" {
+			if !ok {
+				return fmt.Errorf("base entries are not an array")
+			}
 			pattern := stringValue(mod["replace"])
-			if strings.EqualFold(stringValue(mod["flags"]), "i") {
+			if pattern == "" {
+				return fmt.Errorf("replaceTxt requires a pattern")
+			}
+			if flags := stringValue(mod["flags"]); flags != "" && flags != "i" && flags != "g" && flags != "gi" && flags != "ig" {
+				return fmt.Errorf("unsupported replaceTxt flags %q", flags)
+			}
+			if strings.Contains(stringValue(mod["flags"]), "i") {
 				pattern = "(?i)" + pattern
 			}
 			re, err := regexp.Compile(pattern)

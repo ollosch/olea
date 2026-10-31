@@ -23,9 +23,9 @@ export type CatalogRecord = {
   expand?: { system?: { key: string; name: string } }
 }
 
-export function recordDescription(record: CatalogRecord): unknown {
+export function recordDescription(record: CatalogRecord, preferAlternate = true): unknown {
   const original = record.original_json as Record<string, unknown> | null
-  if (record.alternate_description.trim()) return record.alternate_description
+  if (preferAlternate && record.alternate_description?.trim()) return record.alternate_description
   if (!original) return ''
   if (record.type === 'creature') {
     const fluff = original.fluff as Record<string, unknown> | undefined
@@ -44,6 +44,7 @@ export function recordDescription(record: CatalogRecord): unknown {
     ]
       .filter((entry) => Array.isArray(entry) ? entry.length > 0 : Boolean(entry))
   }
+  if (record.type === 'spell') return [original.entries ?? original.description ?? '', original.entriesHigherLevel ?? []]
   return original.entries ?? original.description ?? ''
 }
 
@@ -70,6 +71,9 @@ export function compareChallengeRating(left: string, right: string): number {
 }
 
 function challengeValue(value: string): number {
-  const [numerator, denominator] = value.split('/').map(Number)
-  return denominator ? numerator / denominator : Number(value)
+  if (!value.trim()) return Number.POSITIVE_INFINITY
+  const parts = value.split('/')
+  const numerator = Number(parts[0])
+  const denominator = parts.length === 2 ? Number(parts[1]) : 1
+  return Number.isFinite(numerator) && Number.isFinite(denominator) && denominator > 0 ? numerator / denominator : Number.POSITIVE_INFINITY
 }

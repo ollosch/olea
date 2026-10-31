@@ -74,17 +74,11 @@ async function saveGame() {
 }
 
 async function deleteGame(game: GameRecord) {
-  if (!window.confirm(`Delete “${game.name}”? This cannot be undone.`)) return
+  if (!window.confirm(`Delete “${game.name}” and its stashes, inventories and spellbooks? This cannot be undone.`)) return
   try {
     const characters = await pb.collection('characters').getList(1, 1, { filter: pb.filter('game = {:gameId}', { gameId: game.id }) })
     if (characters.totalItems > 0 && !window.confirm(`This game contains ${characters.totalItems} character${characters.totalItems === 1 ? '' : 's'}. Delete the game and all its characters? This cannot be undone.`)) {
       return
-    }
-    if (characters.totalItems > 0) {
-      const allCharacters = await pb.collection('characters').getFullList<{ id: string }>({ filter: pb.filter('game = {:gameId}', { gameId: game.id }), fields: 'id' })
-      for (const character of allCharacters) {
-        await pb.collection('characters').delete(character.id)
-      }
     }
     await pb.collection('games').delete(game.id)
     await load()
@@ -116,9 +110,10 @@ async function deleteGame(game: GameRecord) {
       <label class="field-label" for="game-name">Game name</label>
       <input id="game-name" v-model="name" class="text-input" maxlength="160" required autocomplete="off" placeholder="e.g. The Sunken Crown" />
       <label class="field-label" for="game-system">System</label>
-      <select id="game-system" v-model="systemId" class="select-input" required>
+      <select id="game-system" v-model="systemId" class="select-input" :disabled="!!editingId" required>
         <option v-for="system in systems" :key="system.id" :value="system.id">{{ system.name }}</option>
       </select>
+      <p v-if="editingId" class="muted-hint">A game's system cannot be changed after creation.</p>
       <p v-if="formError" class="field-error" role="alert">{{ formError }}</p>
       <div class="form-actions">
         <button class="secondary-button" type="button" @click="formOpen = false">Cancel</button>

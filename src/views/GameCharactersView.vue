@@ -76,8 +76,8 @@ async function assignOwner(character: CharacterRecord, owner: string) {
     await load()
     window.dispatchEvent(new Event('olea-profile-changed'))
   } catch {
-    error.value = 'The character owner could not be updated. Check the connection and try again.'
     await load()
+    error.value = 'The character owner could not be updated. Check the connection and try again.'
   } finally {
     updatingOwner.value = ''
   }
@@ -131,7 +131,7 @@ async function saveCharacter() {
 }
 
 async function deleteCharacter(character: CharacterRecord) {
-  if (!window.confirm(`Delete “${character.name}”? This cannot be undone.`)) return
+  if (!window.confirm(`Delete “${character.name}” and its inventory, personal stashes and spellbooks? This cannot be undone.`)) return
   try {
     await pb.collection('characters').delete(character.id)
     await load()
@@ -142,7 +142,7 @@ async function deleteCharacter(character: CharacterRecord) {
 
 async function deleteEmptyGame() {
   if (!game.value || characters.value.length) return
-  if (!window.confirm(`Delete empty game “${game.value.name}”? This cannot be undone.`)) return
+  if (!window.confirm(`Delete “${game.value.name}” and its stashes? This cannot be undone.`)) return
   try {
     await pb.collection('games').delete(game.value.id)
     window.location.assign('/games')
