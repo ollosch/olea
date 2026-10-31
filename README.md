@@ -73,7 +73,7 @@ Catalog imports are explicitly invoked on the host; the application does not fet
 
 Supported record types are `item`, `spell`, and `creature`. Each record requires a source, stable source ID, name, and original JSON; creature type and challenge rating fields are available for later importers. The command prints created/updated totals and fails on invalid or duplicate identities. Use invented fixtures for development; do not commit personal reference files.
 
-For the supplied 5etools-style D&D 5e sources, use `go -C server run . --dir=/path/to/pb_data dnd5e-import spells data/dnd5e_spells_phb.json`. The importer retains each original spell object, including entries and higher-level entries, normalizes known school codes to names and reports skipped records or unknown school codes. The source JSON remains local and is not included in the repository.
+For the supplied 5etools-style D&D 5e sources, use `go -C server run . --dir=/path/to/pb_data dnd5e-import spells data/dnd5e_spells_phb.json` or `go -C server run . --dir=/path/to/pb_data dnd5e-import bestiary data/dnd5e_bestiary-mm.json`. These importers retain each complete source object, including fields not yet modeled, and report skipped records or warnings. Spell schools are normalized to names; monster imports support string/object creature type and CR, fractional CR, HP average/formula, Dexterity and actions. Missing stats are preserved in original JSON and are not invented. Source JSON remains local and is not included in the repository.
 
 ## Local data
 

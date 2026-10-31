@@ -29,6 +29,10 @@ type InputRecord struct {
 	School          string          `json:"school,omitempty"`
 	CreatureType    string          `json:"creature_type,omitempty"`
 	ChallengeRating string          `json:"challenge_rating,omitempty"`
+	HPAverage       *int            `json:"hp_average,omitempty"`
+	HPFormula       string          `json:"hp_formula,omitempty"`
+	Dexterity       *int            `json:"dexterity,omitempty"`
+	Actions         json.RawMessage `json:"actions,omitempty"`
 	Original        json.RawMessage `json:"original"`
 }
 
@@ -115,6 +119,18 @@ func Import(app core.App, systemKey string, document Document) (Summary, error) 
 		record.Set("school", input.School)
 		record.Set("creature_type", input.CreatureType)
 		record.Set("challenge_rating", input.ChallengeRating)
+		record.Set("hp_average", input.HPAverage)
+		record.Set("hp_formula", input.HPFormula)
+		record.Set("dexterity", input.Dexterity)
+		if len(input.Actions) > 0 {
+			var actions any
+			if err := json.Unmarshal(input.Actions, &actions); err != nil {
+				return summary, fmt.Errorf("decode actions JSON for record %d: %w", i+1, err)
+			}
+			record.Set("actions_json", actions)
+		} else {
+			record.Set("actions_json", nil)
+		}
 		record.Set("original_json", original)
 		record.Set("alternate_description", previousAlternate)
 		record.Set("notes", previousNotes)
