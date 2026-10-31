@@ -258,9 +258,15 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
 .currency-panel p { margin-top: 5px; color: #97a597; font-size: 10px; }
 .coin-fields { margin-top: 8px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .coin-fields .text-input { margin-top: 6px; }
+.store-switcher { margin-top: 18px; display: flex; align-items: end; gap: 10px; }
+.store-switcher .filter-field { min-width: 180px; flex: 1; }
+.store-switcher .select-input { margin-top: 6px; }
+.stash-notes { margin-top: 10px; color: #97a597; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
+.stash-notes strong { display: block; color: #cbd6c7; }
 @media (max-width: 600px) { .inventory-row { align-items: flex-start; flex-wrap: wrap; }.inventory-row > .row-actions { width: 100%; }.inventory-edit { grid-template-columns: 1fr; }.inventory-edit .row-actions { grid-column: auto; } }
 @media (max-width: 600px) { .weight-summary, .capacity-editor { align-items: stretch; flex-direction: column; }.capacity-editor .filter-field { width: 100%; } }
 @media (max-width: 600px) { .coin-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .store-switcher { align-items: stretch; flex-direction: column; }.store-switcher .filter-field { width: 100%; } }
 
 .entry-stack { display: grid; gap: 9px; }
 .entry-stack > p, .entry-section > p, .entry-list p, .entry-table p, .entry-unknown { color: #b7c2b5; font-size: 13px; line-height: 1.75; white-space: pre-wrap; }

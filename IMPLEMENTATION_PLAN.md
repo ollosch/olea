@@ -78,7 +78,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **16 — Currency and party totals**
   Define 5e CP, SP, EP, GP and PP and store nonnegative integer balances per inventory. Display and edit denominations individually. Count coin weight according to a documented 5e setting, and recalculate encumbrance. Show party totals from character purses plus the party stash only; don't include personal or location stashes. Verify denomination totals and coin-weight calculations.
 
-- [ ] **17 — Stashes**
+- [x] **17 — Stashes**
   Create one shared party stash per game, player-created personal stashes, and GM-created location stashes. Each has a name, optional location/notes, contents and coins. Ensure party stash is open to all characters; personal stashes remain distinct and location stashes are managed through the GM interface. Verify persistence and that stash contents aren't counted as carried weight.
 
 - [ ] **18 — Atomic item and coin transfers**

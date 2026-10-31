@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import CatalogPicker from '../components/CatalogPicker.vue'
 import { pb } from '../lib/pocketbase'
@@ -7,11 +7,19 @@ import type { CatalogRecord } from '../lib/catalog'
 
 type Character = { id: string; name: string; game: string }
 type Inventory = { id: string; game: string; character: string; capacity: number; capacity_known: boolean; cp: number; sp: number; ep: number; gp: number; pp: number }
-type InventoryItem = { id: string; inventory: string; catalog_item: string; container: string; name: string; quantity: number; weight: number; weight_known: boolean; is_container: boolean; notes: string; expand?: { catalog_item?: CatalogRecord } }
+type Stash = { id: string; game: string; kind: 'party' | 'personal' | 'location'; name: string; location: string; notes: string; owner: string; cp: number; sp: number; ep: number; gp: number; pp: number }
+type InventoryItem = { id: string; inventory: string; stash: string; catalog_item: string; container: string; name: string; quantity: number; weight: number; weight_known: boolean; is_container: boolean; notes: string; expand?: { catalog_item?: CatalogRecord } }
 const route = useRoute()
 const character = ref<Character | null>(null)
 const inventory = ref<Inventory | null>(null)
 const items = ref<InventoryItem[]>([])
+const stashes = ref<Stash[]>([])
+const selectedStashId = ref('')
+const stashName = ref('')
+const stashKind = ref<'personal' | 'location'>('personal')
+const stashLocation = ref('')
+const stashNotes = ref('')
+const stashFormOpen = ref(false)
 const loading = ref(true)
 const error = ref('')
 const pickerOpen = ref(false)
@@ -30,8 +38,21 @@ const capacityDraft = ref('')
 const coins = ref({ cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 })
 const game = ref<{ system: string } | null>(null)
 const systemId = computed(() => game.value?.system ?? '')
+const activeStash = computed(() => stashes.value.find((entry) => entry.id === selectedStashId.value) ?? null)
+const activeStoreLabel = computed(() => activeStash.value?.name ?? 'Carried inventory')
+const activeCoins = computed(() => activeStash.value ? {
+  cp: activeStash.value.cp ?? 0, sp: activeStash.value.sp ?? 0, ep: activeStash.value.ep ?? 0,
+  gp: activeStash.value.gp ?? 0, pp: activeStash.value.pp ?? 0,
+} : coins.value)
+const displayedCoinWeight = computed(() => Object.values(activeCoins.value).reduce((sum, amount) => sum + amount, 0) / 50)
+const partyTotal = ref({ cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 })
 
 onMounted(load)
+watch(selectedStashId, async () => {
+  const store = activeStash.value ?? inventory.value
+  coins.value = { cp: store?.cp ?? 0, sp: store?.sp ?? 0, ep: store?.ep ?? 0, gp: store?.gp ?? 0, pp: store?.pp ?? 0 }
+  await loadItems()
+})
 
 async function load() {
   loading.value = true
@@ -43,6 +64,7 @@ async function load() {
     inventory.value = found[0] ?? await pb.collection('inventories').create<Inventory>({ game: character.value.game, character: character.value.id })
     capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
     coins.value = { cp: inventory.value.cp ?? 0, sp: inventory.value.sp ?? 0, ep: inventory.value.ep ?? 0, gp: inventory.value.gp ?? 0, pp: inventory.value.pp ?? 0 }
+    await loadStashes()
     await loadItems()
   } catch {
     error.value = 'Inventory could not be loaded. Check the local server and try again.'
@@ -52,15 +74,52 @@ async function load() {
 async function loadItems() {
   if (!inventory.value) return
   items.value = await pb.collection('inventory_items').getFullList<InventoryItem>({
-    filter: pb.filter('inventory = {:inventory}', { inventory: inventory.value.id }), sort: 'name', expand: 'catalog_item',
+    filter: activeStash.value
+      ? pb.filter('stash = {:stash}', { stash: activeStash.value.id })
+      : pb.filter('inventory = {:inventory}', { inventory: inventory.value.id }), sort: 'name', expand: 'catalog_item',
   })
+}
+
+async function loadStashes() {
+  if (!character.value) return
+  stashes.value = await pb.collection('stashes').getFullList<Stash>({ filter: pb.filter('game = {:game}', { game: character.value.game }), sort: 'kind,name' })
+  if (!stashes.value.some((entry) => entry.kind === 'party')) {
+    try { await pb.collection('stashes').create({ game: character.value.game, kind: 'party', name: 'Party stash' }) } catch { /* Another client may have created it. */ }
+    stashes.value = await pb.collection('stashes').getFullList<Stash>({ filter: pb.filter('game = {:game}', { game: character.value.game }), sort: 'kind,name' })
+  }
+  stashes.value = stashes.value.filter((entry) => entry.kind !== 'personal' || entry.owner === character.value?.id)
+  await refreshPartyTotal()
+}
+
+async function refreshPartyTotal() {
+  if (!character.value) return
+  try {
+    const [inventories, party] = await Promise.all([
+      pb.collection('inventories').getFullList<Inventory>({ filter: pb.filter('game = {:game} && character != ""', { game: character.value.game }), fields: 'cp,sp,ep,gp,pp' }),
+      pb.collection('stashes').getFirstListItem<Stash>(pb.filter('game = {:game} && kind = "party"', { game: character.value.game }), { fields: 'cp,sp,ep,gp,pp' }),
+    ])
+    partyTotal.value = inventories.reduce((sum, entry) => ({ cp: sum.cp + (entry.cp ?? 0), sp: sum.sp + (entry.sp ?? 0), ep: sum.ep + (entry.ep ?? 0), gp: sum.gp + (entry.gp ?? 0), pp: sum.pp + (entry.pp ?? 0) }), { cp: party.cp ?? 0, sp: party.sp ?? 0, ep: party.ep ?? 0, gp: party.gp ?? 0, pp: party.pp ?? 0 })
+  } catch { /* Party total is secondary to the active inventory view. */ }
+}
+
+async function createStash() {
+  if (!character.value || !stashName.value.trim()) return
+  try {
+    const data: Record<string, string> = { game: character.value.game, kind: stashKind.value, name: stashName.value.trim(), location: stashLocation.value.trim(), notes: stashNotes.value }
+    if (stashKind.value === 'personal') data.owner = character.value.id
+    const record = await pb.collection('stashes').create<Stash>(data)
+    stashes.value.push(record)
+    selectedStashId.value = record.id
+    stashName.value = ''; stashLocation.value = ''; stashNotes.value = ''; stashFormOpen.value = false
+    await loadItems()
+  } catch { error.value = 'The stash could not be created.' }
 }
 
 async function addCatalogItem(record: CatalogRecord) {
   if (!inventory.value) return
   try {
     const weight = parseWeight(record.item_weight)
-    await pb.collection('inventory_items').create({ inventory: inventory.value.id, catalog_item: record.id, name: record.name, quantity: 1, weight: weight.value, weight_known: weight.known, is_container: false, notes: '' })
+    await pb.collection('inventory_items').create(activeStash.value ? { stash: activeStash.value.id, catalog_item: record.id, name: record.name, quantity: 1, weight: weight.value, weight_known: weight.known, is_container: false, notes: '' } : { inventory: inventory.value.id, catalog_item: record.id, name: record.name, quantity: 1, weight: weight.value, weight_known: weight.known, is_container: false, notes: '' })
     pickerOpen.value = false
     await loadItems()
   } catch { error.value = 'The item could not be added.' }
@@ -72,7 +131,8 @@ async function addCustomItem() {
   const weight = customWeight.value.trim() ? Number(customWeight.value) : 0
   if (!Number.isFinite(weight) || weight < 0) { error.value = 'Weight must be zero or a positive number.'; return }
   try {
-    await pb.collection('inventory_items').create({ inventory: inventory.value.id, name: customName.value.trim(), quantity: 1, weight, weight_known: customWeight.value.trim() !== '', is_container: containerDraft.value, notes: customNotes.value })
+    const itemData = { name: customName.value.trim(), quantity: 1, weight, weight_known: customWeight.value.trim() !== '', is_container: containerDraft.value, notes: customNotes.value }
+    await pb.collection('inventory_items').create(activeStash.value ? { ...itemData, stash: activeStash.value.id } : { ...itemData, inventory: inventory.value.id })
     customName.value = ''; customWeight.value = ''; customNotes.value = ''; customOpen.value = false; containerDraft.value = false
     await loadItems()
   } catch { error.value = 'The custom item could not be added.' }
@@ -111,6 +171,7 @@ function itemWeight(item: InventoryItem, seen = new Set<string>()): number | nul
   return item.weight * item.quantity + childWeights.reduce<number>((sum, value) => sum + (value ?? 0), 0)
 }
 const carriedWeight = computed(() => {
+  if (activeStash.value) return 0
   const roots = items.value.filter((item) => !item.container)
   const weights = roots.map((item) => itemWeight(item))
   return weights.some((value) => value === null) ? null : weights.reduce<number>((sum, value) => sum + (value ?? 0), 0) + coinWeight.value
@@ -136,7 +197,15 @@ async function saveCapacity() {
 async function saveCoins() {
   if (!inventory.value) return
   if (Object.values(coins.value).some((amount) => !Number.isInteger(amount) || amount < 0)) { error.value = 'Coin balances must be nonnegative whole numbers.'; return }
-  try { inventory.value = await pb.collection('inventories').update<Inventory>(inventory.value.id, coins.value) }
+  try {
+    if (activeStash.value) {
+      const updated = await pb.collection('stashes').update<Stash>(activeStash.value.id, coins.value)
+      stashes.value = stashes.value.map((stash) => stash.id === updated.id ? updated : stash)
+      await refreshPartyTotal()
+    }
+    else inventory.value = await pb.collection('inventories').update<Inventory>(inventory.value.id, coins.value)
+    if (!activeStash.value) await refreshPartyTotal()
+  }
   catch { error.value = 'Coin balances could not be saved.' }
 }
 function childCount(item: InventoryItem): number { return items.value.filter((entry) => entry.container === item.id).length }
@@ -150,7 +219,10 @@ function childCount(item: InventoryItem): number { return items.value.filter((en
       <div class="screen-heading"><div><p class="eyebrow"><span class="eyebrow-line" /> CHARACTER INVENTORY</p><h1 id="page-title">{{ character.name }}’s items</h1><p class="screen-description">Items and quantities carried by this character.</p></div><div class="heading-actions"><button class="primary-button" type="button" @click="pickerOpen = !pickerOpen">＋ Add catalog item</button><button class="secondary-button" type="button" @click="customOpen = !customOpen">Custom item</button></div></div>
       <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>
       <section class="weight-summary" aria-label="Carried weight"><div><strong>Carried weight</strong><small>{{ carriedWeight === null ? 'Unknown — at least one carried item has unknown weight' : `${carriedWeight.toFixed(2)} lb` }}</small></div><div v-if="inventory" class="capacity-editor"><label class="filter-field" for="carrying-capacity">Capacity (lb)<input id="carrying-capacity" v-model="capacityDraft" class="text-input" type="number" min="0" step="any" placeholder="Not set" @change="saveCapacity" /></label><strong v-if="inventory.capacity_known && carriedWeight !== null" :class="carriedWeight > inventory.capacity ? 'over-capacity' : 'within-capacity'">{{ carriedWeight > inventory.capacity ? 'Over capacity' : 'Within capacity' }}</strong></div></section>
-      <section class="currency-panel"><div><h2>Coins</h2><p>Coin weight: {{ coinWeight.toFixed(2) }} lb (50 coins per lb).</p></div><div class="coin-fields"><label v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" class="filter-field">{{ denomination.toUpperCase() }}<input v-model.number="coins[denomination]" class="text-input" type="number" min="0" step="1" @change="saveCoins" /></label></div></section>
+      <section class="store-switcher"><label class="filter-field" for="inventory-store">View contents<select id="inventory-store" v-model="selectedStashId" class="select-input"><option value="">{{ character.name }}’s inventory</option><option v-for="stash in stashes" :key="stash.id" :value="stash.id">{{ stash.name }} ({{ stash.kind }})</option></select></label><button class="secondary-button" type="button" @click="stashKind = 'personal'; stashFormOpen = !stashFormOpen">＋ Personal stash</button><button class="secondary-button" type="button" @click="stashKind = 'location'; stashFormOpen = !stashFormOpen">＋ GM location stash</button></section>
+      <p v-if="activeStash?.location || activeStash?.notes" class="stash-notes"><strong v-if="activeStash.location">{{ activeStash.location }}</strong>{{ activeStash.notes }}</p>
+      <form v-if="stashFormOpen" class="editor-panel" @submit.prevent="createStash"><h2>{{ stashKind === 'personal' ? 'Personal stash' : 'GM location stash' }}</h2><label class="field-label" for="stash-name">Name</label><input id="stash-name" v-model="stashName" class="text-input" required maxlength="160" :placeholder="stashKind === 'personal' ? 'My pack at the inn' : 'Town armory'" /><label class="field-label" for="stash-location">Location (optional)</label><input id="stash-location" v-model="stashLocation" class="text-input" maxlength="500" /><label class="field-label" for="stash-notes">Notes (optional)</label><textarea id="stash-notes" v-model="stashNotes" class="text-area" /><div class="form-actions"><button class="secondary-button" type="button" @click="stashFormOpen = false">Cancel</button><button class="primary-button" type="submit">Create stash</button></div></form>
+      <section class="currency-panel"><div><h2>{{ activeStoreLabel }} · Coins</h2><p>Coin weight: {{ displayedCoinWeight.toFixed(2) }} lb (50 coins per lb).</p><p v-if="!activeStash">Party total (characters + party stash): {{ partyTotal.cp }} CP · {{ partyTotal.sp }} SP · {{ partyTotal.ep }} EP · {{ partyTotal.gp }} GP · {{ partyTotal.pp }} PP</p></div><div class="coin-fields"><label v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" class="filter-field">{{ denomination.toUpperCase() }}<input v-model.number="coins[denomination]" class="text-input" type="number" min="0" step="1" @change="saveCoins" /></label></div></section>
       <p class="muted-hint">Carried weight includes container and contents once, plus coins. Container weights are per container; items with unknown weight make the total unknown.</p>
       <div v-if="pickerOpen" class="editor-panel"><div class="catalog-panel-heading"><h2>Choose an item</h2><button class="secondary-button" type="button" @click="pickerOpen = false">Close</button></div><CatalogPicker :system-id="systemId" @select="addCatalogItem" /></div>
       <form v-if="customOpen" class="editor-panel" @submit.prevent="addCustomItem"><h2>Custom item</h2><label class="field-label" for="custom-item-name">Name</label><input id="custom-item-name" v-model="customName" class="text-input" required maxlength="240" /><label class="field-label" for="custom-item-weight">Weight per item (optional)</label><input id="custom-item-weight" v-model="customWeight" class="text-input" type="number" min="0" step="any" placeholder="Unknown" /><label class="field-label" for="custom-item-notes">Notes</label><textarea id="custom-item-notes" v-model="customNotes" class="text-area" /><label class="check-field"><input v-model="containerDraft" type="checkbox" /> This item is a container</label><div class="form-actions"><button class="secondary-button" type="button" @click="customOpen = false">Cancel</button><button class="primary-button" type="submit">Add item</button></div></form>
