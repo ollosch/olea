@@ -116,6 +116,7 @@ func Coins(app core.App, request CoinRequest) error {
 	if !validDenomination(request.Denomination) || request.Amount <= 0 {
 		return fmt.Errorf("%w: use CP, SP, EP, GP, or PP and a positive whole amount", ErrInvalid)
 	}
+	request.Denomination = strings.ToLower(request.Denomination)
 	return app.RunInTransaction(func(tx core.App) error {
 		source, err := resolveStore(tx, request.Source)
 		if err != nil {
