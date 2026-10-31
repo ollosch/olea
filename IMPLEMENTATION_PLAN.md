@@ -32,7 +32,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **02 — Persistence and initial schema**
   Introduce version-controlled PocketBase Go migrations for `systems`, `games`, local `profiles`, and `characters`, including a game's system and optional GM profile and a character's required game plus optional single owner. Seed a D&D 5e system identifier only, without copyrighted content. Verify migrations on an empty data directory and on restart; describe the data directory and upgrade procedure in the README.
 
-- [ ] **03 — Game management**
+- [x] **03 — Game management**
   Give the GM a game list and creation/edit/delete UI with system selection. Show useful empty and error states; prevent deleting a populated game without explicit confirmation. Verify games persist after restart and remain associated with their chosen system.
 
 - [ ] **04 — GM-created characters and selection**
@@ -132,17 +132,23 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [ ] **32 — AD&D 2e import and views**
   Import the supplied spell index/pages and available creature material with a source-specific parser; preserve raw markup, report unsupported/missing content and expose spell school, sphere, level and source filters where data supports them. Add safe readable rendering and system-specific monster HP roll support only where notation can be interpreted confidently. Use invented fixtures and manually validate examples; don't assume all source pages are complete.
 
-- [ ] **33 — Dolmenwood system support**
-  Inspect user-provided data before choosing an importer. Add local import, relevant catalog fields, filters, readable views, currency/encumbrance configuration and roll behavior only where source data supports them; preserve manual fallback. If data is unavailable, document what is needed and stop instead of inventing rules. Verify with synthetic fixtures and available local examples.
-
-- [ ] **34 — Land of Eem system support**
-  Follow the same data-first approach as step 33 for Land of Eem, including appropriate system-specific filters and manual fallbacks. If data is unavailable, document the blocker. Verify with synthetic fixtures and available local examples.
-
-- [ ] **35 — Simple backup and restore**
+- [ ] **33 — Simple backup and restore**
   Provide a clear local backup/restore workflow using PocketBase's supported backup mechanism or a documented stopped-server copy. Include game data, imported content and alternate descriptions; never rely on copying only a live SQLite database. Verify restore into a separate data directory and include operational instructions.
 
-- [ ] **36 — Cross-platform release and LAN startup**
+- [ ] **34 — Cross-platform release and LAN startup**
   Build and package self-contained executables for Linux, Windows and macOS with the Vue frontend embedded and clear start instructions; persist data at a predictable writable path that survives upgrades. Display usable LAN address/port and optionally a QR code. Check firewall and offline guidance. Cross-compilation is useful but does not replace testing on each OS; report actual platform test coverage. Docker can be offered as an optional convenience, not a prerequisite.
+
+---
+
+STOP IMPLEMENTATION HERE. THE DATA FOR LAND OF EEM AND DOLMENWOOD IS NOT YET AVAILABLE
+
+---
+
+- [ ] **35 — Land of Eem system support**
+  Follow the same data-first approach as step 33 for Land of Eem, including appropriate system-specific filters and manual fallbacks. If data is unavailable, document the blocker. Verify with synthetic fixtures and available local examples.
+
+- [ ] **36 — Dolmenwood system support**
+  Inspect user-provided data before choosing an importer. Add local import, relevant catalog fields, filters, readable views, currency/encumbrance configuration and roll behavior only where source data supports them; preserve manual fallback. If data is unavailable, document what is needed and stop instead of inventing rules. Verify with synthetic fixtures and available local examples.
 
 ## Verification milestones
 
