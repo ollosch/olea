@@ -38,7 +38,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **04 — GM-created characters and selection**
   Add GM character creation, rename and deletion within a game, plus a phone-friendly selection screen and character overview. Persist the selected character on the device and provide an obvious switch action. Verify a game can contain multiple characters and that selecting one does not create a user account.
 
-- [ ] **05 — Local profiles, ownership and GM reassignment**
+- [x] **05 — Local profiles, ownership and GM reassignment**
   Add minimal GM-facing profile creation and ownership assignment/transfer, including multiple characters per profile and assigning a character to the GM. Allow changing a game's GM profile. Selecting a character on a phone must not require a separate profile login. Verify ownership and GM changes persist; explain that profiles do not secure access.
 
 - [ ] **06 — Per-person accent preferences**

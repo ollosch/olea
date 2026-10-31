@@ -9,7 +9,7 @@ A local-network TTRPG companion for preparing games and managing the details at 
 - The production frontend is embedded in the Go executable. Players connect through a browser on the same network; no internet access is required at runtime.
 - The current appearance preference is stored in each browser, with green on dark as the default. Character-associated preferences can be added when character selection exists.
 
-This is a trusted-LAN application. The current skeleton does not implement authentication or game-level access controls.
+This is a trusted-LAN application. Profiles are lightweight local labels for character ownership and GM assignment, not login accounts. The current app does not implement authentication or game-level access controls; profile and UI restrictions do not secure data from other devices on the network.
 
 ## Develop
 

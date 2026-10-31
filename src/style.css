@@ -129,6 +129,48 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
 .secondary-link { color: var(--accent); }
 .empty-action { margin-top: 22px; }
 .muted-hint { margin-top: 14px; }
+.heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.gm-settings { margin-top: 26px; padding: 18px; display: flex; align-items: center; gap: 16px; border: 1px solid #ffffff14; border-radius: 14px; background: #1b251c77; }
+.gm-copy { min-width: 180px; flex: 1; }
+.gm-copy h2 { margin-top: 8px; font-family: inherit; font-size: 15px; font-weight: 700; letter-spacing: 0; }
+.gm-copy .muted-hint { max-width: 390px; margin-top: 6px; line-height: 1.5; }
+.gm-select-label, .owner-field { min-width: 165px; margin: 0; color: #a7b3a5; font-size: 10px; }
+.gm-select-label .select-input, .owner-field .select-input { min-height: 42px; margin-top: 5px; font-size: 11px; }
+.gm-settings > .secondary-button { min-height: 42px; flex: none; }
+.character-list { margin-top: 22px; display: grid; gap: 11px; }
+.character-management-row { padding: 14px; display: flex; align-items: center; gap: 12px; border: 1px solid #ffffff16; border-radius: 14px; background: #1b251caa; }
+.character-management-row .owner-field { width: 180px; flex: none; }
+.character-management-row .game-copy { flex: 1; }
+.management-footer { margin-top: 26px; padding-top: 18px; display: flex; align-items: center; gap: 12px; border-top: 1px solid #ffffff12; }
+.management-footer .muted-hint { margin: 0; }
+.compact-empty { min-height: 250px; margin-top: 22px; }
+.selected-character, .character-overview-card { margin-top: 30px; padding: 25px; display: flex; flex-direction: column; align-items: center; text-align: center; border: 1px solid color-mix(in srgb, var(--accent) 23%, transparent); border-radius: 16px; background: color-mix(in srgb, var(--accent) 5%, #1b251c); }
+.selected-character .empty-state-icon, .character-overview-card .empty-state-icon { margin-bottom: 12px; }
+.selected-character h2, .character-overview-card h2 { margin-top: 8px; font-size: 25px; }
+.selected-character > p:not(.eyebrow), .character-overview-card > p:not(.eyebrow) { margin-top: 7px; color: #9caa9c; font-size: 12px; }
+.selection-actions { margin-top: 18px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.selection-actions .primary-button, .selection-actions .secondary-button { min-height: 44px; }
+.character-grid { margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.character-card { min-height: 190px; padding: 18px 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid #ffffff18; border-radius: 15px; color: #e8eee6; background: #1b251caa; text-align: center; }
+.character-card:hover, .character-card.is-selected { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 8%, #1b251c); }
+.character-avatar { width: 46px; height: 46px; display: grid; place-items: center; color: var(--accent); border-radius: 14px; background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: 24px; }
+.character-name { margin-top: 13px; font-size: 14px; font-weight: 700; }
+.character-game { margin-top: 5px; color: #97a597; font-size: 10px; }
+.character-select-label { min-height: 34px; margin-top: 12px; display: flex; align-items: center; color: var(--accent); font-size: 10px; font-weight: 700; }
+@media (max-width: 760px) {
+  .heading-actions { width: 100%; }
+  .heading-actions > * { flex: 1; }
+  .gm-settings { align-items: stretch; flex-direction: column; }
+  .gm-select-label { width: 100%; }
+  .gm-settings > .secondary-button { align-self: stretch; }
+  .character-management-row { align-items: flex-start; flex-wrap: wrap; }
+  .character-management-row .game-copy { min-width: calc(100% - 65px); }
+  .character-management-row .owner-field { width: 100%; }
+  .character-management-row .row-actions { padding: 0; }
+  .management-footer { align-items: flex-start; flex-direction: column; }
+  .character-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 380px) { .character-grid { grid-template-columns: 1fr; } }
 @media (max-width: 600px) {
   .game-row { align-items: flex-start; flex-wrap: wrap; padding: 14px; }
   .game-copy { padding-top: 3px; }

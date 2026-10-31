@@ -77,9 +77,14 @@ async function deleteGame(game: GameRecord) {
   if (!window.confirm(`Delete “${game.name}”? This cannot be undone.`)) return
   try {
     const characters = await pb.collection('characters').getList(1, 1, { filter: pb.filter('game = {:gameId}', { gameId: game.id }) })
-    if (characters.totalItems > 0) {
-      window.alert('This game contains characters. Move or delete its characters before deleting the game.')
+    if (characters.totalItems > 0 && !window.confirm(`This game contains ${characters.totalItems} character${characters.totalItems === 1 ? '' : 's'}. Delete the game and all its characters? This cannot be undone.`)) {
       return
+    }
+    if (characters.totalItems > 0) {
+      const allCharacters = await pb.collection('characters').getFullList<{ id: string }>({ filter: pb.filter('game = {:gameId}', { gameId: game.id }), fields: 'id' })
+      for (const character of allCharacters) {
+        await pb.collection('characters').delete(character.id)
+      }
     }
     await pb.collection('games').delete(game.id)
     await load()
@@ -130,6 +135,7 @@ async function deleteGame(game: GameRecord) {
           <p>{{ game.expand?.system?.name ?? 'Unknown system' }}</p>
         </div>
         <div class="row-actions">
+          <RouterLink class="secondary-link" :to="{ name: 'game-characters', params: { gameId: game.id } }">Open</RouterLink>
           <button class="secondary-button" type="button" @click="beginEdit(game)">Edit</button>
           <button class="danger-button" type="button" @click="deleteGame(game)">Delete</button>
         </div>

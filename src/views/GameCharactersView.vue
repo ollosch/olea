@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle, DialogTrigger } from 'reka-ui'
 import { pb } from '../lib/pocketbase'
 
 type ProfileRecord = { id: string; name: string }
@@ -19,6 +20,13 @@ const name = ref('')
 const saving = ref(false)
 const formError = ref('')
 const canDeleteGame = ref(false)
+const profiles = ref<ProfileRecord[]>([])
+const profileFormOpen = ref(false)
+const profileName = ref('')
+const profileFormError = ref('')
+const profileSaving = ref(false)
+const updatingOwner = ref('')
+const updatingGm = ref(false)
 
 onMounted(load)
 
@@ -26,16 +34,64 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [gameRecord, characterRecords] = await Promise.all([
+    const [gameRecord, characterRecords, profileRecords] = await Promise.all([
       pb.collection('games').getOne<GameRecord>(gameId.value, { expand: 'system,gm_profile' }),
       pb.collection('characters').getFullList<CharacterRecord>({ filter: pb.filter('game = {:gameId}', { gameId: gameId.value }), sort: 'name', expand: 'owner' }),
+      pb.collection('profiles').getFullList<ProfileRecord>({ sort: 'name' }),
     ])
     game.value = gameRecord
     characters.value = characterRecords
+    profiles.value = profileRecords
   } catch {
     error.value = 'This game or its characters could not be loaded.'
   } finally {
     loading.value = false
+  }
+}
+
+async function createProfile() {
+  const cleanName = profileName.value.trim()
+  if (!cleanName) {
+    profileFormError.value = 'Enter a profile name.'
+    return
+  }
+  profileSaving.value = true
+  profileFormError.value = ''
+  try {
+    const profile = await pb.collection('profiles').create<ProfileRecord>({ name: cleanName })
+    profiles.value = [...profiles.value, profile].sort((a, b) => a.name.localeCompare(b.name))
+    profileName.value = ''
+    profileFormOpen.value = false
+  } catch {
+    profileFormError.value = 'The profile could not be created. Check the connection and try again.'
+  } finally {
+    profileSaving.value = false
+  }
+}
+
+async function assignOwner(character: CharacterRecord, owner: string) {
+  updatingOwner.value = character.id
+  try {
+    await pb.collection('characters').update(character.id, { owner })
+    await load()
+  } catch {
+    error.value = 'The character owner could not be updated. Check the connection and try again.'
+    await load()
+  } finally {
+    updatingOwner.value = ''
+  }
+}
+
+async function assignGameMaster(profileId: string) {
+  if (!game.value) return
+  updatingGm.value = true
+  try {
+    await pb.collection('games').update(game.value.id, { gm_profile: profileId })
+    await load()
+  } catch {
+    error.value = 'The Game Master profile could not be updated. Check the connection and try again.'
+  } finally {
+    updatingGm.value = false
   }
 }
 
@@ -112,8 +168,29 @@ async function deleteEmptyGame() {
       </div>
 
       <section class="gm-settings" aria-labelledby="gm-title">
-        <div><p class="eyebrow">GAME MASTER</p><h2 id="gm-title">{{ game.expand?.gm_profile?.name ?? 'Not assigned' }}</h2></div>
-        <span class="muted-hint">GM reassignment available in profiles below</span>
+        <div class="gm-copy"><p class="eyebrow">GAME MASTER</p><h2 id="gm-title">{{ game.expand?.gm_profile?.name ?? 'Not assigned' }}</h2><p class="muted-hint">Profiles organize ownership and preferences; they are not accounts or access controls.</p></div>
+        <label class="field-label gm-select-label" for="gm-profile">Assign GM
+          <select id="gm-profile" class="select-input" :value="game.gm_profile" :disabled="updatingGm" @change="assignGameMaster(($event.target as HTMLSelectElement).value)">
+            <option value="">Not assigned</option>
+            <option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
+          </select>
+        </label>
+        <DialogRoot v-model:open="profileFormOpen">
+          <DialogTrigger class="secondary-button" @click="profileFormError = ''">New profile</DialogTrigger>
+          <DialogPortal>
+            <DialogOverlay class="dialog-overlay" />
+            <DialogContent class="dialog-content">
+              <div class="dialog-heading"><div><p class="eyebrow">LOCAL PROFILE</p><DialogTitle class="dialog-title">Create a profile</DialogTitle></div><DialogClose class="icon-button" aria-label="Close profile form">×</DialogClose></div>
+              <DialogDescription class="dialog-description">Profiles are names used to assign character ownership and a game's GM. They do not create login accounts or restrict access.</DialogDescription>
+              <form @submit.prevent="createProfile">
+                <label class="field-label" for="profile-name">Name</label>
+                <input id="profile-name" v-model="profileName" class="text-input" maxlength="120" required autocomplete="off" placeholder="e.g. Alex" />
+                <p v-if="profileFormError" class="field-error" role="alert">{{ profileFormError }}</p>
+                <div class="form-actions"><DialogClose class="secondary-button">Cancel</DialogClose><button class="primary-button" type="submit" :disabled="profileSaving">{{ profileSaving ? 'Saving…' : 'Create profile' }}</button></div>
+              </form>
+            </DialogContent>
+          </DialogPortal>
+        </DialogRoot>
       </section>
 
       <form v-if="formOpen" class="editor-panel" @submit.prevent="saveCharacter">
@@ -128,6 +205,12 @@ async function deleteEmptyGame() {
         <article v-for="character in characters" :key="character.id" class="character-management-row">
           <div class="game-icon" aria-hidden="true">✧</div>
           <div class="game-copy"><h2>{{ character.name }}</h2><p>{{ character.expand?.owner?.name ? `Owned by ${character.expand.owner.name}` : 'No owner assigned' }}</p></div>
+          <label class="owner-field" :for="`owner-${character.id}`">Owner
+            <select :id="`owner-${character.id}`" class="select-input" :value="character.owner" :disabled="updatingOwner === character.id" @change="assignOwner(character, ($event.target as HTMLSelectElement).value)">
+              <option value="">Unassigned</option>
+              <option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
+            </select>
+          </label>
           <div class="row-actions"><RouterLink class="secondary-link" :to="{ name: 'character-overview', params: { characterId: character.id } }">Overview</RouterLink><button class="secondary-button" type="button" @click="beginEdit(character)">Rename</button><button class="danger-button" type="button" @click="deleteCharacter(character)">Delete</button></div>
         </article>
       </div>
