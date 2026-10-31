@@ -154,6 +154,9 @@ STOP IMPLEMENTATION HERE. THE DATA FOR LAND OF EEM AND DOLMENWOOD IS NOT YET AVA
 - [ ] **36 — Dolmenwood system support**
   Inspect user-provided data before choosing an importer. Add local import, relevant catalog fields, filters, readable views, currency/encumbrance configuration and roll behavior only where source data supports them; preserve manual fallback. If data is unavailable, document what is needed and stop instead of inventing rules. Verify with synthetic fixtures and available local examples.
 
+- [ ] **37 — Two-browser realtime and reconnect verification**
+  Using two browser contexts against the same running instance, verify live encounter and inventory changes appear on both clients. Exercise concurrent quantity/container/coin edits and item or coin transfers; confirm stale edits surface a conflict and refresh authoritative values without losing or duplicating data. Disconnect one client, make changes in the other, then reconnect/refocus and confirm the disconnected client refetches current state. Verify player encounter visibility settings update as expected. Record the browsers/devices and outcomes; fix any defects discovered before marking complete.
+
 ## Verification milestones
 
 After steps 01–06, a GM can create a game and characters and a phone can select a character. After steps 07–19, a table can import 5e data and use inventories, stashes, currency and spellbooks. After steps 20–28, a GM can run encounters and print spell/monster cards. Later steps complete tables, additional systems and easy distribution. Adjust order only when the user explicitly changes priorities.
