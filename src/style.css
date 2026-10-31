@@ -178,3 +178,14 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
   .row-actions > * { flex: 1; }
   .secondary-button, .danger-button, .secondary-link { min-height: 44px; padding: 0 8px; }
 }
+
+.entry-stack { display: grid; gap: 9px; }
+.entry-stack > p, .entry-section > p, .entry-list p, .entry-table p, .entry-unknown { color: #b7c2b5; font-size: 13px; line-height: 1.75; white-space: pre-wrap; }
+.entry-section { margin: 12px 0; }
+.entry-section h3, .entry-table-wrap h3 { margin: 12px 0 7px; color: #e8eee6; font-size: 13px; font-weight: 700; }
+.entry-list { margin: 8px 0; padding-left: 24px; color: var(--accent); }
+.entry-list li { padding-left: 4px; margin: 5px 0; }
+.entry-table-wrap { max-width: 100%; margin: 12px 0; overflow-x: auto; }
+.entry-table { width: 100%; border-collapse: collapse; color: #b7c2b5; font-size: 12px; }
+.entry-table th, .entry-table td { min-width: 75px; padding: 8px 10px; text-align: left; vertical-align: top; border: 1px solid #ffffff20; }
+.entry-table th { color: #e8eee6; background: #ffffff08; }

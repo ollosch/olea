@@ -58,7 +58,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **10 — D&D 5e items importer**
   Import `item` records from `data/dnd5e_items.json`, retaining type, weight, value, rarity, source and entries. Resolve supported `_copy` inheritance/modifications when the base is available; report unsupported or missing references clearly and do not silently claim a complete import. Handle item groups deliberately. Verify synthetic inheritance and missing-reference cases; report actual import counts/warnings.
 
-- [ ] **11 — Readable content rendering**
+- [x] **11 — Readable content rendering**
   Render imported descriptions and nested entries safely, including common 5e inline tags for dice, damage, links and references. Unsupported tags should remain readable rather than disappearing; never render arbitrary source HTML unsafely. Share presentation helpers with later print layouts. Verify nested synthetic content, plain text, unknown tags and common links.
 
 - [ ] **12 — System-specific browsing and filters**
