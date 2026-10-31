@@ -1,0 +1,52 @@
+# Olea
+
+A local-network TTRPG companion for preparing games and managing the details at the table. The repository currently contains the application foundation; game features are tracked in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+
+## Architecture
+
+- Vue 3, TypeScript, Vite, Tailwind CSS and Reka UI for a responsive web interface.
+- PocketBase embedded in a Go application for SQLite storage, the API and realtime subscriptions.
+- The production frontend is embedded in the Go executable. Players connect through a browser on the same network; no internet access is required at runtime.
+- The current appearance preference is stored in each browser, with green on dark as the default. Character-associated preferences can be added when character selection exists.
+
+This is a trusted-LAN application. The current skeleton does not implement authentication or game-level access controls.
+
+## Develop
+
+Requirements: Node.js 20.19+ or 22.12+ (a current LTS is recommended), npm, and Go 1.27 or newer. These are development tools, not prerequisites for running a built binary.
+
+```sh
+npm ci
+npm run build
+```
+
+In one terminal, start the backend from the repository root:
+
+```sh
+go -C server run . serve --http=127.0.0.1:8090 --dir=../pb_data
+```
+
+In another terminal, run the frontend development server:
+
+```sh
+npm run dev
+```
+
+Open the Vite URL shown in the terminal. Vite proxies `/api` to PocketBase. `npm run build` is needed once before starting the Go server; frontend edits then update through Vite. Run `npm run typecheck` to check TypeScript.
+
+## Build and run
+
+```sh
+npm ci
+npm run build
+go -C server build -o ../bin/olea .
+./bin/olea serve --http=0.0.0.0:8090 --dir=./pb_data
+```
+
+On Windows, build to `../bin/olea.exe` and run `bin\olea.exe` with the same arguments. Visit `http://localhost:8090` on the host or `http://<host-lan-ip>:8090` from another device on the same Wi-Fi. Allow the port through the host firewall if needed. PocketBase's admin UI is at `/_/`.
+
+The binary also defaults to `serve --http=0.0.0.0:8090` if started with no arguments. PocketBase uses its default data directory in that case; use `--dir` for an explicit, predictable location. Shut down the server before copying its data directory for a backup. Convenient packaging and LAN address discovery are planned, not implemented yet.
+
+## Local data
+
+`data/` contains user-provided reference material and is deliberately Git-ignored. Runtime PocketBase data, dependencies, generated frontend assets and binaries are ignored too. Never commit personal source material or campaign databases.

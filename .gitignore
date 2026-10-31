@@ -1,0 +1,12 @@
+# User-supplied game data and runtime databases must stay local.
+/data/
+/pb_data/
+/server/pb_data/
+
+# Dependencies, generated assets, and binaries.
+/node_modules/
+/server/ui/dist/
+/dist/
+/bin/
+*.log
+.DS_Store
