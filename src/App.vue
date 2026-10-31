@@ -108,10 +108,12 @@ async function applyProfileAccent(token: number) {
 
 async function saveAccent() {
   const value = accent.value
-  browserAccent.value = value
   applyLocalAccent()
-  try { localStorage.setItem('olea.accent', value) } catch { /* Browser fallback preference is optional. */ }
-  if (!activeProfileId.value) return
+  if (!activeProfileId.value) {
+    browserAccent.value = value
+    try { localStorage.setItem('olea.accent', value) } catch { /* Browser fallback preference is optional. */ }
+    return
+  }
   try {
     await pb.collection('profiles').update(activeProfileId.value, { accent: value })
   } catch {
