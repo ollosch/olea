@@ -108,3 +108,9 @@ Printing is planned, not yet available. Spell and monster cards are intended to 
 ## Local data
 
 `data/` contains user-provided reference material and is deliberately Git-ignored. Runtime PocketBase data, dependencies, generated frontend assets and binaries are ignored too. Never commit personal source material or campaign databases.
+
+## Built-in system capabilities
+
+`src/lib/systems.ts` defines the typed built-in capability registry. A game resolves its stable system key through its expanded `system` relation; missing, mismatched and unregistered references use the neutral manual fallback. The contracts describe encounter ordering and optional initiative rolls, creature HP interpretation, catalog filters, and denominations and weight. Generic dice evaluation remains in `src/lib/dice.ts`.
+
+To add a built-in system, implement these contracts with its verified rules and presentation definitions, register its stable key, and add tests with invented data. Use `null` or an empty definition for unsupported rules instead of copying another system's assumptions. The registry does not load runtime plugins or reference content. The existing views and storage are being migrated to these contracts in the system architecture milestone; registration alone does not yet extend every screen or server-side currency operation.

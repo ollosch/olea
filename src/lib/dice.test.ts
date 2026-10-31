@@ -1,4 +1,5 @@
-import { abilityModifier, evaluateDice, parseHPFormula, rollGroupInitiative, rollInitiative } from './dice.ts'
+import { evaluateDice, parseHPFormula } from './dice.ts'
+import { abilityModifier, rollGroupInitiative, rollInitiative } from './dnd5e.ts'
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)

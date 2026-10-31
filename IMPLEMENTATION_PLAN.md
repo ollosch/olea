@@ -142,7 +142,7 @@ Complete steps **32a–32f before any further ruleset implementation**. This mil
 
 Keep the design practical: use small, built-in system modules and explicit capability contracts, not an external plugin system or a second backend. A game selects its system by stable key. Shared features own persistence, transactions and UI orchestration; system modules supply only the rules, formats and presentation definitions that vary. Unsupported or unknown capabilities must have an explicit neutral/manual fallback rather than silently using 5e rules. Keep each step independently usable, migrate existing data safely, and document any supported-rule assumptions.
 
-- [ ] **32a — Built-in system capabilities and neutral fallback**
+- [x] **32a — Built-in system capabilities and neutral fallback**
   Define a small typed system registry and capability contracts for the behavior needed by the next steps: encounter order and optional rolls, creature HP interpretation, catalog display/filter definitions, and currency/weight rules. Register 5e and AD&D 2e using their existing stable keys; provide an unknown-system fallback with no invented rule automation. Keep generic dice expression evaluation separate from system-specific rules. Establish how the active game system is resolved, including missing or invalid references, without forcing a large rewrite. Test lookup, unsupported capabilities and fallback behavior with an invented system. Document how to add a built-in system; do not introduce runtime plugins or bundled reference content.
 
 - [ ] **32b — System-aware encounter rules**

@@ -1,4 +1,4 @@
-import { htmlContent, wikiText } from './adnd'
+import { htmlContent, wikiText } from './adnd.ts'
 
 export type CatalogType = 'spell' | 'creature' | 'item'
 export type CatalogRecord = {
