@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle, DialogTrigger } from 'reka-ui'
 import { pb } from '../lib/pocketbase'
 
@@ -9,6 +9,7 @@ type CharacterRecord = { id: string; name: string; game: string; owner: string; 
 type GameRecord = { id: string; name: string; system: string; gm_profile: string; expand?: { system?: { name: string }; gm_profile?: ProfileRecord } }
 
 const route = useRoute()
+const router = useRouter()
 const gameId = computed(() => String(route.params.gameId))
 const game = ref<GameRecord | null>(null)
 const characters = ref<CharacterRecord[]>([])
@@ -145,7 +146,7 @@ async function deleteEmptyGame() {
   if (!window.confirm(`Delete “${game.value.name}” and its stashes? This cannot be undone.`)) return
   try {
     await pb.collection('games').delete(game.value.id)
-    window.location.assign('/games')
+    await router.push({ name: 'games' })
   } catch {
     error.value = 'The game could not be deleted. Check the connection and try again.'
   }

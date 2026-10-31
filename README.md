@@ -1,10 +1,10 @@
 # Olea
 
-A local-network TTRPG companion for preparing games and managing the details at the table. The repository currently contains the application foundation; game features are tracked in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+A local-network TTRPG companion for preparing games and managing the details at the table. Games, characters, catalog browsing, inventories, spellbooks and encounter tools are under active development; remaining features are tracked in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ## Architecture
 
-- Vue 3, TypeScript, Vite, Tailwind CSS and Reka UI for a responsive web interface.
+- Vue 3, Vue Router, TypeScript, Vite, Tailwind CSS and Reka UI for a responsive web interface.
 - PocketBase embedded in a Go application for SQLite storage, the API and realtime subscriptions.
 - The production frontend is embedded in the Go executable. Players connect through a browser on the same network; no internet access is required at runtime.
 - Appearance defaults to green on dark. Before a profile is active, the accent is stored in the browser; once a character owner or game GM is active, it is saved to that local profile and follows it across devices.
@@ -76,6 +76,14 @@ Supported record types are `item`, `spell`, and `creature`. Each record requires
 For the supplied 5etools-style D&D 5e sources, use `go -C server run . --dir=/path/to/pb_data dnd5e-import spells ../data/dnd5e_spells_phb.json`, `go -C server run . --dir=/path/to/pb_data dnd5e-import bestiary ../data/dnd5e_bestiary-mm.json` or `go -C server run . --dir=/path/to/pb_data dnd5e-import items ../data/dnd5e_items.json`. Paths are relative to `server/` because of `go -C server`. These importers retain complete source objects, including fields not yet modeled, and report skipped records or warnings. Spell schools are normalized to names; monster imports support string/object creature type and CR, fractional CR, HP average/formula, Dexterity and actions. Item imports retain type, weight, value, rarity and resolve available `_copy` inheritance with append/insert/replace entry modifications while preserving the original `_copy` definition in source JSON. Unresolved bases and unsupported modifications are skipped with warnings. `itemGroup` bundle definitions are counted and deliberately not imported as standalone items. Missing stats are preserved in original JSON and are not invented. Source JSON remains local and is not included in the repository.
 
 For D&D 5e carrying weight, coins use the standard 50 coins per pound; each denomination is stored and displayed as a separate nonnegative whole-number balance. This is a fixed 5e convention in Olea, not a configurable variant rule.
+
+## Encounters and player display
+
+Encounters are reusable preparation groups; starting combat creates independent live participants whose HP, initiative, conditions and notes are separate from preparation. The GM can optionally show the active encounter, initiative, enemy names, enemy HP and conditions in the player-facing encounter view. These settings are all off by default and only hide details in the UI. This is a trusted-LAN application: they are not access controls, and connected devices can still query local records through the API.
+
+## Planned paper cards
+
+Printing is planned, not yet available. Spell and monster cards are intended to print four per A4 sheet, each slightly smaller than A6 to leave room for margins and cut guides. Monster cards should be printable from a single encounter or a selection of encounters, with repeated creature types deduplicated. Item cards are also planned; approximately A7 and eight per A4 sheet is the current preference, while their layout, especially for weapons, remains undecided. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the planned preview, duplex and overflow requirements.
 
 ## Local data
 

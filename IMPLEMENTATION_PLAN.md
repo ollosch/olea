@@ -21,7 +21,8 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - Encounter templates can be used as disposable print groupings and for combat. Live combat tracks each participant independently. Manual initiative, HP and conditions are always available; implement system-supported rolls as conveniences. Player encounter visibility defaults to hidden and is configurable per game.
 - D&D 5e is first, followed by AD&D 2e, Dolmenwood, and Land of Eem. System-specific filters and displays are required. Preserve user-written alternate descriptions across reimports. Do not distribute copyrighted reference data.
 - Screens should be comfortable with desktop mouse, laptop touch, and phone touch: semantic controls, visible focus, adequate contrast, approximately 44px touch targets, responsive layouts, no hover-only critical actions. Default to dark with green accents; primary color is configurable per local profile, with a browser-local fallback before profile selection.
-- The printed spell-card back contains only the large spell name. Monster printing deduplicates by creature identity and prints one card per monster type across all selected encounters. Four cards per A4 page, double-sided, with preview and legible overflow handling. Printing should also work for a single encounter.
+- Spell and monster cards use four positions per A4 page: each card is slightly smaller than A6 to allow margins and cut guides. Print double-sided with preview and legible overflow handling. The spell-card back contains only the large spell name. Monster printing works for one encounter or several and deduplicates by creature identity across the selection.
+- Item cards are also planned. The tentative format is approximately A7, eight per A4 page; the card design and weapon-specific layout are undecided and must be settled before implementation.
 - Random tables remain part of the product: game-created free-form tables and optional system-supplied templates, with results capable of referencing items, spells, creatures or encounters.
 
 ## Foundation and first usable game
@@ -92,10 +93,10 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **20 — Encounter preparation**
   Add GM create, rename, duplicate and delete operations for game encounters. Extend the catalog picker to support creatures and their system-specific filters. Add monster types through the picker, with quantity, optional notes and manual/custom participant entries. An encounter can be just a print grouping and can be deleted after printing. Ensure owned encounter records are deleted with their game; verify encounters remain independent and carry their game's system.
 
-- [x] **21 — Individual combatants and manual tracker**
+- [ ] **21 — Individual combatants and manual tracker**
   Start an encounter with independently editable participants and per-creature current/max HP, initiative, conditions and notes. Include game characters and custom participants when the GM chooses. Implement stable order, manual tie handling, round/active turn, next/previous, reset and end. Keep preparation separate from live state so an encounter can be reused. Verify repeated creatures have independent HP and condition state.
 
-- [x] **22 — Dice and 5e monster HP**
+- [ ] **22 — Dice and 5e monster HP**
   Add a bounded dice-expression evaluator sufficient for `NdM`, optional signed constant and clear invalid-input handling; no arbitrary code evaluation. For encounter monsters, offer average, individual rolls and manual HP, displaying each result before confirming. PocketBase number fields default missing values to zero: distinguish an absent imported HP average from zero using source data or explicit presence metadata. Test with deterministic injected rolls, invalid formulas and representative 5e data. Leave unsupported formulas editable manually.
 
 - [ ] **23 — 5e initiative rolls**
@@ -110,13 +111,16 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 ## Paper cards
 
 - [ ] **26 — A4 card print foundation**
-  Build an on-screen print preview and browser print stylesheet for exactly four card positions per A4 sheet, with front/back pages, clear cut guides, modest margins, deterministic ordering, and duplex flip options. Use local assets/fonts only. Implement a calibration/test page and visible overflow warnings rather than clipping or shrinking text to unreadable sizes. Verify single/multiple pages and browser print-to-PDF; document actual-printer alignment testing.
+  Build an on-screen print preview and browser print stylesheet for exactly four slightly-smaller-than-A6 card positions per A4 sheet, with front/back pages, clear cut guides, modest margins, deterministic ordering, and duplex flip options. Use local assets/fonts only. Implement a calibration/test page and visible overflow warnings rather than clipping or shrinking text to unreadable sizes. Verify single/multiple pages and browser print-to-PDF; document actual-printer alignment testing.
 
 - [ ] **27 — Spellbook cards**
-  Add selection and printing from a character's spellbook. The front contains at-table spell fields and the preferred alternate description with original fallback; the back contains only the large spell name. Reuse the print foundation and test incomplete final pages, long text and front/back correspondence.
+  Add selection and printing from a character's spellbook. Use four slightly-smaller-than-A6 cards per A4 page. The front contains at-table spell fields and the preferred alternate description with original fallback; the back contains only the large spell name. Reuse the print foundation and test incomplete final pages, long text and front/back correspondence.
 
-- [ ] **28 — Multi-encounter monster cards**
-  Let the GM select one or several encounters from the same game and print the union of their catalog-backed creatures, deduplicated by stable creature identity, not display name or combatant count. Print exactly one card per monster type with stats/actions and preferred short text on the front and large name plus available flavour/notes on the back. Clearly handle custom participants and missing fluff. Verify repeated monsters across encounters, same-name different-source creatures, partial pages and double-sided pairing.
+- [ ] **28 — Single- and multi-encounter monster cards**
+  Let the GM print creatures directly from a single encounter or select several encounters from the same game and print their union. Deduplicate catalog-backed creatures by stable creature identity, not display name or combatant count. Use four slightly-smaller-than-A6 cards per A4 page; print exactly one card per monster type with stats/actions and preferred short text on the front and large name plus available flavour/notes on the back. Clearly handle custom participants and missing fluff. Verify single-encounter printing, repeated monsters across encounters, same-name different-source creatures, partial pages and double-sided pairing.
+
+- [ ] **28a — Item cards**
+  Design and implement printable item cards, including appropriate weapon presentation. The tentative format is approximately A7 with eight cards per A4 page; confirm the card size, front/back content and weapon-specific layout before implementation. Provide preview, legible overflow handling and print alignment checks consistent with the card foundation. Verify ordinary items, weapons, custom items and incomplete sheets.
 
 ## Tables, systems and distribution
 
