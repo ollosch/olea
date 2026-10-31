@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { pb } from '../lib/pocketbase'
-import { itemTypeLabel, type CatalogRecord } from '../lib/catalog'
+import { compareChallengeRating, itemTypeLabel, type CatalogRecord } from '../lib/catalog'
 
 const props = withDefaults(defineProps<{ systemId: string; type?: 'item' | 'spell' | 'creature' }>(), { type: 'item' })
 const emit = defineEmits<{ select: [record: CatalogRecord] }>()
@@ -59,7 +59,7 @@ async function loadChoices() {
     rarities.value = unique(all.map((entry) => entry.rarity ?? '').filter(Boolean))
     schools.value = unique(all.map((entry) => entry.school ?? '').filter(Boolean))
     creatureTypes.value = unique(all.map((entry) => entry.creature_type ?? '').filter(Boolean))
-    challengeRatings.value = unique(all.map((entry) => entry.challenge_rating ?? '').filter(Boolean))
+    challengeRatings.value = unique(all.map((entry) => entry.challenge_rating ?? '').filter(Boolean)).sort(compareChallengeRating)
     if (showDndFilters.value && !source.value && sources.value.includes('PHB')) source.value = 'PHB'
   } catch { error.value = 'Catalog filters could not be loaded.' }
   await loadRecords()
@@ -82,7 +82,7 @@ async function loadRecords() {
     if (current !== token) return
     const matches = result.filter((entry) => props.type === 'item'
       ? (!itemType.value || entry.item_type === itemType.value || (typeof entry.item_type === 'string' && entry.item_type.split('|')[0] === itemType.value)) && (!rarity.value || entry.rarity === rarity.value)
-      : props.type !== 'creature' || (!minCR.value || compareCR(entry.challenge_rating, minCR.value) >= 0) && (!maxCR.value || compareCR(entry.challenge_rating, maxCR.value) <= 0))
+      : props.type !== 'creature' || ((!minCR.value && !maxCR.value) || !!entry.challenge_rating && (!minCR.value || compareChallengeRating(entry.challenge_rating, minCR.value) >= 0) && (!maxCR.value || compareChallengeRating(entry.challenge_rating, maxCR.value) <= 0)))
     matchCount.value = matches.length
     records.value = matches.slice(0, limit.value)
   } catch {
@@ -91,8 +91,6 @@ async function loadRecords() {
 }
 
 function unique(values: string[]) { return [...new Set(values)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) }
-function compareCR(left: string, right: string) { return crValue(left) - crValue(right) }
-function crValue(value: string) { const parts = value.split('/').map(Number); return parts.length === 2 ? parts[0] / parts[1] : Number(value) }
 </script>
 
 <template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   DialogClose,
@@ -34,15 +34,30 @@ try {
 onMounted(async () => {
   window.addEventListener('olea-character-selected', refreshActiveProfile)
   window.addEventListener('olea-profile-changed', refreshActiveProfile)
+  window.addEventListener('online', refreshConnection)
+  window.addEventListener('focus', refreshConnection)
+  document.addEventListener('visibilitychange', refreshOnVisible)
+  await refreshConnection()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('online', refreshConnection)
+  window.removeEventListener('focus', refreshConnection)
+  document.removeEventListener('visibilitychange', refreshOnVisible)
+})
+
+async function refreshOnVisible() { if (document.visibilityState === 'visible') await refreshConnection() }
+async function refreshConnection() {
   try {
     await pb.health.check()
     connection.value = 'connected'
-  } catch {
-    connection.value = 'unavailable'
-  }
-})
+    window.dispatchEvent(new Event('olea-reconnected'))
+  } catch { connection.value = 'unavailable' }
+}
 
 watch(() => route.fullPath, refreshActiveProfile, { immediate: true })
+
+const isPlayerEncounterRoute = () => route.name === 'player-encounter'
 
 async function refreshActiveProfile() {
   const token = ++profileLookup
@@ -64,7 +79,7 @@ async function refreshActiveProfile() {
         activeProfileId.value = game.gm_profile || ''
       } else {
         // On the GM workspace, the currently assigned game master is the active person.
-        const games = await pb.collection('games').getFullList<{ gm_profile: string }>({ sort: '-updated', fields: 'gm_profile' })
+        const games = await pb.collection('games').getFullList<{ gm_profile: string }>({ sort: 'name', fields: 'gm_profile' })
         if (token !== profileLookup) return
         activeProfileId.value = games.find((game) => game.gm_profile)?.gm_profile ?? ''
       }
@@ -173,7 +188,7 @@ function resetAccent() {
     <div class="app-layout">
       <nav class="primary-nav" aria-label="Main navigation">
         <p class="nav-label">YOUR TABLE</p>
-        <RouterLink class="nav-link" active-class="is-active" to="/games">
+        <RouterLink v-if="!isPlayerEncounterRoute()" class="nav-link" active-class="is-active" to="/games">
           <span class="nav-icon" aria-hidden="true">◇</span><span>Games</span>
           <span class="nav-context">GM</span>
         </RouterLink>
@@ -181,11 +196,11 @@ function resetAccent() {
           <span class="nav-icon" aria-hidden="true">✧</span><span>Choose character</span>
           <span class="nav-context">PLAYER</span>
         </RouterLink>
-        <RouterLink class="nav-link" active-class="is-active" to="/catalog">
+        <RouterLink v-if="!isPlayerEncounterRoute()" class="nav-link" active-class="is-active" to="/catalog">
           <span class="nav-icon" aria-hidden="true">⌕</span><span>Catalog</span>
           <span class="nav-context">GM</span>
         </RouterLink>
-        <div class="nav-note">
+        <div v-if="!isPlayerEncounterRoute()" class="nav-note">
           <span aria-hidden="true">✦</span>
           <p>More tools for your table are on their way.</p>
         </div>

@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { pb } from '../lib/pocketbase'
 
-type CharacterRecord = { id: string; name: string; game: string; expand?: { game?: { name: string; system: string; expand?: { system?: { name: string } } } } }
+type CharacterRecord = { id: string; name: string; game: string; expand?: { game?: { id: string; name: string; system: string; encounter_visible: boolean; expand?: { system?: { name: string } } } } }
 
 const route = useRoute()
 const character = ref<CharacterRecord | null>(null)
@@ -19,7 +19,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    character.value = await pb.collection('characters').getOne<CharacterRecord>(String(route.params.characterId), { expand: 'game,game.system' })
+      character.value = await pb.collection('characters').getOne<CharacterRecord>(String(route.params.characterId), { expand: 'game,game.system' })
   } catch {
     error.value = 'This character could not be loaded.'
   } finally {
@@ -54,6 +54,7 @@ function selectOnDevice() {
       </div>
       <RouterLink class="tool-link" :to="{ name: 'character-inventory', params: { characterId: character.id } }"><span class="upcoming-icon" aria-hidden="true">◇</span><span><strong>Inventory</strong><small>Manage carried items and quantities</small></span><span aria-hidden="true">→</span></RouterLink>
       <RouterLink class="tool-link" :to="{ name: 'character-spellbooks', params: { characterId: character.id } }"><span class="upcoming-icon" aria-hidden="true">✧</span><span><strong>Spellbooks</strong><small>Collect system spells in named books</small></span><span aria-hidden="true">→</span></RouterLink>
+      <RouterLink v-if="character.expand?.game?.encounter_visible" class="tool-link" :to="{ name: 'player-encounter', params: { gameId: character.game } }"><span class="upcoming-icon" aria-hidden="true">⚔</span><span><strong>Active encounter</strong><small>View the encounter shared by the Game Master</small></span><span aria-hidden="true">→</span></RouterLink>
       <RouterLink class="text-link" to="/characters">← Switch character</RouterLink>
     </template>
   </section>

@@ -30,6 +30,21 @@ func TestEncounterPreparationIsIndependentAndCascadesWithGame(t *testing.T) {
 	first := save(t, app, "encounters", map[string]any{"game": game.Id, "name": "Cellar"})
 	second := save(t, app, "encounters", map[string]any{"game": game.Id, "name": "Tower"})
 	entry := save(t, app, "encounter_creatures", map[string]any{"encounter": first.Id, "creature": creature.Id, "name": "Test Ooze", "quantity": 3})
+	combat := save(t, app, "combats", map[string]any{"encounter": first.Id, "active": true, "round": 1})
+	combatantA := save(t, app, "combatants", map[string]any{"combat": combat.Id, "name": "Test Ooze 1", "enemy": true, "sort_order": 0})
+	combatantB := save(t, app, "combatants", map[string]any{"combat": combat.Id, "name": "Test Ooze 2", "enemy": true, "sort_order": 1})
+	combatantA.Set("current_hp", 5)
+	combatantA.Set("conditions", "prone")
+	if err := app.Save(combatantA); err != nil {
+		t.Fatal(err)
+	}
+	combatantB, err = app.FindRecordById("combatants", combatantB.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if combatantB.GetFloat("current_hp") != 0 || combatantB.GetString("conditions") != "" {
+		t.Fatal("repeated creature combatants share HP or conditions")
+	}
 	items, err := app.FindRecordsByFilter("encounter_creatures", "encounter = {:id}", "", 0, 0, map[string]any{"id": second.Id})
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +55,7 @@ func TestEncounterPreparationIsIndependentAndCascadesWithGame(t *testing.T) {
 	if err := app.Delete(game); err != nil {
 		t.Fatal(err)
 	}
-	for collection, id := range map[string]string{"encounters": first.Id, "encounter_creatures": entry.Id} {
+	for collection, id := range map[string]string{"encounters": first.Id, "encounter_creatures": entry.Id, "combats": combat.Id, "combatants": combatantA.Id} {
 		if _, err := app.FindRecordById(collection, id); err == nil {
 			t.Errorf("%s %s survived game deletion", collection, id)
 		}

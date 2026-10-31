@@ -1,4 +1,4 @@
-import { abilityModifier, evaluateDice, parseHPFormula, rollInitiative } from './dice.ts'
+import { abilityModifier, evaluateDice, parseHPFormula, rollGroupInitiative, rollInitiative } from './dice.ts'
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -10,6 +10,7 @@ assert(parseHPFormula('3d8 + 6') === '3d8 + 6', 'supported HP formula should par
 assert(parseHPFormula('3d8/2') === null, 'unsupported HP formula should be manual')
 assert(abilityModifier(9) === -1 && abilityModifier(10) === 0, 'ability modifiers should floor correctly')
 assert(rollInitiative(-2, () => 10) === 8, 'initiative modifier should be applied')
+assert(rollGroupInitiative([-2, 1], () => 10).join(',') === '8,11', 'group roll should share one die and use individual modifiers')
 for (const expression of ['0d6', '1d0', '101d6', '1d1001', '1d6+2d4', '2 ** 10']) {
   let rejected = false
   try { evaluateDice(expression) } catch { rejected = true }

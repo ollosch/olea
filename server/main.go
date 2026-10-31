@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -18,6 +19,7 @@ import (
 	"olea/catalogimport"
 	"olea/dnd5eimport"
 	_ "olea/migrations"
+	"olea/recordupdate"
 	"olea/transfers"
 )
 
@@ -121,6 +123,22 @@ func main() {
 				return re.BadRequestError("Invalid transfer request.", err)
 			}
 			if err := transfers.Coins(re.App, request); err != nil {
+				return re.BadRequestError(err.Error(), nil)
+			}
+			return re.NoContent(204)
+		})
+		e.Router.POST("/api/olea/records/{collection}/{id}/update", func(re *core.RequestEvent) error {
+			var request struct {
+				Expected map[string]any `json:"expected"`
+				Fields   map[string]any `json:"fields"`
+			}
+			if err := re.BindBody(&request); err != nil {
+				return re.BadRequestError("Invalid update request.", err)
+			}
+			if err := recordupdate.Update(re.App, re.Request.PathValue("collection"), re.Request.PathValue("id"), request.Expected, request.Fields); err != nil {
+				if errors.Is(err, recordupdate.ErrConflict) {
+					return re.JSON(409, map[string]string{"message": err.Error()})
+				}
 				return re.BadRequestError(err.Error(), nil)
 			}
 			return re.NoContent(204)

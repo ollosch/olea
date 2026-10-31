@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import CatalogPicker from '../components/CatalogPicker.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
-import { abilityModifier, evaluateDice, parseHPFormula, rollInitiative } from '../lib/dice'
+import { abilityModifier, evaluateDice, parseHPFormula, rollGroupInitiative as rollGroupDice, rollInitiative } from '../lib/dice'
+import { guardedUpdate, isConflict } from '../lib/records'
 
-type Game = { id: string; name: string; system: string; expand?: { system?: { key: string; name: string } } }
+type Game = { id: string; updated: string; name: string; system: string; encounter_visible: boolean; encounter_show_initiative: boolean; encounter_show_enemy_names: boolean; encounter_show_hp: boolean; encounter_show_conditions: boolean; expand?: { system?: { key: string; name: string } } }
 type Encounter = { id: string; game: string; name: string }
 type Entry = { id: string; encounter: string; creature: string; name: string; quantity: number; notes: string; custom: boolean; expand?: { creature?: CatalogRecord } }
 type Character = { id: string; name: string; game: string }
-type Combat = { id: string; encounter: string; active: boolean; round: number; turn: number; tie_order: string; name: string; visible: boolean; show_initiative: boolean; show_enemy_names: boolean; show_hp: boolean; show_conditions: boolean }
-type Combatant = { id: string; combat: string; character: string; prepared: string; name: string; enemy: boolean; current_hp: number; max_hp: number; hp_known: boolean; initiative: number; initiative_known: boolean; initiative_modifier: number; initiative_modifier_override: boolean; dexterity_modifier: number; dexterity_known: boolean; hp_formula: string; conditions: string; notes: string; sort_order: number; expand?: { character?: Character; prepared?: Entry } }
+type Combat = { id: string; updated: string; encounter: string; active: boolean; round: number; turn: number; tie_order: string; name: string; visible: boolean; show_initiative: boolean; show_enemy_names: boolean; show_hp: boolean; show_conditions: boolean }
+type Combatant = { id: string; updated: string; combat: string; character: string; prepared: string; name: string; enemy: boolean; current_hp: number; max_hp: number; hp_known: boolean; initiative: number; initiative_known: boolean; initiative_modifier: number; initiative_modifier_override: boolean; dexterity_modifier: number; dexterity_known: boolean; hp_formula: string; conditions: string; notes: string; sort_order: number; expand?: { character?: Character; prepared?: Entry } }
 
 const route = useRoute()
 const gameId = computed(() => String(route.params.gameId))
@@ -34,11 +35,11 @@ const entryDrafts = ref<Record<string, { quantity: number; notes: string }>>({})
 const combat = ref<Combat | null>(null)
 const combatants = ref<Combatant[]>([])
 const gameCharacters = ref<Character[]>([])
-const addCharactersOpen = ref(false)
 const newParticipantName = ref('')
 const combatDrafts = ref<Record<string, { initiative: number | ''; current_hp: number | ''; max_hp: number | ''; conditions: string; notes: string }>>({})
 const hpPreview = ref<Record<string, { current: number; max: number }>>({})
 const initiativeModifiers = ref<Record<string, number | ''>>({})
+const combatSnapshots = ref<Record<string, Combatant>>({})
 const selectedForGroup = ref<string[]>([])
 const diceError = ref('')
 const orderedCombatants = computed(() => {
@@ -52,10 +53,60 @@ const orderedCombatants = computed(() => {
   })
 })
 const activeCombatant = computed(() => orderedCombatants.value[combat.value?.turn ?? 0] ?? null)
+let loadGeneration = 0
 
-onMounted(load)
+const unsubscribe = ref<Array<() => Promise<void>>>([])
+let realtimeGeneration = 0
+onMounted(async () => {
+  await load()
+  await subscribe()
+  window.addEventListener('olea-reconnected', refreshAfterReconnect)
+  window.addEventListener('focus', refreshAfterReconnect)
+})
+onUnmounted(() => {
+  realtimeGeneration++
+  window.removeEventListener('olea-reconnected', refreshAfterReconnect)
+  window.removeEventListener('focus', refreshAfterReconnect)
+  for (const stop of unsubscribe.value) void stop()
+})
+
+async function subscribe() {
+  const generation = ++realtimeGeneration
+  for (const stop of unsubscribe.value) void stop()
+  unsubscribe.value = []
+  if (!selectedId.value) return
+  const collections = ['games', 'encounters', 'encounter_creatures', 'combats', 'combatants']
+  try {
+    const stops = await Promise.all(collections.map((collection) => pb.collection(collection).subscribe('*', () => { void refreshLiveCombat() })))
+    if (generation !== realtimeGeneration) { for (const stop of stops) void stop(); return }
+    unsubscribe.value = stops
+  } catch { error.value = 'Live updates are unavailable. Refresh to see current data.' }
+}
+async function refreshAfterReconnect() { await refreshLiveCombat(); await subscribe() }
+async function refreshLiveCombat() {
+  try {
+    const encounterId = selectedId.value
+    const drafts = combatDrafts.value
+    const modifiers = initiativeModifiers.value
+    const snapshots = combatSnapshots.value
+    const gameRecord = await pb.collection('games').getOne<Game>(gameId.value, { expand: 'system', requestKey: null })
+    const encounterRecords = await pb.collection('encounters').getFullList<Encounter>({ filter: pb.filter('game = {:game}', { game: gameId.value }), sort: 'name', requestKey: null })
+    if (encounterId !== selectedId.value) return
+    game.value = gameRecord
+    encounters.value = encounterRecords
+    await loadEntries()
+    await loadCombat()
+    if (encounterId !== selectedId.value) return
+    for (const participant of combatants.value) {
+      if (drafts[participant.id]) combatDrafts.value[participant.id] = drafts[participant.id]
+      if (modifiers[participant.id] !== undefined) initiativeModifiers.value[participant.id] = modifiers[participant.id]
+      if (snapshots[participant.id]) combatSnapshots.value[participant.id] = snapshots[participant.id]
+    }
+  } catch { error.value = 'Live encounter could not be refreshed. Check the connection.' }
+}
 
 async function load() {
+  const generation = ++loadGeneration
   loading.value = true
   error.value = ''
   try {
@@ -63,29 +114,39 @@ async function load() {
       pb.collection('games').getOne<Game>(gameId.value, { expand: 'system' }),
       pb.collection('encounters').getFullList<Encounter>({ filter: pb.filter('game = {:game}', { game: gameId.value }), sort: 'name', requestKey: null }),
     ])
+    if (generation !== loadGeneration) return
     game.value = gameRecord
     encounters.value = encounterRecords
     if (!encounterRecords.some((entry) => entry.id === selectedId.value)) selectedId.value = encounterRecords[0]?.id ?? ''
     await loadEntries()
+    if (generation !== loadGeneration) return
     await loadCombat()
   } catch { error.value = 'Encounters could not be loaded. Check the connection and try again.' }
-  finally { loading.value = false }
+  finally { if (generation === loadGeneration) loading.value = false }
 }
 
 async function loadEntries() {
   if (!selectedId.value) { entries.value = []; return }
-  entries.value = await pb.collection('encounter_creatures').getFullList<Entry>({
-    filter: pb.filter('encounter = {:encounter}', { encounter: selectedId.value }), sort: 'name', expand: 'creature', requestKey: null,
+  const encounterId = selectedId.value
+  const result = await pb.collection('encounter_creatures').getFullList<Entry>({
+    filter: pb.filter('encounter = {:encounter}', { encounter: encounterId }), sort: 'name', expand: 'creature', requestKey: null,
   })
+  if (encounterId !== selectedId.value) return
+  entries.value = result
   entryDrafts.value = Object.fromEntries(entries.value.map((entry) => [entry.id, { quantity: entry.quantity, notes: entry.notes ?? '' }]))
 }
 
 async function loadCombat() {
   if (!selectedId.value) { combat.value = null; combatants.value = []; return }
-  const active = await pb.collection('combats').getList<Combat>(1, 1, { filter: pb.filter('encounter = {:encounter} && active = true', { encounter: selectedId.value }), sort: '-updated', requestKey: null })
+  const encounterId = selectedId.value
+  const active = await pb.collection('combats').getList<Combat>(1, 1, { filter: pb.filter('encounter = {:encounter} && active = true', { encounter: encounterId }), sort: 'id', requestKey: null })
+  if (encounterId !== selectedId.value) return
   combat.value = active.items[0] ?? null
   if (combat.value) {
-    combatants.value = await pb.collection('combatants').getFullList<Combatant>({ filter: pb.filter('combat = {:combat}', { combat: combat.value.id }), sort: 'sort_order,name', expand: 'character,prepared', requestKey: null })
+    const combatId = combat.value.id
+    const result = await pb.collection('combatants').getFullList<Combatant>({ filter: pb.filter('combat = {:combat}', { combat: combatId }), sort: 'sort_order,name', expand: 'character,prepared', requestKey: null })
+    if (encounterId !== selectedId.value || combat.value?.id !== combatId) return
+    combatants.value = result
     syncCombatDrafts()
   } else combatants.value = []
   gameCharacters.value = game.value ? await pb.collection('characters').getFullList<Character>({ filter: pb.filter('game = {:game}', { game: game.value.id }), sort: 'name', requestKey: null }) : []
@@ -93,6 +154,7 @@ async function loadCombat() {
 
 function syncCombatDrafts() {
   combatDrafts.value = Object.fromEntries(combatants.value.map((entry) => [entry.id, { initiative: entry.initiative_known ? entry.initiative : '', current_hp: entry.hp_known ? entry.current_hp : '', max_hp: entry.hp_known ? entry.max_hp : '', conditions: entry.conditions ?? '', notes: entry.notes ?? '' }]))
+  combatSnapshots.value = Object.fromEntries(combatants.value.map((entry) => [entry.id, { ...entry }]))
   initiativeModifiers.value = Object.fromEntries(combatants.value.map((entry) => [entry.id, entry.initiative_modifier_override ? entry.initiative_modifier : entry.dexterity_known ? entry.dexterity_modifier : '']))
 }
 
@@ -104,7 +166,7 @@ function hpFromSource(participant: Combatant): { average: number | null; formula
   const hp = (source as Record<string, unknown>).hp
   if (!hp || typeof hp !== 'object') return { average: null, formula: null }
   const average = (hp as Record<string, unknown>).average
-  return { average: typeof average === 'number' && Number.isFinite(average) ? average : null, formula: parseHPFormula((hp as Record<string, unknown>).formula) }
+  return { average: typeof average === 'number' && Number.isFinite(average) && average >= 0 ? average : null, formula: parseHPFormula((hp as Record<string, unknown>).formula) }
 }
 
 function previewHP(participant: Combatant, mode: 'average' | 'roll' | 'manual') {
@@ -123,7 +185,7 @@ function previewHP(participant: Combatant, mode: 'average' | 'roll' | 'manual') 
     return
   }
   if (!source.formula) { diceError.value = 'This HP formula is missing or unsupported. Enter HP manually.'; return }
-  try { const result = evaluateDice(source.formula); hpPreview.value[participant.id] = { current: result, max: result } }
+  try { const result = Math.max(0, evaluateDice(source.formula)); hpPreview.value[participant.id] = { current: result, max: result } }
   catch (cause) { diceError.value = cause instanceof Error ? cause.message : 'HP formula could not be rolled.' }
 }
 
@@ -131,16 +193,19 @@ async function confirmHP(participant: Combatant) {
   const preview = hpPreview.value[participant.id]
   if (!preview) return
   try {
-    await pb.collection('combatants').update(participant.id, { current_hp: preview.current, max_hp: preview.max, hp_known: true })
+    await guardedUpdate('combatants', participant, { current_hp: preview.current, max_hp: preview.max, hp_known: true })
     delete hpPreview.value[participant.id]
     await loadCombat()
-  } catch { diceError.value = 'HP could not be saved.' }
+  } catch (cause) { diceError.value = isConflict(cause) ? 'Combatant changed elsewhere; current values were refreshed.' : 'HP could not be saved.'; await loadCombat() }
 }
 
 async function startCombat() {
   if (!selected.value || !entries.value.length) return
+  let created: Combat | null = null
   try {
-    const created = await pb.collection('combats').create<Combat>({ encounter: selected.value.id, active: true, round: 1, turn: 0, tie_order: '[]', name: selected.value.name })
+    const active = await pb.collection('combats').getList<Combat>(1, 1, { filter: pb.filter('active = true && encounter.game = {:game}', { game: gameId.value }), requestKey: null })
+    if (active.totalItems) { error.value = 'End the active combat in this game before starting another.'; return }
+    created = await pb.collection('combats').create<Combat>({ encounter: selected.value.id, active: true, round: 1, turn: 0, tie_order: '[]', name: selected.value.name })
     combat.value = created
     for (const [index, entry] of entries.value.entries()) {
       for (let count = 0; count < entry.quantity; count++) {
@@ -148,13 +213,15 @@ async function startCombat() {
         const creature = entry.expand?.creature
         const source = creature?.original_json && typeof creature.original_json === 'object' ? creature.original_json as Record<string, unknown> : {}
         const hp = source.hp && typeof source.hp === 'object' ? source.hp as Record<string, unknown> : {}
-        const dexterity = typeof source.dex === 'number' && Number.isInteger(source.dex) ? source.dex : null
-        const hpAverage = typeof hp.average === 'number' && Number.isFinite(hp.average) ? hp.average : null
-        await pb.collection('combatants').create({ combat: created.id, prepared: entry.id, name: label, enemy: true, notes: entry.notes ?? '', sort_order: index * 100 + count, hp_formula: typeof hp.formula === 'string' ? hp.formula : '', ...(hpAverage === null ? {} : { current_hp: hpAverage, max_hp: hpAverage, hp_known: true }), ...(dexterity === null ? {} : { dexterity_modifier: abilityModifier(dexterity), dexterity_known: true }) })
+        const dexterity = typeof source.dex === 'number' && Number.isInteger(source.dex) && source.dex >= 0 && source.dex <= 30 ? source.dex : null
+        await pb.collection('combatants').create({ combat: created.id, prepared: entry.id, name: label, enemy: true, notes: entry.notes ?? '', sort_order: index * 100 + count, hp_formula: typeof hp.formula === 'string' ? hp.formula : '', ...(dexterity === null ? {} : { dexterity_modifier: abilityModifier(dexterity), dexterity_known: true }) })
       }
     }
     await loadCombat()
-  } catch { error.value = 'Combat could not be started.' }
+  } catch {
+    if (created) { try { await pb.collection('combats').delete(created.id) } catch { /* Report the partially started combat below. */ } }
+    error.value = 'Combat could not be started. Refresh to check whether a partial combat remains.'
+  }
 }
 
 async function addCharacter(character: Character) {
@@ -185,19 +252,19 @@ async function saveCombatant(participant: Combatant) {
   const modifierOverride = rawModifier !== '' && rawModifier !== undefined && rawModifier !== (participant.dexterity_known ? participant.dexterity_modifier : '')
   if (rawModifier !== '' && rawModifier !== undefined && (!Number.isInteger(rawModifier) || rawModifier < -20 || rawModifier > 20)) { error.value = 'Initiative modifier must be a whole number from −20 to +20.'; return }
   try {
-    await pb.collection('combatants').update(participant.id, { initiative: draft.initiative === '' ? 0 : Number(draft.initiative), initiative_known: draft.initiative !== '', initiative_modifier: rawModifier === '' || rawModifier === undefined ? 0 : Number(rawModifier), initiative_modifier_override: modifierOverride, current_hp: currentHP, max_hp: maxHP, hp_known: hpKnown, conditions: draft.conditions, notes: draft.notes })
+    await guardedUpdate('combatants', combatSnapshots.value[participant.id] ?? participant, { initiative: draft.initiative === '' ? 0 : Number(draft.initiative), initiative_known: draft.initiative !== '', initiative_modifier: rawModifier === '' || rawModifier === undefined ? 0 : Number(rawModifier), initiative_modifier_override: modifierOverride, current_hp: currentHP, max_hp: maxHP, hp_known: hpKnown, conditions: draft.conditions, notes: draft.notes })
     await loadCombat()
-  } catch { error.value = 'The combatant could not be saved.' }
+  } catch (cause) { error.value = isConflict(cause) ? 'This combatant changed elsewhere. Current values have been refreshed; review before saving again.' : 'The combatant could not be saved.'; await loadCombat() }
 }
 
 async function rollOneInitiative(participant: Combatant) {
   try {
     const raw = initiativeModifiers.value[participant.id]
-    const modifier = raw === '' || raw === undefined ? 0 : Number(raw)
+    const modifier = raw === '' || raw === undefined ? participant.dexterity_known ? participant.dexterity_modifier : 0 : Number(raw)
     const result = rollInitiative(modifier)
-    await pb.collection('combatants').update(participant.id, { initiative: result, initiative_known: true, initiative_modifier: modifier, initiative_modifier_override: raw !== '' && raw !== undefined && (!participant.dexterity_known || modifier !== participant.dexterity_modifier) })
+    await guardedUpdate('combatants', participant, { initiative: result, initiative_known: true, initiative_modifier: modifier, initiative_modifier_override: raw !== '' && raw !== undefined && (!participant.dexterity_known || modifier !== participant.dexterity_modifier) })
     await loadCombat()
-  } catch (cause) { diceError.value = cause instanceof Error ? cause.message : 'Initiative could not be rolled.' }
+  } catch (cause) { diceError.value = isConflict(cause) ? 'Combatant changed elsewhere. Current values have been refreshed.' : cause instanceof Error ? cause.message : 'Initiative could not be rolled.'; await loadCombat() }
 }
 
 async function rollGroupInitiative() {
@@ -205,9 +272,18 @@ async function rollGroupInitiative() {
   if (!targets.length) { diceError.value = 'Select one or more participants to roll.'; return }
   diceError.value = ''
   try {
-    for (const participant of targets) await rollOneInitiative(participant)
+    const modifiers = targets.map((participant) => {
+      const raw = initiativeModifiers.value[participant.id]
+      return raw === '' || raw === undefined ? participant.dexterity_known ? participant.dexterity_modifier : 0 : Number(raw)
+    })
+    const results = rollGroupDice(modifiers)
+    for (const [index, participant] of targets.entries()) {
+      const modifier = modifiers[index]
+      await guardedUpdate('combatants', participant, { initiative: results[index], initiative_known: true, initiative_modifier: modifier, initiative_modifier_override: !participant.dexterity_known || modifier !== participant.dexterity_modifier })
+    }
+    await loadCombat()
     selectedForGroup.value = []
-  } catch { diceError.value = 'Selected initiative rolls could not be saved.' }
+  } catch (cause) { diceError.value = isConflict(cause) ? 'A selected combatant changed elsewhere. Current values were refreshed.' : 'Selected initiative rolls could not be saved.'; await loadCombat() }
 }
 
 async function removeCombatant(participant: Combatant) {
@@ -217,8 +293,14 @@ async function removeCombatant(participant: Combatant) {
 
 async function updateCombat(fields: Partial<Combat>) {
   if (!combat.value) return
-  try { combat.value = await pb.collection('combats').update<Combat>(combat.value.id, fields); await loadCombat() }
-  catch { error.value = 'Combat tracker could not be updated.' }
+  try { await guardedUpdate('combats', combat.value, fields); await loadCombat() }
+  catch (cause) { error.value = isConflict(cause) ? 'Combat changed elsewhere. Current values have been refreshed.' : 'Combat tracker could not be updated.'; await loadCombat() }
+}
+
+async function saveDisplaySetting(field: 'encounter_visible' | 'encounter_show_initiative' | 'encounter_show_enemy_names' | 'encounter_show_hp' | 'encounter_show_conditions', value: boolean) {
+  if (!game.value) return
+  try { await guardedUpdate('games', game.value, { [field]: value }); game.value = await pb.collection('games').getOne<Game>(game.value.id, { expand: 'system' }) }
+  catch (cause) { error.value = isConflict(cause) ? 'Game settings changed elsewhere. Current values were refreshed.' : 'The player display setting could not be saved.'; await load() }
 }
 
 async function moveTurn(direction: number) {
@@ -226,15 +308,15 @@ async function moveTurn(direction: number) {
   let turn = combat.value.turn + direction
   let round = combat.value.round
   if (turn >= orderedCombatants.value.length) { turn = 0; round += 1 }
-  if (turn < 0) { turn = orderedCombatants.value.length - 1; round = Math.max(1, round - 1) }
+  if (turn < 0) { if (round <= 1) return; turn = orderedCombatants.value.length - 1; round -= 1 }
   await updateCombat({ turn, round })
 }
 
 async function resetCombat() {
   if (!combat.value) return
   try {
-    for (const participant of combatants.value) await pb.collection('combatants').update(participant.id, { initiative: 0, initiative_known: false, current_hp: 0, max_hp: 0, hp_known: false, conditions: '' })
-    await updateCombat({ active: false, round: 1, turn: 0, tie_order: '[]' })
+    for (const participant of combatants.value) await guardedUpdate('combatants', participant, { initiative: 0, initiative_known: false, current_hp: 0, max_hp: 0, hp_known: false, conditions: '' })
+    await updateCombat({ active: true, round: 1, turn: 0, tie_order: '[]' })
   } catch { error.value = 'Combat could not be reset.' }
 }
 
@@ -253,7 +335,7 @@ async function setTieOrder(participant: Combatant, direction: number) {
 
 async function selectEncounter(id: string) {
   selectedId.value = id
-  try { await loadEntries(); await loadCombat() } catch { error.value = 'Encounter entries could not be loaded.' }
+  try { await loadEntries(); await loadCombat(); await subscribe() } catch { error.value = 'Encounter entries could not be loaded.' }
 }
 
 function beginCreate() { editingId.value = ''; name.value = ''; formOpen.value = true }
@@ -335,12 +417,13 @@ async function removeEntry(entry: Entry) {
         <section v-if="selected" class="encounter-content">
           <div class="spellbook-heading"><div><p class="eyebrow">PREPARATION</p><h2>{{ selected.name }}</h2></div><div class="row-actions"><button class="secondary-button" type="button" @click="beginRename(selected)">Rename</button><button class="secondary-button" type="button" @click="duplicateEncounter(selected)">Duplicate</button><button class="danger-button" type="button" @click="deleteEncounter(selected)">Delete</button></div></div>
           <div class="heading-actions"><button class="primary-button" type="button" @click="pickerOpen = !pickerOpen">＋ Add catalog creature</button><button class="secondary-button" type="button" @click="customOpen = !customOpen">＋ Add custom participant</button></div>
-          <section class="combat-panel">
-            <div class="spellbook-heading"><div><p class="eyebrow">LIVE PLAY</p><h2>{{ combat?.active ? 'Combat in progress' : 'Manual tracker' }}</h2></div><div class="row-actions"><button v-if="!combat?.active" class="primary-button" type="button" :disabled="!entries.length" @click="startCombat">Start combat</button><template v-else><span class="round-pill">Round {{ combat.round }}</span><button class="secondary-button" type="button" @click="resetCombat">Reset</button><button class="danger-button" type="button" @click="endCombat">End combat</button></template></div></div>
+      <section class="combat-panel">
+            <div class="spellbook-heading"><div><p class="eyebrow">LIVE PLAY</p><h2>{{ combat?.active ? 'Combat in progress' : 'Manual tracker' }}</h2></div><div class="row-actions"><RouterLink v-if="combat?.active && game.encounter_visible" class="secondary-link" :to="{ name: 'player-encounter', params: { gameId: game.id } }">Player view</RouterLink><button v-if="!combat?.active" class="primary-button" type="button" :disabled="!entries.length" @click="startCombat">Start combat</button><template v-else><span class="round-pill">Round {{ combat.round }}</span><button class="secondary-button" type="button" @click="resetCombat">Reset</button><button class="danger-button" type="button" @click="endCombat">End combat</button></template></div></div>
             <template v-if="combat?.active">
+              <details class="player-display-settings"><summary>Player display settings</summary><p>These settings hide details in the player-facing UI only; they are not access controls on this trusted LAN.</p><label class="check-field"><input type="checkbox" :checked="game.encounter_visible" @change="saveDisplaySetting('encounter_visible', ($event.target as HTMLInputElement).checked)" /> Show active encounter</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_initiative" @change="saveDisplaySetting('encounter_show_initiative', ($event.target as HTMLInputElement).checked)" /> Show initiative</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_enemy_names" @change="saveDisplaySetting('encounter_show_enemy_names', ($event.target as HTMLInputElement).checked)" /> Show enemy names</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_hp" @change="saveDisplaySetting('encounter_show_hp', ($event.target as HTMLInputElement).checked)" /> Show enemy HP</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_conditions" @change="saveDisplaySetting('encounter_show_conditions', ($event.target as HTMLInputElement).checked)" /> Show conditions</label></details>
               <p v-if="diceError" class="field-error" role="alert">{{ diceError }}</p>
               <div class="turn-controls"><button class="secondary-button" type="button" :disabled="!orderedCombatants.length" @click="moveTurn(-1)">← Previous</button><p v-if="activeCombatant"><strong>Active:</strong> {{ activeCombatant.name }}</p><p v-else>No participants yet</p><button class="secondary-button" type="button" :disabled="!orderedCombatants.length" @click="moveTurn(1)">Next →</button></div>
-              <div class="group-roll"><span>Roll selected initiative</span><button class="secondary-button" type="button" :disabled="!selectedForGroup.length" @click="rollGroupInitiative">Roll group individually</button></div>
+              <div class="group-roll"><span>Roll selected initiative with one shared d20</span><button class="secondary-button" type="button" :disabled="!selectedForGroup.length" @click="rollGroupInitiative">Roll group</button></div>
               <div class="participant-add"><label class="filter-field">Add character<select class="select-input" :disabled="gameCharacters.every((character) => combatants.some((entry) => entry.character === character.id))" @change="addCharacter(gameCharacters.find((character) => character.id === ($event.target as HTMLSelectElement).value)!); ($event.target as HTMLSelectElement).value = ''"><option value="">Choose a character</option><option v-for="character in gameCharacters.filter((entry) => !combatants.some((participant) => participant.character === entry.id))" :key="character.id" :value="character.id">{{ character.name }}</option></select></label><form class="custom-participant-form" @submit.prevent="addCustomCombatant"><label class="filter-field">Add custom participant<input v-model="newParticipantName" class="text-input" maxlength="255" placeholder="Name" /></label><button class="secondary-button" type="submit">Add</button></form></div>
               <div v-if="orderedCombatants.length" class="combatant-list"><article v-for="participant in orderedCombatants" :key="participant.id" class="combatant-card" :class="{ active: activeCombatant?.id === participant.id }"><div class="combatant-title"><div><strong>{{ participant.name }}</strong><small>{{ participant.enemy ? 'Enemy' : participant.character ? 'Character' : 'Participant' }}<template v-if="participant.prepared && participant.expand?.prepared?.expand?.creature"> · {{ participant.expand.prepared.expand.creature.source }}</template></small></div><div class="row-actions"><label class="select-combatant"><input v-model="selectedForGroup" type="checkbox" :value="participant.id" /> Select</label><span class="initiative-pill">{{ participant.initiative_known ? `Init ${participant.initiative}` : 'No initiative' }}</span><button class="icon-button tie-button" type="button" aria-label="Move up within initiative tie" title="Move up within tie" @click="setTieOrder(participant, -1)">↑</button><button class="icon-button tie-button" type="button" aria-label="Move down within initiative tie" title="Move down within tie" @click="setTieOrder(participant, 1)">↓</button><button class="secondary-button" type="button" @click="rollOneInitiative(participant)">Roll</button><button class="danger-button" type="button" @click="removeCombatant(participant)">Remove</button></div></div><div class="combatant-fields"><label class="filter-field">Initiative<input v-model.number="combatDrafts[participant.id]!.initiative" class="text-input" type="number" step="any" placeholder="—" /></label><label class="filter-field">Initiative modifier<input v-model.number="initiativeModifiers[participant.id]" class="text-input" type="number" min="-20" max="20" step="1" :placeholder="participant.dexterity_known ? String(participant.dexterity_modifier) : 'Manual or unset'" /></label><label class="filter-field">Current HP<input v-model.number="combatDrafts[participant.id]!.current_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Max HP<input v-model.number="combatDrafts[participant.id]!.max_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Conditions<input v-model="combatDrafts[participant.id]!.conditions" class="text-input" placeholder="e.g. prone" /></label><label class="filter-field">Notes<input v-model="combatDrafts[participant.id]!.notes" class="text-input" placeholder="Notes" /></label><button class="secondary-button" type="button" @click="saveCombatant(participant)">Save</button></div><div v-if="participant.enemy" class="hp-roll-controls"><span>HP {{ participant.hp_known ? `${participant.current_hp}/${participant.max_hp}` : 'not set' }}</span><button class="inline-button" type="button" @click="previewHP(participant, 'average')">Use average</button><button class="inline-button" type="button" @click="previewHP(participant, 'roll')">Roll HP</button><button class="inline-button" type="button" @click="previewHP(participant, 'manual')">Preview manual</button><span v-if="hpPreview[participant.id]" class="preview-confirm">Preview: {{ hpPreview[participant.id]!.current }}/{{ hpPreview[participant.id]!.max }} <button class="secondary-button" type="button" @click="confirmHP(participant)">Confirm HP</button></span></div></article></div>
               <p v-else class="muted-hint">No live participants. Add game characters or custom participants.</p>

@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import CatalogPicker from '../components/CatalogPicker.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
+import { guardedUpdate, isConflict } from '../lib/records'
 
 type Character = { id: string; name: string; game: string }
-type Inventory = { id: string; game: string; character: string; capacity: number; capacity_known: boolean; cp: number; sp: number; ep: number; gp: number; pp: number }
-type Stash = { id: string; game: string; kind: 'party' | 'personal' | 'location'; name: string; location: string; notes: string; owner: string; cp: number; sp: number; ep: number; gp: number; pp: number }
-type InventoryItem = { id: string; inventory: string; stash: string; catalog_item: string; container: string; name: string; quantity: number; weight: number; weight_known: boolean; is_container: boolean; notes: string; expand?: { catalog_item?: CatalogRecord } }
+type Inventory = { id: string; updated: string; game: string; character: string; capacity: number; capacity_known: boolean; cp: number; sp: number; ep: number; gp: number; pp: number }
+type Stash = { id: string; updated: string; game: string; kind: 'party' | 'personal' | 'location'; name: string; location: string; notes: string; owner: string; cp: number; sp: number; ep: number; gp: number; pp: number }
+type InventoryItem = { id: string; updated: string; inventory: string; stash: string; catalog_item: string; container: string; name: string; quantity: number; weight: number; weight_known: boolean; is_container: boolean; notes: string; expand?: { catalog_item?: CatalogRecord } }
 const route = useRoute()
 const character = ref<Character | null>(null)
 const inventory = ref<Inventory | null>(null)
@@ -37,6 +38,8 @@ const customWeight = ref('')
 const customNotes = ref('')
 const customContainer = ref(false)
 const editing = ref('')
+const editingSnapshot = ref<InventoryItem | null>(null)
+const coinSnapshot = ref<Inventory | Stash | null>(null)
 const quantityDraft = ref(1)
 const notesDraft = ref('')
 const weightDraft = ref('')
@@ -57,23 +60,66 @@ const transferTargets = computed(() => [
   ...stashes.value.filter((stash) => stash.id !== activeStash.value?.id).map((stash) => ({ key: `stash:${stash.id}`, name: `${stash.name} (${stash.kind})` })),
 ])
 
-onMounted(load)
+const subscriptions = ref<Array<() => Promise<void>>>([])
+let inventoryGeneration = 0
+let subscriptionGeneration = 0
+onMounted(async () => {
+  await load()
+  await subscribe()
+  window.addEventListener('olea-reconnected', refreshAfterReconnect)
+  window.addEventListener('focus', refreshAfterReconnect)
+})
+onUnmounted(() => {
+  subscriptionGeneration++
+  window.removeEventListener('olea-reconnected', refreshAfterReconnect)
+  window.removeEventListener('focus', refreshAfterReconnect)
+  for (const stop of subscriptions.value) void stop()
+})
+async function subscribe() {
+  const generation = ++subscriptionGeneration
+  for (const stop of subscriptions.value) void stop()
+  subscriptions.value = []
+  if (!character.value) return
+  try {
+    const stops = await Promise.all(['inventory_items', 'inventories', 'stashes'].map((collection) => pb.collection(collection).subscribe('*', () => {
+      void refreshLiveInventory()
+    })))
+    if (generation !== subscriptionGeneration) { for (const stop of stops) void stop(); return }
+    subscriptions.value = stops
+  } catch { error.value = 'Live updates are unavailable. Refresh to see current inventory data.' }
+}
+async function refreshAfterReconnect() { await refreshLiveInventory(); await subscribe() }
+async function refreshLiveInventory() {
+  if (!character.value || !inventory.value) return
+  try {
+    inventory.value = await pb.collection('inventories').getOne<Inventory>(inventory.value.id, { requestKey: null })
+    await loadStashes()
+    await loadItems()
+    if (!coinSnapshot.value) {
+      const store = activeStash.value ?? inventory.value
+      coins.value = { cp: store.cp, sp: store.sp, ep: store.ep, gp: store.gp, pp: store.pp }
+    }
+  } catch { error.value = 'Live inventory could not be refreshed. Check the connection.' }
+}
 watch(selectedStashId, () => {
   const store = activeStash.value ?? inventory.value
   coins.value = { cp: store?.cp ?? 0, sp: store?.sp ?? 0, ep: store?.ep ?? 0, gp: store?.gp ?? 0, pp: store?.pp ?? 0 }
-  editing.value = ''; movingItemId.value = ''; coinTransferTarget.value = ''; editingStash.value = false
+  editing.value = ''; editingSnapshot.value = null; coinSnapshot.value = null; movingItemId.value = ''; coinTransferTarget.value = ''; editingStash.value = false
   void loadItems().catch(() => { error.value = 'Items could not be loaded.' })
 })
 
 async function load() {
+  const generation = ++inventoryGeneration
   loading.value = true
   error.value = ''
   try {
     character.value = await pb.collection('characters').getOne<Character>(String(route.params.characterId))
+    if (generation !== inventoryGeneration) return
     game.value = await pb.collection('games').getOne<{ system: string }>(character.value.game)
     otherCharacters.value = await pb.collection('characters').getFullList<Character>({ filter: pb.filter('game = {:game} && id != {:id}', { game: character.value.game, id: character.value.id }), sort: 'name' })
     const found = await pb.collection('inventories').getFullList<Inventory>({ filter: pb.filter('character = {:character}', { character: character.value.id }), perPage: 2 })
     inventory.value = found[0] ?? await ensureInventory(character.value.id)
+    if (generation !== inventoryGeneration) return
     capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
     coins.value = { cp: inventory.value.cp ?? 0, sp: inventory.value.sp ?? 0, ep: inventory.value.ep ?? 0, gp: inventory.value.gp ?? 0, pp: inventory.value.pp ?? 0 }
     await loadStashes()
@@ -82,7 +128,7 @@ async function load() {
     await loadItems()
   } catch {
     error.value = 'Inventory could not be loaded. Check the local server and try again.'
-  } finally { loading.value = false }
+  } finally { if (generation === inventoryGeneration) loading.value = false }
 }
 
 let itemLoadToken = 0
@@ -192,7 +238,7 @@ async function addCustomItem() {
   } catch { error.value = 'The custom item could not be added.' }
 }
 
-function startEdit(item: InventoryItem) { editing.value = item.id; quantityDraft.value = item.quantity; notesDraft.value = item.notes ?? ''; weightDraft.value = item.weight_known ? String(item.weight) : ''; weightKnownDraft.value = item.weight_known; containerDraft.value = item.is_container; parentDraft.value = item.container ?? '' }
+function startEdit(item: InventoryItem) { editing.value = item.id; editingSnapshot.value = { ...item }; quantityDraft.value = item.quantity; notesDraft.value = item.notes ?? ''; weightDraft.value = item.weight_known ? String(item.weight) : ''; weightKnownDraft.value = item.weight_known; containerDraft.value = item.is_container; parentDraft.value = item.container ?? '' }
 async function saveEdit(item: InventoryItem) {
   if (!Number.isInteger(quantityDraft.value) || quantityDraft.value < 1) { error.value = 'Quantity must be a whole number greater than zero.'; return }
   if ((containerDraft.value || childCount(item) > 0) && quantityDraft.value !== 1) { error.value = 'Containers and items holding contents must have quantity one.'; return }
@@ -201,8 +247,8 @@ async function saveEdit(item: InventoryItem) {
   if (!Number.isFinite(weight) || weight < 0) { error.value = 'Weight must be zero or a positive number.'; return }
   if (parentDraft.value && (parentDraft.value === item.id || isDescendant(parentDraft.value, item.id))) { error.value = 'A container cannot be moved inside itself or one of its contents.'; return }
   if (parentDraft.value && !items.value.find((entry) => entry.id === parentDraft.value)?.is_container) { error.value = 'Choose a container as the destination.'; return }
-  try { await pb.collection('inventory_items').update(item.id, { quantity: quantityDraft.value, notes: notesDraft.value, weight, weight_known: weightKnownDraft.value, is_container: containerDraft.value, container: parentDraft.value }); editing.value = ''; await loadItems() }
-  catch { error.value = 'The item could not be updated.' }
+  try { await guardedUpdate('inventory_items', editingSnapshot.value ?? item, { quantity: quantityDraft.value, notes: notesDraft.value, weight, weight_known: weightKnownDraft.value, is_container: containerDraft.value, container: parentDraft.value }); editing.value = ''; editingSnapshot.value = null; await loadItems() }
+  catch (cause) { await loadItems(); error.value = isConflict(cause) ? 'This item changed or moved elsewhere. Current contents were refreshed; review before editing again.' : 'The item could not be updated.' }
 }
 async function drop(item: InventoryItem) {
   if (childCount(item) > 0) { error.value = 'Move the contents out before dropping this container.'; return }
@@ -280,24 +326,27 @@ async function saveCapacity() {
   if (!inventory.value) return
   const value = capacityDraft.value.trim() ? Number(capacityDraft.value) : 0
   if (!Number.isFinite(value) || value < 0) { error.value = 'Capacity must be zero or a positive number.'; return }
-  try { inventory.value = await pb.collection('inventories').update<Inventory>(inventory.value.id, { capacity: value, capacity_known: capacityDraft.value.trim() !== '' }) }
-  catch { error.value = 'Capacity could not be saved.' }
+  try { await guardedUpdate('inventories', inventory.value, { capacity: value, capacity_known: capacityDraft.value.trim() !== '' }); await load() }
+  catch (cause) { await load(); error.value = isConflict(cause) ? 'Inventory changed elsewhere. Current values were refreshed.' : 'Capacity could not be saved.' }
 }
 async function saveCoins(denomination: keyof typeof coins.value) {
   if (!inventory.value) return
   if (!Number.isSafeInteger(coins.value[denomination]) || coins.value[denomination] < 0) { error.value = 'Coin balances must be nonnegative whole numbers.'; return }
   try {
     const update = { [denomination]: coins.value[denomination] }
+    if (coinSnapshot.value && coinSnapshot.value.id !== (activeStash.value ?? inventory.value).id) throw new Error('The active store changed.')
     if (activeStash.value) {
-      const updated = await pb.collection('stashes').update<Stash>(activeStash.value.id, update)
-      stashes.value = stashes.value.map((stash) => stash.id === updated.id ? updated : stash)
+      await guardedUpdate('stashes', coinSnapshot.value?.id === activeStash.value.id ? coinSnapshot.value : activeStash.value, update)
+      await load()
       await refreshPartyTotal()
     }
-    else inventory.value = await pb.collection('inventories').update<Inventory>(inventory.value.id, update)
+    else { await guardedUpdate('inventories', coinSnapshot.value?.id === inventory.value.id ? coinSnapshot.value : inventory.value, update); await load() }
     if (!activeStash.value) await refreshPartyTotal()
   }
-  catch { error.value = 'Coin balances could not be saved.' }
+  catch (cause) { await load(); error.value = isConflict(cause) ? 'Coin balance changed elsewhere. Current balances were refreshed.' : 'Coin balances could not be saved.' }
+  finally { coinSnapshot.value = null }
 }
+function beginCoinEdit() { const store = activeStash.value ?? inventory.value; coinSnapshot.value = store ? { ...store } : null }
 function childCount(item: InventoryItem): number { return items.value.filter((entry) => entry.container === item.id).length }
 </script>
 
@@ -314,7 +363,7 @@ function childCount(item: InventoryItem): number { return items.value.filter((en
       <div v-if="activeStash && !editingStash" class="row-actions"><button class="secondary-button" type="button" @click="beginEditStash">Edit stash</button><button v-if="activeStash.kind !== 'party'" class="danger-button" type="button" @click="deleteStash">Delete stash</button></div>
       <form v-if="editingStash" class="editor-panel" @submit.prevent="saveStash"><h2>Edit stash</h2><label class="field-label" for="edit-stash-name">Name</label><input id="edit-stash-name" v-model="stashName" class="text-input" required maxlength="160" /><label class="field-label" for="edit-stash-location">Location (optional)</label><input id="edit-stash-location" v-model="stashLocation" class="text-input" maxlength="500" /><label class="field-label" for="edit-stash-notes">Notes (optional)</label><textarea id="edit-stash-notes" v-model="stashNotes" class="text-area" /><div class="form-actions"><button class="secondary-button" type="button" @click="editingStash = false">Cancel</button><button class="primary-button" type="submit">Save stash</button></div></form>
       <form v-if="stashFormOpen" class="editor-panel" @submit.prevent="createStash"><h2>{{ stashKind === 'personal' ? 'Personal stash' : 'GM location stash' }}</h2><label class="field-label" for="stash-name">Name</label><input id="stash-name" v-model="stashName" class="text-input" required maxlength="160" :placeholder="stashKind === 'personal' ? 'My pack at the inn' : 'Town armory'" /><label class="field-label" for="stash-location">Location (optional)</label><input id="stash-location" v-model="stashLocation" class="text-input" maxlength="500" /><label class="field-label" for="stash-notes">Notes (optional)</label><textarea id="stash-notes" v-model="stashNotes" class="text-area" /><div class="form-actions"><button class="secondary-button" type="button" @click="stashFormOpen = false">Cancel</button><button class="primary-button" type="submit">Create stash</button></div></form>
-      <section class="currency-panel"><div><h2>{{ activeStoreLabel }} · Coins</h2><p>Coin weight: {{ displayedCoinWeight.toFixed(2) }} lb (50 coins per lb).</p><p v-if="!activeStash">Party total (characters + party stash): {{ partyTotal.cp }} CP · {{ partyTotal.sp }} SP · {{ partyTotal.ep }} EP · {{ partyTotal.gp }} GP · {{ partyTotal.pp }} PP</p></div><div class="coin-fields"><label v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" class="filter-field">{{ denomination.toUpperCase() }}<input v-model.number="coins[denomination]" class="text-input" type="number" min="0" step="1" @change="saveCoins(denomination)" /></label></div><div v-if="transferTargets.length" class="coin-transfer"><label class="filter-field">Transfer denomination<select v-model="coinTransferDenomination" class="select-input"><option v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" :value="denomination">{{ denomination.toUpperCase() }}</option></select></label><label class="filter-field">Amount<input v-model.number="coinTransferAmount" class="text-input" type="number" min="1" step="1" /></label><label class="filter-field">To<select v-model="coinTransferTarget" class="select-input"><option value="">Choose a store</option><option v-for="target in transferTargets" :key="target.key" :value="target.key">{{ target.name }}</option></select></label><button class="secondary-button" type="button" @click="transferCoins">Transfer coins</button></div></section>
+      <section class="currency-panel"><div><h2>{{ activeStoreLabel }} · Coins</h2><p>Coin weight: {{ displayedCoinWeight.toFixed(2) }} lb (50 coins per lb).</p><p v-if="!activeStash">Party total (characters + party stash): {{ partyTotal.cp }} CP · {{ partyTotal.sp }} SP · {{ partyTotal.ep }} EP · {{ partyTotal.gp }} GP · {{ partyTotal.pp }} PP</p></div><div class="coin-fields"><label v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" class="filter-field">{{ denomination.toUpperCase() }}<input v-model.number="coins[denomination]" class="text-input" type="number" min="0" step="1" @focus="beginCoinEdit" @change="saveCoins(denomination)" /></label></div><div v-if="transferTargets.length" class="coin-transfer"><label class="filter-field">Transfer denomination<select v-model="coinTransferDenomination" class="select-input"><option v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" :value="denomination">{{ denomination.toUpperCase() }}</option></select></label><label class="filter-field">Amount<input v-model.number="coinTransferAmount" class="text-input" type="number" min="1" step="1" /></label><label class="filter-field">To<select v-model="coinTransferTarget" class="select-input"><option value="">Choose a store</option><option v-for="target in transferTargets" :key="target.key" :value="target.key">{{ target.name }}</option></select></label><button class="secondary-button" type="button" @click="transferCoins">Transfer coins</button></div></section>
       <p class="muted-hint">Carried weight includes container and contents once, plus coins. Container weights are per container; items with unknown weight make the total unknown.</p>
       <div v-if="pickerOpen" class="editor-panel"><div class="catalog-panel-heading"><h2>Choose an item</h2><button class="secondary-button" type="button" @click="pickerOpen = false">Close</button></div><CatalogPicker :system-id="systemId" @select="addCatalogItem" /></div>
       <form v-if="customOpen" class="editor-panel" @submit.prevent="addCustomItem"><h2>Custom item</h2><label class="field-label" for="custom-item-name">Name</label><input id="custom-item-name" v-model="customName" class="text-input" required maxlength="240" /><label class="field-label" for="custom-item-weight">Weight per item (optional)</label><input id="custom-item-weight" v-model="customWeight" class="text-input" type="number" min="0" step="any" placeholder="Unknown" /><label class="field-label" for="custom-item-notes">Notes</label><textarea id="custom-item-notes" v-model="customNotes" class="text-area" /><label class="check-field"><input v-model="customContainer" type="checkbox" /> This item is a container</label><div class="form-actions"><button class="secondary-button" type="button" @click="customOpen = false">Cancel</button><button class="primary-button" type="submit">Add item</button></div></form>
