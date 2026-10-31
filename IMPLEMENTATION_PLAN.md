@@ -46,7 +46,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 
 ## Catalog and system data
 
-- [ ] **07 — Catalog storage and local import plumbing**
+- [x] **07 — Catalog storage and local import plumbing**
   Add migrations and a simple import path for item, spell and creature records: stable system/type/source identity, useful query fields and original JSON. Imports are local and explicitly invoked; no network or bundled source content. Re-imports update matching records rather than duplicating them and don't delete user data. Provide an import summary and small synthetic fixtures. Verify import/reimport and offline operation.
 
 - [ ] **08 — D&D 5e spells importer**

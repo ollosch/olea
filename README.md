@@ -7,7 +7,7 @@ A local-network TTRPG companion for preparing games and managing the details at 
 - Vue 3, TypeScript, Vite, Tailwind CSS and Reka UI for a responsive web interface.
 - PocketBase embedded in a Go application for SQLite storage, the API and realtime subscriptions.
 - The production frontend is embedded in the Go executable. Players connect through a browser on the same network; no internet access is required at runtime.
-- The current appearance preference is stored in each browser, with green on dark as the default. Character-associated preferences can be added when character selection exists.
+- Appearance defaults to green on dark. Before a profile is active, the accent is stored in the browser; once a character owner or game GM is active, it is saved to that local profile and follows it across devices.
 
 This is a trusted-LAN application. Profiles are lightweight local labels for character ownership and GM assignment, not login accounts. The current app does not implement authentication or game-level access controls; profile and UI restrictions do not secure data from other devices on the network.
 
@@ -50,6 +50,28 @@ On Windows, build to `../bin/olea.exe` and run `bin\olea.exe` with the same argu
 The binary also defaults to `serve --http=0.0.0.0:8090` if started with no arguments. PocketBase then uses its default `pb_data/` directory in the current working directory. Prefer an explicit `--dir` so the location remains predictable: the development command above uses `../pb_data` from `server/`, and the built command uses `./pb_data` from the repository root. This directory contains the SQLite database and other runtime files; it is local campaign data and must not be committed.
 
 On upgrade, stop the running server, replace it with the newly built version, and start it again with the same `--dir`. Version-controlled Go migrations in `server/migrations/` are applied automatically on startup and record their applied versions in the database. Keep the data directory when upgrading. Back it up only while the server is stopped; do not copy only the live SQLite database. To initialize a fresh install, start the server with an empty data directory and PocketBase will create the schema and seed the `dnd5e` system identifier.
+
+## Local catalog imports
+
+Catalog imports are explicitly invoked on the host; the application does not fetch or bundle reference data. `go -C server run . --dir=/path/to/pb_data catalog-import <system-key> <json-file>` accepts the source-neutral JSON interchange format below. Omit `--dir` to use PocketBase's default directory relative to the server working directory. The importer updates records with the same system/type/source/source_id and leaves alternate descriptions and notes intact.
+
+```json
+{
+  "records": [
+    {
+      "type": "spell",
+      "source": "SYNTHETIC",
+      "source_id": "sample-spark",
+      "name": "Sample Spark",
+      "level": "0",
+      "school": "V",
+      "original": { "entries": ["A brief invented description."] }
+    }
+  ]
+}
+```
+
+Supported record types are `item`, `spell`, and `creature`. Each record requires a source, stable source ID, name, and original JSON; creature type and challenge rating fields are available for later importers. The command prints created/updated totals and fails on invalid or duplicate identities. Use invented fixtures for development; do not commit personal reference files.
 
 ## Local data
 
