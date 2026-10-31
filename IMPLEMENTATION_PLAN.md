@@ -29,7 +29,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **01 — Navigation and screen shell**
   Add Vue Router and responsive GM/player navigation. Replace the placeholder workspace with meaningful empty screens for games and character selection, leaving unavailable features clearly marked. Preserve the existing appearance dialog and connection status. Verify keyboard and touch navigation at phone and desktop widths; existing build passes.
 
-- [ ] **02 — Persistence and initial schema**
+- [x] **02 — Persistence and initial schema**
   Introduce version-controlled PocketBase Go migrations for `systems`, `games`, local `profiles`, and `characters`, including a game's system and optional GM profile and a character's required game plus optional single owner. Seed a D&D 5e system identifier only, without copyrighted content. Verify migrations on an empty data directory and on restart; describe the data directory and upgrade procedure in the README.
 
 - [ ] **03 — Game management**
