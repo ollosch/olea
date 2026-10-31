@@ -7,6 +7,7 @@ import CatalogView from './views/CatalogView.vue'
 import CatalogDetailView from './views/CatalogDetailView.vue'
 import InventoryView from './views/InventoryView.vue'
 import SpellbooksView from './views/SpellbooksView.vue'
+import GameEncountersView from './views/GameEncountersView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -16,6 +17,7 @@ export const router = createRouter({
     { path: '/catalog', name: 'catalog', component: CatalogView, meta: { title: 'Catalog' } },
     { path: '/catalog/:recordId', name: 'catalog-detail', component: CatalogDetailView, meta: { title: 'Catalog entry' } },
     { path: '/games/:gameId/characters', name: 'game-characters', component: GameCharactersView, meta: { title: 'Game characters' } },
+    { path: '/games/:gameId/encounters', name: 'game-encounters', component: GameEncountersView, meta: { title: 'Game encounters' } },
     { path: '/characters/:characterId', name: 'character-overview', component: CharacterOverviewView, meta: { title: 'Character overview' } },
     { path: '/characters/:characterId/inventory', name: 'character-inventory', component: InventoryView, meta: { title: 'Inventory' } },
     { path: '/characters/:characterId/spellbooks', name: 'character-spellbooks', component: SpellbooksView, meta: { title: 'Spellbooks' } },

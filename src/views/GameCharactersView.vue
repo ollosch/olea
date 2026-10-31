@@ -165,6 +165,7 @@ async function deleteEmptyGame() {
         </div>
         <div class="heading-actions">
           <RouterLink class="secondary-link" to="/games">All games</RouterLink>
+          <RouterLink class="secondary-link" :to="{ name: 'game-encounters', params: { gameId: game.id } }">Encounters</RouterLink>
           <button class="primary-button" type="button" @click="beginCreate"><span aria-hidden="true">＋</span> Add character</button>
         </div>
       </div>

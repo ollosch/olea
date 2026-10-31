@@ -299,3 +299,13 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
 .entry-table { width: 100%; border-collapse: collapse; color: #b7c2b5; font-size: 12px; }
 .entry-table th, .entry-table td { min-width: 75px; padding: 8px 10px; text-align: left; vertical-align: top; border: 1px solid #ffffff20; }
 .entry-table th { color: #e8eee6; background: #ffffff08; }
+.encounter-layout { margin-top: 24px; display: grid; grid-template-columns: minmax(170px, 230px) minmax(0, 1fr); gap: 16px; }
+.encounter-sidebar, .encounter-content { min-width: 0; padding: 14px; border: 1px solid #ffffff16; border-radius: 14px; background: #1b251c77; }
+.encounter-sidebar { align-self: start; display: grid; gap: 8px; }
+.encounter-content { min-height: 260px; }
+.encounter-content > .heading-actions { margin-top: 14px; }
+.spellbook-tab small { display: block; margin-top: 4px; color: #97a597; font-size: 9px; }
+.encounter-entry-list { margin-top: 18px; display: grid; gap: 10px; }
+.encounter-entry-edit { min-width: 0; display: grid; grid-template-columns: 90px minmax(150px, 1fr); gap: 9px; }
+.encounter-entry-edit .text-input { margin-top: 5px; }
+@media (max-width: 760px) { .encounter-layout { grid-template-columns: 1fr; }.encounter-sidebar { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }.encounter-entry-edit { flex: 1 1 100%; } }
