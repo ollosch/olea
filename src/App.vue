@@ -181,6 +181,10 @@ function resetAccent() {
           <span class="nav-icon" aria-hidden="true">✧</span><span>Choose character</span>
           <span class="nav-context">PLAYER</span>
         </RouterLink>
+        <RouterLink class="nav-link" active-class="is-active" to="/catalog">
+          <span class="nav-icon" aria-hidden="true">⌕</span><span>Catalog</span>
+          <span class="nav-context">GM</span>
+        </RouterLink>
         <div class="nav-note">
           <span aria-hidden="true">✦</span>
           <p>More tools for your table are on their way.</p>

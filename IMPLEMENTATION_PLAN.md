@@ -61,7 +61,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **11 — Readable content rendering**
   Render imported descriptions and nested entries safely, including common 5e inline tags for dice, damage, links and references. Unsupported tags should remain readable rather than disappearing; never render arbitrary source HTML unsafely. Share presentation helpers with later print layouts. Verify nested synthetic content, plain text, unknown tags and common links.
 
-- [ ] **12 — System-specific browsing and filters**
+- [x] **12 — System-specific browsing and filters**
   Add a catalog UI with search, pagination and configurable filter definitions by system and content type. Implement 5e spell level/school/source, monster type/CR/source and useful item filters; use primary source for the initial source-book filter. Sort fractional CR correctly. Ensure controls work in desktop and mobile layouts; verify combinations, empty results and filtering against synthetic records.
 
 - [ ] **13 — Catalog detail and custom descriptions**
