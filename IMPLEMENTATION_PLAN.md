@@ -26,7 +26,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 
 ## Foundation and first usable game
 
-- [ ] **01 — Navigation and screen shell**
+- [x] **01 — Navigation and screen shell**
   Add Vue Router and responsive GM/player navigation. Replace the placeholder workspace with meaningful empty screens for games and character selection, leaving unavailable features clearly marked. Preserve the existing appearance dialog and connection status. Verify keyboard and touch navigation at phone and desktop widths; existing build passes.
 
 - [ ] **02 — Persistence and initial schema**

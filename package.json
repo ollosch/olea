@@ -11,7 +11,8 @@
   "dependencies": {
     "pocketbase": "0.28.1",
     "reka-ui": "2.11.0",
-    "vue": "3.5.44"
+    "vue": "3.5.44",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",
