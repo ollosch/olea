@@ -9,6 +9,7 @@ import InventoryView from './views/InventoryView.vue'
 import SpellbooksView from './views/SpellbooksView.vue'
 import GameEncountersView from './views/GameEncountersView.vue'
 import PlayerEncounterView from './views/PlayerEncounterView.vue'
+import GameTablesView from './views/GameTablesView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -19,6 +20,7 @@ export const router = createRouter({
     { path: '/catalog/:recordId', name: 'catalog-detail', component: CatalogDetailView, meta: { title: 'Catalog entry' } },
     { path: '/games/:gameId/characters', name: 'game-characters', component: GameCharactersView, meta: { title: 'Game characters' } },
     { path: '/games/:gameId/encounters', name: 'game-encounters', component: GameEncountersView, meta: { title: 'Game encounters' } },
+    { path: '/games/:gameId/tables', name: 'game-tables', component: GameTablesView, meta: { title: 'Random tables' } },
     { path: '/games/:gameId/encounter', name: 'player-encounter', component: PlayerEncounterView, meta: { title: 'Active encounter' } },
     { path: '/characters/:characterId', name: 'character-overview', component: CharacterOverviewView, meta: { title: 'Character overview' } },
     { path: '/characters/:characterId/inventory', name: 'character-inventory', component: InventoryView, meta: { title: 'Inventory' } },

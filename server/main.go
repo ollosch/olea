@@ -19,6 +19,7 @@ import (
 	"olea/catalogimport"
 	"olea/dnd5eimport"
 	_ "olea/migrations"
+	"olea/randomtables"
 	"olea/recordupdate"
 	"olea/transfers"
 )
@@ -35,6 +36,30 @@ func main() {
 
 	app := pocketbase.New()
 	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{})
+	app.RootCmd.AddCommand(&cobra.Command{
+		Use:   "table-template-import <system-key> <json-file>",
+		Short: "Import local system random table templates",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := app.RunAppMigrations(); err != nil {
+				return err
+			}
+			file, err := os.Open(args[1])
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+			doc, err := randomtables.Parse(file)
+			if err != nil {
+				return err
+			}
+			count, err := randomtables.Import(app, args[0], doc)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]int{"imported": count})
+		},
+	})
 	app.RootCmd.AddCommand(&cobra.Command{
 		Use:   "catalog-import <system-key> <json-file>",
 		Short: "Import a local catalog JSON document",
@@ -107,6 +132,66 @@ func main() {
 		},
 	})
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		e.Router.POST("/api/olea/tables/add-creature", func(re *core.RequestEvent) error {
+			var request struct {
+				Game      string `json:"game"`
+				Encounter string `json:"encounter"`
+				Creature  string `json:"creature"`
+			}
+			if err := re.BindBody(&request); err != nil {
+				return re.BadRequestError("Invalid creature request.", err)
+			}
+			if err := randomtables.AddCreature(re.App, request.Game, request.Encounter, request.Creature); err != nil {
+				return re.BadRequestError(err.Error(), nil)
+			}
+			return re.NoContent(204)
+		})
+		e.Router.POST("/api/olea/tables/save", func(re *core.RequestEvent) error {
+			var request struct {
+				Game  string             `json:"game"`
+				ID    string             `json:"id"`
+				Table randomtables.Table `json:"table"`
+			}
+			if err := re.BindBody(&request); err != nil {
+				return re.BadRequestError("Invalid table request.", err)
+			}
+			id, err := randomtables.Save(re.App, request.Game, request.ID, request.Table)
+			if err != nil {
+				return re.BadRequestError(err.Error(), nil)
+			}
+			return re.JSON(200, map[string]string{"id": id})
+		})
+		e.Router.POST("/api/olea/tables/copy", func(re *core.RequestEvent) error {
+			var request struct {
+				Game     string `json:"game"`
+				Template string `json:"template"`
+			}
+			if err := re.BindBody(&request); err != nil {
+				return re.BadRequestError("Invalid copy request.", err)
+			}
+			id, err := randomtables.Copy(re.App, request.Game, request.Template)
+			if err != nil {
+				return re.BadRequestError(err.Error(), nil)
+			}
+			return re.JSON(200, map[string]string{"id": id})
+		})
+		e.Router.POST("/api/olea/tables/delete", func(re *core.RequestEvent) error {
+			var request struct {
+				Game string `json:"game"`
+				ID   string `json:"id"`
+			}
+			if err := re.BindBody(&request); err != nil {
+				return re.BadRequestError("Invalid delete request.", err)
+			}
+			record, err := re.App.FindRecordById("random_tables", request.ID)
+			if err != nil || record.GetString("game") != request.Game {
+				return re.BadRequestError("Table not found in this game.", nil)
+			}
+			if err := re.App.Delete(record); err != nil {
+				return re.BadRequestError("Table could not be deleted.", err)
+			}
+			return re.NoContent(204)
+		})
 		e.Router.POST("/api/olea/transfers/item", func(re *core.RequestEvent) error {
 			var request transfers.ItemRequest
 			if err := re.BindBody(&request); err != nil {

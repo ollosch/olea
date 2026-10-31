@@ -124,6 +124,15 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
 .game-copy h2 { overflow-wrap: anywhere; font-family: inherit; font-size: 16px; font-weight: 700; letter-spacing: 0; }
 .game-copy p, .muted-hint { margin-top: 6px; color: #97a597; font-size: 11px; }
 .row-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.table-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.table-entry { margin: 20px 0; padding: 16px; border: 1px solid #ffffff25; border-radius: 12px; }
+.table-entry legend { color: var(--accent); padding: 0 6px; }
+.table-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.table-template { margin-top: 18px; padding-top: 16px; border-top: 1px solid #ffffff20; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+.table-results, .template-entries { margin: 18px 0; padding-left: 20px; color: #cbd6c9; line-height: 1.8; overflow-wrap: anywhere; }
+.table-outcome { margin-top: 20px; padding: 16px; border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.table-outcome p { margin: 10px 0; }
+select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .secondary-button, .danger-button, .secondary-link { min-height: 42px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #ffffff25; border-radius: 9px; background: #ffffff08; color: #e8eee6; font-size: 11px; text-decoration: none; }
 .danger-button { color: #ffb9a8; border-color: #ffb9a830; }
 .secondary-link { color: var(--accent); }

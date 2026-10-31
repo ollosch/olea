@@ -81,6 +81,24 @@ For D&D 5e carrying weight, coins use the standard 50 coins per pound; each deno
 
 Encounters are reusable preparation groups; starting combat creates independent live participants whose HP, initiative, conditions and notes are separate from preparation. The GM can optionally show the active encounter, initiative, enemy names, enemy HP and conditions in the player-facing encounter view. These settings are all off by default and only hide details in the UI. This is a trusted-LAN application: they are not access controls, and connected devices can still query local records through the API.
 
+## Random tables
+
+Open a game's **Random tables** to create and edit tables with inclusive integer ranges and optional `NdM` dice expressions (with an optional signed constant). Ranges cannot overlap; gaps are allowed and produce no match. Enter a manual result to use physical dice or a table with no expression. Results may include text and an item, spell, creature or encounter reference. Catalog references must match the game's system; encounters must belong to the game. A result whose reference was subsequently removed is shown as missing. Creature results can be added to a game encounter.
+
+Optional system templates are locally imported, read-only, and copied into games as independent editable tables. No templates or reference content are bundled. On the host, run `go -C server run . --dir=/path/to/pb_data table-template-import dnd5e /path/to/templates.json`. Template identity is system/source/source_id; importing again updates the template without changing copies. The import is atomic and fails if a catalog reference is missing; import catalog content first. Templates may reference system catalog entries by stable identity, but not game-specific encounters. For example, with an invented creature already imported as `SYNTHETIC` / `sample-ooze`:
+
+```json
+{
+  "templates": [{
+    "source": "SYNTHETIC", "source_id": "sample-table", "name": "A chance meeting", "dice": "1d6",
+    "entries": [
+      { "min": 1, "max": 3, "text": "A quiet road" },
+      { "min": 4, "max": 6, "text": "An unexpected visitor", "type": "creature", "source": "SYNTHETIC", "source_id": "sample-ooze" }
+    ]
+  }]
+}
+```
+
 ## Planned paper cards
 
 Printing is planned, not yet available. Spell and monster cards are intended to print four per A4 sheet, each slightly smaller than A6 to leave room for margins and cut guides. Monster cards should be printable from a single encounter or a selection of encounters, with repeated creature types deduplicated. Item cards are also planned; approximately A7 and eight per A4 sheet is the current preference, while their layout, especially for weapons, remains undecided. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the planned preview, duplex and overflow requirements.

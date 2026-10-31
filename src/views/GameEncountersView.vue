@@ -117,7 +117,10 @@ async function load() {
     if (generation !== loadGeneration) return
     game.value = gameRecord
     encounters.value = encounterRecords
-    if (!encounterRecords.some((entry) => entry.id === selectedId.value)) selectedId.value = encounterRecords[0]?.id ?? ''
+    if (!encounterRecords.some((entry) => entry.id === selectedId.value)) {
+      const requested = String(route.query.encounter ?? '')
+      selectedId.value = encounterRecords.find((entry) => entry.id === requested)?.id ?? encounterRecords[0]?.id ?? ''
+    }
     await loadEntries()
     if (generation !== loadGeneration) return
     await loadCombat()

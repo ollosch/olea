@@ -124,13 +124,13 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 
 ## Tables, systems and distribution
 
-- [ ] **29 — Free-form random tables**
+- [x] **29 — Free-form random tables**
   Add GM-created game tables with a name, dice expression or numeric ranges, text entries and a roll result. Validate overlapping/empty ranges and allow manual rolls. Keep the UI simple and usable at the table. Verify boundary rolls and editable entries.
 
-- [ ] **30 — Typed random table results**
+- [x] **30 — Typed random table results**
   Extend table entries to reference system items, spells, creatures or game encounters while retaining free-form text. Show the resolved result and provide an appropriate follow-up action, such as opening the catalog entry or adding a creature to an encounter. Verify missing references and system/game boundaries.
 
-- [ ] **31 — System table templates**
+- [x] **31 — System table templates**
   Support optional system-supplied random tables as read-only templates and copying one to a game for editing. No external package service; imports remain local. Verify two games can modify their copies independently.
 
 - [ ] **32 — AD&D 2e import and views**

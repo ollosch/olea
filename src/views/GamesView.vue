@@ -74,7 +74,7 @@ async function saveGame() {
 }
 
 async function deleteGame(game: GameRecord) {
-  if (!window.confirm(`Delete “${game.name}” and its stashes, inventories and spellbooks? This cannot be undone.`)) return
+  if (!window.confirm(`Delete “${game.name}” and its stashes, inventories, spellbooks, encounters and random tables? This cannot be undone.`)) return
   try {
     const characters = await pb.collection('characters').getList(1, 1, { filter: pb.filter('game = {:gameId}', { gameId: game.id }) })
     if (characters.totalItems > 0 && !window.confirm(`This game contains ${characters.totalItems} character${characters.totalItems === 1 ? '' : 's'}. Delete the game and all its characters? This cannot be undone.`)) {
