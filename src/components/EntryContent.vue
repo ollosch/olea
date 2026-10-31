@@ -11,11 +11,26 @@ function display(value: unknown): string {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return JSON.stringify(value)
 }
+
+function escapeHTML(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character] ?? character)
+}
+
+function linkify(value: string) {
+  const escaped = escapeHTML(value)
+  return escaped.replace(/\b(https?:\/\/[^\s<]+)/g, (url) => {
+    const safeURL = url.replace(/[),.;]+$/, '')
+    const suffix = url.slice(safeURL.length)
+    return `<a href="${safeURL}" target="_blank" rel="noreferrer">${safeURL}</a>${suffix}`
+  })
+}
 </script>
 
 <template>
   <template v-if="typeof value === 'string'">
-    <p>{{ display(value) }}</p>
+    <p v-html="linkify(display(value))" />
   </template>
   <template v-else-if="Array.isArray(value)">
     <div class="entry-stack">

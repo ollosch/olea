@@ -30,7 +30,18 @@ export function recordDescription(record: CatalogRecord): unknown {
   if (record.type === 'creature') {
     const fluff = original.fluff as Record<string, unknown> | undefined
     const content = fluff?.entries ?? fluff?.description
-    return [content, original.trait, original.action, original.reaction, original.legendary]
+    return [
+      ...(Array.isArray(content) ? content : content ? [content] : []),
+      ...(['trait', 'action', 'reaction', 'legendary'] as const).flatMap((key) => {
+        const entries = original[key]
+        if (!Array.isArray(entries)) return []
+        return entries.map((entry) => {
+          if (!entry || typeof entry !== 'object') return entry
+          const value = entry as Record<string, unknown>
+          return { type: 'entries', name: value.name, entries: value.entries ?? value.desc ?? value.text ?? value }
+        })
+      }),
+    ]
       .filter((entry) => Array.isArray(entry) ? entry.length > 0 : Boolean(entry))
   }
   return original.entries ?? original.description ?? ''

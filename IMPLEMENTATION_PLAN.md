@@ -64,7 +64,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **12 — System-specific browsing and filters**
   Add a catalog UI with search, pagination and configurable filter definitions by system and content type. Implement 5e spell level/school/source, monster type/CR/source and useful item filters; use primary source for the initial source-book filter. Sort fractional CR correctly. Ensure controls work in desktop and mobile layouts; verify combinations, empty results and filtering against synthetic records.
 
-- [ ] **13 — Catalog detail and custom descriptions**
+- [x] **13 — Catalog detail and custom descriptions**
   Provide detail screens and editable alternate descriptions for items, spells and monsters. Keep source text accessible; prefer the alternate where present and fall back to the original. For monsters support separate at-table notes alongside structured stats. Store edits independently of imported records and verify they survive re-import and server restart.
 
 ## Inventory, stashes and spellbooks
