@@ -83,6 +83,8 @@ For D&D 5e carrying weight, coins use the standard 50 coins per pound; each deno
 
 Encounters are reusable preparation groups; starting combat creates independent live participants whose HP, initiative, conditions and notes are separate from preparation. The GM can optionally show the active encounter, initiative, enemy names, enemy HP and conditions in the player-facing encounter view. These settings are all off by default and only hide details in the UI. This is a trusted-LAN application: they are not access controls, and connected devices can still query local records through the API.
 
+D&D 5e uses highest initiative first and supports d20 initiative and Dexterity-derived modifiers. AD&D 2e and unregistered systems use manual turn order and initiative; arrows arrange participants. The active participant remains selected when ordering changes. Existing active combats retain their previously selected participant during migration. AD&D creature HP rolls are available only for the simple hit-dice notation described above.
+
 ## Random tables
 
 Open a game's **Random tables** to create and edit tables with inclusive integer ranges and optional `NdM` dice expressions (with an optional signed constant). Ranges cannot overlap; gaps are allowed and produce no match. Enter a manual result to use physical dice or a table with no expression. Results may include text and an item, spell, creature or encounter reference. Catalog references must match the game's system; encounters must belong to the game. A result whose reference was subsequently removed is shown as missing. Creature results can be added to a game encounter.

@@ -4,16 +4,16 @@ import { useRoute } from 'vue-router'
 import CatalogPicker from '../components/CatalogPicker.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
-import { evaluateDice, parseHPFormula } from '../lib/dice'
-import { abilityModifier, rollGroupInitiative as rollGroupDice, rollInitiative } from '../lib/dnd5e'
-import { adndHitDice } from '../lib/adnd'
+import { evaluateDice } from '../lib/dice'
+import { systemForGame } from '../lib/systems'
+import { activeParticipant, orderParticipants } from '../lib/encounterOrder'
 import { guardedUpdate, isConflict } from '../lib/records'
 
 type Game = { id: string; updated: string; name: string; system: string; encounter_visible: boolean; encounter_show_initiative: boolean; encounter_show_enemy_names: boolean; encounter_show_hp: boolean; encounter_show_conditions: boolean; expand?: { system?: { key: string; name: string } } }
 type Encounter = { id: string; game: string; name: string }
 type Entry = { id: string; encounter: string; creature: string; name: string; quantity: number; notes: string; custom: boolean; expand?: { creature?: CatalogRecord } }
 type Character = { id: string; name: string; game: string }
-type Combat = { id: string; updated: string; encounter: string; active: boolean; round: number; turn: number; tie_order: string; name: string; visible: boolean; show_initiative: boolean; show_enemy_names: boolean; show_hp: boolean; show_conditions: boolean }
+type Combat = { id: string; updated: string; encounter: string; active: boolean; round: number; turn: number; active_participant: string; tie_order: string; name: string; visible: boolean; show_initiative: boolean; show_enemy_names: boolean; show_hp: boolean; show_conditions: boolean }
 type Combatant = { id: string; updated: string; combat: string; character: string; prepared: string; name: string; enemy: boolean; current_hp: number; max_hp: number; hp_known: boolean; initiative: number; initiative_known: boolean; initiative_modifier: number; initiative_modifier_override: boolean; dexterity_modifier: number; dexterity_known: boolean; hp_formula: string; conditions: string; notes: string; sort_order: number; expand?: { character?: Character; prepared?: Entry } }
 
 const route = useRoute()
@@ -44,17 +44,9 @@ const initiativeModifiers = ref<Record<string, number | ''>>({})
 const combatSnapshots = ref<Record<string, Combatant>>({})
 const selectedForGroup = ref<string[]>([])
 const diceError = ref('')
-const orderedCombatants = computed(() => {
-  const tieOrder = combat.value?.tie_order ? JSON.parse(combat.value.tie_order) as string[] : []
-  return [...combatants.value].sort((a, b) => {
-    if (a.initiative_known !== b.initiative_known) return a.initiative_known ? -1 : 1
-    if (a.initiative_known && b.initiative_known && a.initiative !== b.initiative) return b.initiative - a.initiative
-    const ai = tieOrder.indexOf(a.id), bi = tieOrder.indexOf(b.id)
-    if (ai >= 0 || bi >= 0) return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi)
-    return a.sort_order - b.sort_order || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
-  })
-})
-const activeCombatant = computed(() => orderedCombatants.value[combat.value?.turn ?? 0] ?? null)
+const rules = computed(() => systemForGame(game.value).encounter)
+const orderedCombatants = computed(() => orderParticipants(combatants.value, combat.value?.tie_order ?? '', rules.value))
+const activeCombatant = computed(() => activeParticipant(orderedCombatants.value, combat.value?.active_participant ?? '', combat.value?.turn ?? 0))
 let loadGeneration = 0
 
 const unsubscribe = ref<Array<() => Promise<void>>>([])
@@ -167,12 +159,7 @@ function hpFromSource(participant: Combatant): { average: number | null; formula
   if (!participant.enemy || !participant.prepared) return { average: null, formula: null }
   const prepared = entries.value.find((entry) => entry.id === participant.prepared)
   const source = prepared?.expand?.creature?.original_json
-  if (!source || typeof source !== 'object') return { average: null, formula: null }
-  if ((source as Record<string, unknown>).format === 'adnd2e-html') return { average: null, formula: adndHitDice(source) }
-  const hp = (source as Record<string, unknown>).hp
-  if (!hp || typeof hp !== 'object') return { average: null, formula: null }
-  const average = (hp as Record<string, unknown>).average
-  return { average: typeof average === 'number' && Number.isFinite(average) && average >= 0 ? average : null, formula: parseHPFormula((hp as Record<string, unknown>).formula) }
+  return rules.value.creatureHP(source)
 }
 
 function previewHP(participant: Combatant, mode: 'average' | 'roll' | 'manual') {
@@ -218,12 +205,13 @@ async function startCombat() {
         const label = entry.quantity > 1 ? `${entry.name} ${count + 1}` : entry.name
         const creature = entry.expand?.creature
         const source = creature?.original_json && typeof creature.original_json === 'object' ? creature.original_json as Record<string, unknown> : {}
-        const hp = source.hp && typeof source.hp === 'object' ? source.hp as Record<string, unknown> : {}
-        const dexterity = typeof source.dex === 'number' && Number.isInteger(source.dex) && source.dex >= 0 && source.dex <= 30 ? source.dex : null
-        await pb.collection('combatants').create({ combat: created.id, prepared: entry.id, name: label, enemy: true, notes: entry.notes ?? '', sort_order: index * 100 + count, hp_formula: typeof hp.formula === 'string' ? hp.formula : '', ...(dexterity === null ? {} : { dexterity_modifier: abilityModifier(dexterity), dexterity_known: true }) })
+        const hp = rules.value.creatureHP(source)
+        const modifier = rules.value.initiative?.modifier(source) ?? null
+        await pb.collection('combatants').create({ combat: created.id, prepared: entry.id, name: label, enemy: true, notes: entry.notes ?? '', sort_order: index * 100 + count, hp_formula: hp.formula ?? '', ...(modifier === null ? {} : { dexterity_modifier: modifier, dexterity_known: true }) })
       }
     }
     await loadCombat()
+    if (combat.value && activeCombatant.value) await updateCombat({ active_participant: activeCombatant.value.id })
   } catch {
     if (created) { try { await pb.collection('combats').delete(created.id) } catch { /* Report the partially started combat below. */ } }
     error.value = 'Combat could not be started. Refresh to check whether a partial combat remains.'
@@ -264,16 +252,18 @@ async function saveCombatant(participant: Combatant) {
 }
 
 async function rollOneInitiative(participant: Combatant) {
+  if (!rules.value.initiative) return
   try {
     const raw = initiativeModifiers.value[participant.id]
     const modifier = raw === '' || raw === undefined ? participant.dexterity_known ? participant.dexterity_modifier : 0 : Number(raw)
-    const result = rollInitiative(modifier)
+    const result = rules.value.initiative.roll(modifier)
     await guardedUpdate('combatants', participant, { initiative: result, initiative_known: true, initiative_modifier: modifier, initiative_modifier_override: raw !== '' && raw !== undefined && (!participant.dexterity_known || modifier !== participant.dexterity_modifier) })
     await loadCombat()
   } catch (cause) { diceError.value = isConflict(cause) ? 'Combatant changed elsewhere. Current values have been refreshed.' : cause instanceof Error ? cause.message : 'Initiative could not be rolled.'; await loadCombat() }
 }
 
 async function rollGroupInitiative() {
+  if (!rules.value.initiative) return
   const targets = orderedCombatants.value.filter((participant) => selectedForGroup.value.includes(participant.id))
   if (!targets.length) { diceError.value = 'Select one or more participants to roll.'; return }
   diceError.value = ''
@@ -282,7 +272,7 @@ async function rollGroupInitiative() {
       const raw = initiativeModifiers.value[participant.id]
       return raw === '' || raw === undefined ? participant.dexterity_known ? participant.dexterity_modifier : 0 : Number(raw)
     })
-    const results = rollGroupDice(modifiers)
+    const results = rules.value.initiative.rollGroup(modifiers)
     for (const [index, participant] of targets.entries()) {
       const modifier = modifiers[index]
       await guardedUpdate('combatants', participant, { initiative: results[index], initiative_known: true, initiative_modifier: modifier, initiative_modifier_override: !participant.dexterity_known || modifier !== participant.dexterity_modifier })
@@ -293,7 +283,13 @@ async function rollGroupInitiative() {
 }
 
 async function removeCombatant(participant: Combatant) {
-  try { await pb.collection('combatants').delete(participant.id); await loadCombat() }
+  try {
+    const remaining = orderedCombatants.value.filter((entry) => entry.id !== participant.id)
+    const active = activeCombatant.value
+    const replacement = active?.id === participant.id ? remaining[Math.min(orderedCombatants.value.indexOf(participant), remaining.length - 1)] : active
+    if (combat.value && replacement) await guardedUpdate('combats', combat.value, { active_participant: replacement.id })
+    await pb.collection('combatants').delete(participant.id); await loadCombat()
+  }
   catch { error.value = 'The combatant could not be removed.' }
 }
 
@@ -311,18 +307,18 @@ async function saveDisplaySetting(field: 'encounter_visible' | 'encounter_show_i
 
 async function moveTurn(direction: number) {
   if (!combat.value || !orderedCombatants.value.length) return
-  let turn = combat.value.turn + direction
+  let turn = orderedCombatants.value.findIndex((entry) => entry.id === activeCombatant.value?.id) + direction
   let round = combat.value.round
   if (turn >= orderedCombatants.value.length) { turn = 0; round += 1 }
   if (turn < 0) { if (round <= 1) return; turn = orderedCombatants.value.length - 1; round -= 1 }
-  await updateCombat({ turn, round })
+  await updateCombat({ turn, round, active_participant: orderedCombatants.value[turn]?.id ?? '' })
 }
 
 async function resetCombat() {
   if (!combat.value) return
   try {
     for (const participant of combatants.value) await guardedUpdate('combatants', participant, { initiative: 0, initiative_known: false, current_hp: 0, max_hp: 0, hp_known: false, conditions: '' })
-    await updateCombat({ active: true, round: 1, turn: 0, tie_order: '[]' })
+    await updateCombat({ active: true, round: 1, turn: 0, active_participant: '', tie_order: '[]' })
   } catch { error.value = 'Combat could not be reset.' }
 }
 
@@ -330,13 +326,13 @@ async function endCombat() { if (combat.value) await updateCombat({ active: fals
 
 async function setTieOrder(participant: Combatant, direction: number) {
   if (!combat.value) return
-  const tied = orderedCombatants.value.filter((entry) => entry.initiative_known === participant.initiative_known && (!entry.initiative_known || entry.initiative === participant.initiative))
+  const tied = orderedCombatants.value.filter((entry) => rules.value.compare(entry, participant) === 0)
   const tieOrder = orderedCombatants.value.map((entry) => entry.id)
   const index = tieOrder.indexOf(participant.id)
   const swap = index + direction
   if (swap < 0 || swap >= tieOrder.length || !tied.some((entry) => entry.id === tieOrder[swap])) return
   ;[tieOrder[index], tieOrder[swap]] = [tieOrder[swap], tieOrder[index]]
-  await updateCombat({ tie_order: JSON.stringify(tieOrder) })
+  await updateCombat({ tie_order: JSON.stringify(tieOrder), active_participant: activeCombatant.value?.id ?? '' })
 }
 
 async function selectEncounter(id: string) {
@@ -429,9 +425,9 @@ async function removeEntry(entry: Entry) {
               <details class="player-display-settings"><summary>Player display settings</summary><p>These settings hide details in the player-facing UI only; they are not access controls on this trusted LAN.</p><label class="check-field"><input type="checkbox" :checked="game.encounter_visible" @change="saveDisplaySetting('encounter_visible', ($event.target as HTMLInputElement).checked)" /> Show active encounter</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_initiative" @change="saveDisplaySetting('encounter_show_initiative', ($event.target as HTMLInputElement).checked)" /> Show initiative</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_enemy_names" @change="saveDisplaySetting('encounter_show_enemy_names', ($event.target as HTMLInputElement).checked)" /> Show enemy names</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_hp" @change="saveDisplaySetting('encounter_show_hp', ($event.target as HTMLInputElement).checked)" /> Show enemy HP</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_conditions" @change="saveDisplaySetting('encounter_show_conditions', ($event.target as HTMLInputElement).checked)" /> Show conditions</label></details>
               <p v-if="diceError" class="field-error" role="alert">{{ diceError }}</p>
               <div class="turn-controls"><button class="secondary-button" type="button" :disabled="!orderedCombatants.length" @click="moveTurn(-1)">← Previous</button><p v-if="activeCombatant"><strong>Active:</strong> {{ activeCombatant.name }}</p><p v-else>No participants yet</p><button class="secondary-button" type="button" :disabled="!orderedCombatants.length" @click="moveTurn(1)">Next →</button></div>
-              <div class="group-roll"><span>Roll selected initiative with one shared d20</span><button class="secondary-button" type="button" :disabled="!selectedForGroup.length" @click="rollGroupInitiative">Roll group</button></div>
+              <div v-if="rules.initiative" class="group-roll"><span>Roll selected initiative with one shared d20</span><button class="secondary-button" type="button" :disabled="!selectedForGroup.length" @click="rollGroupInitiative">Roll group</button></div><p v-else class="muted-hint">Initiative and turn order are manual. Use the arrows to arrange participants.</p>
               <div class="participant-add"><label class="filter-field">Add character<select class="select-input" :disabled="gameCharacters.every((character) => combatants.some((entry) => entry.character === character.id))" @change="addCharacter(gameCharacters.find((character) => character.id === ($event.target as HTMLSelectElement).value)!); ($event.target as HTMLSelectElement).value = ''"><option value="">Choose a character</option><option v-for="character in gameCharacters.filter((entry) => !combatants.some((participant) => participant.character === entry.id))" :key="character.id" :value="character.id">{{ character.name }}</option></select></label><form class="custom-participant-form" @submit.prevent="addCustomCombatant"><label class="filter-field">Add custom participant<input v-model="newParticipantName" class="text-input" maxlength="255" placeholder="Name" /></label><button class="secondary-button" type="submit">Add</button></form></div>
-              <div v-if="orderedCombatants.length" class="combatant-list"><article v-for="participant in orderedCombatants" :key="participant.id" class="combatant-card" :class="{ active: activeCombatant?.id === participant.id }"><div class="combatant-title"><div><strong>{{ participant.name }}</strong><small>{{ participant.enemy ? 'Enemy' : participant.character ? 'Character' : 'Participant' }}<template v-if="participant.prepared && participant.expand?.prepared?.expand?.creature"> · {{ participant.expand.prepared.expand.creature.source }}</template></small></div><div class="row-actions"><label class="select-combatant"><input v-model="selectedForGroup" type="checkbox" :value="participant.id" /> Select</label><span class="initiative-pill">{{ participant.initiative_known ? `Init ${participant.initiative}` : 'No initiative' }}</span><button class="icon-button tie-button" type="button" aria-label="Move up within initiative tie" title="Move up within tie" @click="setTieOrder(participant, -1)">↑</button><button class="icon-button tie-button" type="button" aria-label="Move down within initiative tie" title="Move down within tie" @click="setTieOrder(participant, 1)">↓</button><button class="secondary-button" type="button" @click="rollOneInitiative(participant)">Roll</button><button class="danger-button" type="button" @click="removeCombatant(participant)">Remove</button></div></div><div class="combatant-fields"><label class="filter-field">Initiative<input v-model.number="combatDrafts[participant.id]!.initiative" class="text-input" type="number" step="any" placeholder="—" /></label><label class="filter-field">Initiative modifier<input v-model.number="initiativeModifiers[participant.id]" class="text-input" type="number" min="-20" max="20" step="1" :placeholder="participant.dexterity_known ? String(participant.dexterity_modifier) : 'Manual or unset'" /></label><label class="filter-field">Current HP<input v-model.number="combatDrafts[participant.id]!.current_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Max HP<input v-model.number="combatDrafts[participant.id]!.max_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Conditions<input v-model="combatDrafts[participant.id]!.conditions" class="text-input" placeholder="e.g. prone" /></label><label class="filter-field">Notes<input v-model="combatDrafts[participant.id]!.notes" class="text-input" placeholder="Notes" /></label><button class="secondary-button" type="button" @click="saveCombatant(participant)">Save</button></div><div v-if="participant.enemy" class="hp-roll-controls"><span>HP {{ participant.hp_known ? `${participant.current_hp}/${participant.max_hp}` : 'not set' }}</span><button class="inline-button" type="button" @click="previewHP(participant, 'average')">Use average</button><button class="inline-button" type="button" @click="previewHP(participant, 'roll')">Roll HP</button><button class="inline-button" type="button" @click="previewHP(participant, 'manual')">Preview manual</button><span v-if="hpPreview[participant.id]" class="preview-confirm">Preview: {{ hpPreview[participant.id]!.current }}/{{ hpPreview[participant.id]!.max }} <button class="secondary-button" type="button" @click="confirmHP(participant)">Confirm HP</button></span></div></article></div>
+              <div v-if="orderedCombatants.length" class="combatant-list"><article v-for="participant in orderedCombatants" :key="participant.id" class="combatant-card" :class="{ active: activeCombatant?.id === participant.id }"><div class="combatant-title"><div><strong>{{ participant.name }}</strong><small>{{ participant.enemy ? 'Enemy' : participant.character ? 'Character' : 'Participant' }}<template v-if="participant.prepared && participant.expand?.prepared?.expand?.creature"> · {{ participant.expand.prepared.expand.creature.source }}</template></small></div><div class="row-actions"><label v-if="rules.initiative" class="select-combatant"><input v-model="selectedForGroup" type="checkbox" :value="participant.id" /> Select</label><span class="initiative-pill">{{ participant.initiative_known ? `Init ${participant.initiative}` : 'No initiative' }}</span><button class="icon-button tie-button" type="button" aria-label="Move participant up" title="Move up" @click="setTieOrder(participant, -1)">↑</button><button class="icon-button tie-button" type="button" aria-label="Move participant down" title="Move down" @click="setTieOrder(participant, 1)">↓</button><button v-if="rules.initiative" class="secondary-button" type="button" @click="rollOneInitiative(participant)">Roll</button><button class="danger-button" type="button" @click="removeCombatant(participant)">Remove</button></div></div><div class="combatant-fields"><label class="filter-field">Initiative<input v-model.number="combatDrafts[participant.id]!.initiative" class="text-input" type="number" step="any" placeholder="—" /></label><label v-if="rules.initiative" class="filter-field">Initiative modifier<input v-model.number="initiativeModifiers[participant.id]" class="text-input" type="number" min="-20" max="20" step="1" :placeholder="participant.dexterity_known ? String(participant.dexterity_modifier) : 'Manual or unset'" /></label><label class="filter-field">Current HP<input v-model.number="combatDrafts[participant.id]!.current_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Max HP<input v-model.number="combatDrafts[participant.id]!.max_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Conditions<input v-model="combatDrafts[participant.id]!.conditions" class="text-input" placeholder="e.g. prone" /></label><label class="filter-field">Notes<input v-model="combatDrafts[participant.id]!.notes" class="text-input" placeholder="Notes" /></label><button class="secondary-button" type="button" @click="saveCombatant(participant)">Save</button></div><div v-if="participant.enemy" class="hp-roll-controls"><span>HP {{ participant.hp_known ? `${participant.current_hp}/${participant.max_hp}` : 'not set' }}</span><button v-if="hpFromSource(participant).average !== null" class="inline-button" type="button" @click="previewHP(participant, 'average')">Use average</button><button v-if="hpFromSource(participant).formula" class="inline-button" type="button" @click="previewHP(participant, 'roll')">Roll HP</button><button class="inline-button" type="button" @click="previewHP(participant, 'manual')">Preview manual</button><span v-if="hpPreview[participant.id]" class="preview-confirm">Preview: {{ hpPreview[participant.id]!.current }}/{{ hpPreview[participant.id]!.max }} <button class="secondary-button" type="button" @click="confirmHP(participant)">Confirm HP</button></span></div></article></div>
               <p v-else class="muted-hint">No live participants. Add game characters or custom participants.</p>
             </template>
           </section>

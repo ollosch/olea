@@ -11,7 +11,7 @@ var ErrConflict = errors.New("record changed elsewhere; refreshed values are ava
 
 var allowedFields = map[string]map[string]bool{
 	"combatants":      {"initiative": true, "initiative_known": true, "initiative_modifier": true, "initiative_modifier_override": true, "current_hp": true, "max_hp": true, "hp_known": true, "conditions": true, "notes": true, "dexterity_modifier": true, "dexterity_known": true},
-	"combats":         {"active": true, "round": true, "turn": true, "tie_order": true, "visible": true, "show_initiative": true, "show_enemy_names": true, "show_hp": true, "show_conditions": true},
+	"combats":         {"active": true, "round": true, "turn": true, "active_participant": true, "tie_order": true, "visible": true, "show_initiative": true, "show_enemy_names": true, "show_hp": true, "show_conditions": true},
 	"inventories":     {"cp": true, "sp": true, "ep": true, "gp": true, "pp": true, "capacity": true, "capacity_known": true},
 	"inventory_items": {"quantity": true, "notes": true, "weight": true, "weight_known": true, "is_container": true, "container": true},
 	"stashes":         {"cp": true, "sp": true, "ep": true, "gp": true, "pp": true, "name": true, "location": true, "notes": true},
