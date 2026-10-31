@@ -40,6 +40,7 @@ function select(character: CharacterRecord) {
   } catch {
     // Keep selection usable for this visit even if storage is unavailable.
   }
+  window.dispatchEvent(new Event('olea-character-selected'))
 }
 
 function clearSelection() {
@@ -49,6 +50,7 @@ function clearSelection() {
   } catch {
     // Selection may still be cleared in memory.
   }
+  window.dispatchEvent(new Event('olea-character-selected'))
 }
 
 function viewGame(character: CharacterRecord) {

@@ -41,7 +41,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **05 — Local profiles, ownership and GM reassignment**
   Add minimal GM-facing profile creation and ownership assignment/transfer, including multiple characters per profile and assigning a character to the GM. Allow changing a game's GM profile. Selecting a character on a phone must not require a separate profile login. Verify ownership and GM changes persist; explain that profiles do not secure access.
 
-- [ ] **06 — Per-person accent preferences**
+- [x] **06 — Per-person accent preferences**
   Extend the existing green-on-dark theme to save the selected accent on the active character owner's or GM's profile, with the current browser-local choice as fallback for unassigned characters. Apply the profile preference on another device after selecting that character; handle invalid values and profile changes. Verify two profiles can use different accents, including after reload. Keep the controls accessible and usable on touch.
 
 ## Catalog and system data

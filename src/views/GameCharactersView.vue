@@ -74,6 +74,7 @@ async function assignOwner(character: CharacterRecord, owner: string) {
   try {
     await pb.collection('characters').update(character.id, { owner })
     await load()
+    window.dispatchEvent(new Event('olea-profile-changed'))
   } catch {
     error.value = 'The character owner could not be updated. Check the connection and try again.'
     await load()
@@ -88,6 +89,7 @@ async function assignGameMaster(profileId: string) {
   try {
     await pb.collection('games').update(game.value.id, { gm_profile: profileId })
     await load()
+    window.dispatchEvent(new Event('olea-profile-changed'))
   } catch {
     error.value = 'The Game Master profile could not be updated. Check the connection and try again.'
   } finally {

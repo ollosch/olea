@@ -31,6 +31,7 @@ function selectOnDevice() {
   if (!character.value) return
   activeCharacter.value = character.value.id
   try { localStorage.setItem('olea.selectedCharacter', character.value.id) } catch { /* Keep selection usable for this visit. */ }
+  window.dispatchEvent(new Event('olea-character-selected'))
 }
 </script>
 

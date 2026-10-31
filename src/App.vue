@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import {
   DialogClose,
   DialogContent,
@@ -14,16 +15,25 @@ import { pb } from './lib/pocketbase'
 
 const defaultAccent = '#a6d68d'
 const accent = ref(defaultAccent)
+const browserAccent = ref(defaultAccent)
 const connection = ref<'checking' | 'connected' | 'unavailable'>('checking')
+const route = useRoute()
+const activeProfileId = ref('')
+let profileLookup = 0
 
 try {
   const saved = localStorage.getItem('olea.accent')
-  if (saved && /^#[0-9a-f]{6}$/i.test(saved)) accent.value = saved
+  if (saved && /^#[0-9a-f]{6}$/i.test(saved)) {
+    accent.value = saved
+    browserAccent.value = saved
+  }
 } catch {
   // The app still works if browser storage is disabled.
 }
 
 onMounted(async () => {
+  window.addEventListener('olea-character-selected', refreshActiveProfile)
+  window.addEventListener('olea-profile-changed', refreshActiveProfile)
   try {
     await pb.health.check()
     connection.value = 'connected'
@@ -32,14 +42,87 @@ onMounted(async () => {
   }
 })
 
-watch(accent, (value) => {
-  document.documentElement.style.setProperty('--accent', value)
+watch(() => route.fullPath, refreshActiveProfile, { immediate: true })
+
+async function refreshActiveProfile() {
+  const token = ++profileLookup
+  activeProfileId.value = ''
+
+  const characterId = String(route.params.characterId ?? '')
+  const isPlayerRoute = route.name === 'characters' || route.name === 'character-overview'
+  const selectedCharacterId = characterId || (isPlayerRoute ? readStoredCharacter() : '')
   try {
-    localStorage.setItem('olea.accent', value)
+    if (selectedCharacterId) {
+      const character = await pb.collection('characters').getOne<{ id: string; game: string; owner: string }>(selectedCharacterId)
+      if (token !== profileLookup) return
+      activeProfileId.value = character.owner || ''
+    } else {
+      const gameId = String(route.params.gameId ?? '')
+      if (gameId) {
+        const game = await pb.collection('games').getOne<{ id: string; gm_profile: string }>(gameId)
+        if (token !== profileLookup) return
+        activeProfileId.value = game.gm_profile || ''
+      } else {
+        // On the GM workspace, the currently assigned game master is the active person.
+        const games = await pb.collection('games').getFullList<{ gm_profile: string }>({ sort: '-updated', fields: 'gm_profile' })
+        if (token !== profileLookup) return
+        activeProfileId.value = games.find((game) => game.gm_profile)?.gm_profile ?? ''
+      }
+    }
+    await applyProfileAccent(token)
   } catch {
-    // Preferences are optional when browser storage is unavailable.
+    // Keep the browser-local choice if no active record is available.
+    if (token === profileLookup) applyLocalAccent()
   }
-}, { immediate: true })
+}
+
+watch(accent, applyLocalAccent, { immediate: true })
+
+function readStoredCharacter() {
+  try { return localStorage.getItem('olea.selectedCharacter') ?? '' } catch { return '' }
+}
+
+function isValidAccent(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+}
+
+function applyLocalAccent() {
+  document.documentElement.style.setProperty('--accent', accent.value)
+}
+
+async function applyProfileAccent(token: number) {
+  if (!activeProfileId.value) {
+    accent.value = browserAccent.value
+    applyLocalAccent()
+    return
+  }
+  const profile = await pb.collection('profiles').getOne<{ accent: string }>(activeProfileId.value)
+  if (token !== profileLookup) return
+  if (isValidAccent(profile.accent)) {
+    accent.value = profile.accent
+  } else {
+    accent.value = browserAccent.value
+    applyLocalAccent()
+  }
+}
+
+async function saveAccent() {
+  const value = accent.value
+  browserAccent.value = value
+  applyLocalAccent()
+  try { localStorage.setItem('olea.accent', value) } catch { /* Browser fallback preference is optional. */ }
+  if (!activeProfileId.value) return
+  try {
+    await pb.collection('profiles').update(activeProfileId.value, { accent: value })
+  } catch {
+    // Keep the selected accent locally if the profile preference could not be saved.
+  }
+}
+
+function resetAccent() {
+  accent.value = defaultAccent
+  void saveAccent()
+}
 </script>
 
 <template>
@@ -75,10 +158,10 @@ watch(accent, (value) => {
                 Choose an accent for this browser. Your choice stays on this device.
               </DialogDescription>
               <label class="color-setting" for="accent-color">
-                <span><strong>Accent color</strong><small>Green is the default.</small></span>
-                <input id="accent-color" v-model="accent" type="color" aria-label="Accent color" />
+                <span><strong>Accent color</strong><small>{{ activeProfileId ? 'Saved to your local profile.' : 'Saved on this browser until a profile is active.' }}</small></span>
+                <input id="accent-color" v-model="accent" type="color" aria-label="Accent color" @change="saveAccent" />
               </label>
-              <button class="secondary-button" type="button" @click="accent = defaultAccent">Reset to green</button>
+              <button class="secondary-button" type="button" @click="resetAccent">Reset to green</button>
             </DialogContent>
           </DialogPortal>
         </DialogRoot>
