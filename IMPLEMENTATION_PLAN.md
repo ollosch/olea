@@ -35,7 +35,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **03 — Game management**
   Give the GM a game list and creation/edit/delete UI with system selection. Show useful empty and error states; prevent deleting a populated game without explicit confirmation. Verify games persist after restart and remain associated with their chosen system.
 
-- [ ] **04 — GM-created characters and selection**
+- [x] **04 — GM-created characters and selection**
   Add GM character creation, rename and deletion within a game, plus a phone-friendly selection screen and character overview. Persist the selected character on the device and provide an obvious switch action. Verify a game can contain multiple characters and that selecting one does not create a user account.
 
 - [ ] **05 — Local profiles, ownership and GM reassignment**
