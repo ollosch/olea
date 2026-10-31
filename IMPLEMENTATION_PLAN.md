@@ -55,7 +55,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **09 — D&D 5e bestiary importer**
   Import the `monster` array from `data/dnd5e_bestiary-mm.json`, handling string/object creature type, fractional CR, source/page, HP average/formula, Dexterity, actions and original JSON. Preserve special or missing fields instead of inventing values. Verify representative synthetic cases and report actual import warnings/counts.
 
-- [ ] **10 — D&D 5e items importer**
+- [x] **10 — D&D 5e items importer**
   Import `item` records from `data/dnd5e_items.json`, retaining type, weight, value, rarity, source and entries. Resolve supported `_copy` inheritance/modifications when the base is available; report unsupported or missing references clearly and do not silently claim a complete import. Handle item groups deliberately. Verify synthetic inheritance and missing-reference cases; report actual import counts/warnings.
 
 - [ ] **11 — Readable content rendering**

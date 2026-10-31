@@ -33,6 +33,10 @@ type InputRecord struct {
 	HPFormula       string          `json:"hp_formula,omitempty"`
 	Dexterity       *int            `json:"dexterity,omitempty"`
 	Actions         json.RawMessage `json:"actions,omitempty"`
+	ItemType        json.RawMessage `json:"item_type,omitempty"`
+	ItemWeight      json.RawMessage `json:"item_weight,omitempty"`
+	ItemValue       json.RawMessage `json:"item_value,omitempty"`
+	Rarity          string          `json:"rarity,omitempty"`
 	Original        json.RawMessage `json:"original"`
 }
 
@@ -131,6 +135,34 @@ func Import(app core.App, systemKey string, document Document) (Summary, error) 
 		} else {
 			record.Set("actions_json", nil)
 		}
+		if len(input.ItemType) > 0 {
+			var value any
+			if err := json.Unmarshal(input.ItemType, &value); err != nil {
+				return summary, fmt.Errorf("decode item type JSON for record %d: %w", i+1, err)
+			}
+			record.Set("item_type", value)
+		} else {
+			record.Set("item_type", nil)
+		}
+		if len(input.ItemWeight) > 0 {
+			var value any
+			if err := json.Unmarshal(input.ItemWeight, &value); err != nil {
+				return summary, fmt.Errorf("decode item weight JSON for record %d: %w", i+1, err)
+			}
+			record.Set("item_weight", value)
+		} else {
+			record.Set("item_weight", nil)
+		}
+		if len(input.ItemValue) > 0 {
+			var value any
+			if err := json.Unmarshal(input.ItemValue, &value); err != nil {
+				return summary, fmt.Errorf("decode item value JSON for record %d: %w", i+1, err)
+			}
+			record.Set("item_value", value)
+		} else {
+			record.Set("item_value", nil)
+		}
+		record.Set("rarity", input.Rarity)
 		record.Set("original_json", original)
 		record.Set("alternate_description", previousAlternate)
 		record.Set("notes", previousNotes)

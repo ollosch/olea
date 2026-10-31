@@ -14,6 +14,7 @@ import (
 type Result struct {
 	Document catalogimport.Document
 	Skipped  int
+	Groups   int
 	Warnings []string
 }
 

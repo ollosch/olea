@@ -61,7 +61,7 @@ func main() {
 		},
 	})
 	app.RootCmd.AddCommand(&cobra.Command{
-		Use:   "dnd5e-import <spells|bestiary> <json-file>",
+		Use:   "dnd5e-import <spells|bestiary|items> <json-file>",
 		Short: "Import a local D&D 5e source file",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -83,6 +83,8 @@ func main() {
 				parsed, err = dnd5eimport.ParseSpells(file)
 			case "bestiary":
 				parsed, err = dnd5eimport.ParseBestiary(file)
+			case "items":
+				parsed, err = dnd5eimport.ParseItems(file)
 			default:
 				return fmt.Errorf("unsupported D&D 5e import kind %q", args[0])
 			}
