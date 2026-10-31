@@ -16,6 +16,7 @@ import (
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
 	"github.com/spf13/cobra"
 
+	"olea/adnd2eimport"
 	"olea/catalogimport"
 	"olea/dnd5eimport"
 	_ "olea/migrations"
@@ -36,6 +37,58 @@ func main() {
 
 	app := pocketbase.New()
 	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{})
+	app.RootCmd.AddCommand(&cobra.Command{
+		Use:   "adnd2e-import <spells|bestiary> <index-or-directory> [pages-file]",
+		Short: "Import local AD&D 2e reference material",
+		Args:  cobra.RangeArgs(2, 3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := app.RunAppMigrations(); err != nil {
+				return err
+			}
+			var parsed adnd2eimport.Result
+			var err error
+			switch args[0] {
+			case "spells":
+				if len(args) != 3 {
+					return fmt.Errorf("spells requires an index and pages file")
+				}
+				index, err := os.Open(args[1])
+				if err != nil {
+					return err
+				}
+				defer index.Close()
+				pages, err := os.Open(args[2])
+				if err != nil {
+					return err
+				}
+				defer pages.Close()
+				parsed, err = adnd2eimport.ParseSpells(index, pages)
+			case "bestiary":
+				if len(args) != 2 {
+					return fmt.Errorf("bestiary requires the saved compendium directory")
+				}
+				parsed, err = adnd2eimport.ParseCreatures(args[1])
+			default:
+				return fmt.Errorf("unsupported AD&D 2e import kind %q", args[0])
+			}
+			if err != nil {
+				return err
+			}
+			if len(parsed.Document.Records) == 0 {
+				return fmt.Errorf("no valid records to import")
+			}
+			imported, err := catalogimport.Import(app, "adnd2e", parsed.Document)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+				Created  int      `json:"created"`
+				Updated  int      `json:"updated"`
+				Skipped  int      `json:"skipped"`
+				Warnings []string `json:"warnings"`
+			}{imported.Created, imported.Updated, parsed.Skipped, parsed.Warnings})
+		},
+	})
 	app.RootCmd.AddCommand(&cobra.Command{
 		Use:   "table-template-import <system-key> <json-file>",
 		Short: "Import local system random table templates",

@@ -11,6 +11,11 @@ const itemType = ref('')
 const rarity = ref('')
 const level = ref('')
 const school = ref('')
+const sphere = ref('')
+const bookSource = ref('')
+const levels = ref<string[]>([])
+const spheres = ref<string[]>([])
+const bookSources = ref<string[]>([])
 const creatureType = ref('')
 const minCR = ref('')
 const maxCR = ref('')
@@ -29,6 +34,7 @@ let token = 0
 
 const system = ref<{ key: string } | null>(null)
 const showDndFilters = computed(() => system.value?.key === 'dnd5e')
+const showAdndFilters = computed(() => system.value?.key === 'adnd2e')
 
 onMounted(async () => {
   try {
@@ -38,13 +44,13 @@ onMounted(async () => {
 })
 watch(() => props.systemId, async () => {
   system.value = null
-  source.value = ''; itemType.value = ''; rarity.value = ''; level.value = ''; school.value = ''; creatureType.value = ''; minCR.value = ''; maxCR.value = ''
+  source.value = ''; itemType.value = ''; rarity.value = ''; level.value = ''; school.value = ''; sphere.value = ''; bookSource.value = ''; creatureType.value = ''; minCR.value = ''; maxCR.value = ''
   try {
     if (props.systemId) system.value = await pb.collection('systems').getOne<{ key: string }>(props.systemId)
     await loadChoices()
   } catch { error.value = 'Catalog filters could not be loaded.' }
 })
-watch([query, source, itemType, rarity, level, school, creatureType, minCR, maxCR], () => { limit.value = 100; void loadRecords() })
+watch([query, source, itemType, rarity, level, school, sphere, bookSource, creatureType, minCR, maxCR], () => { limit.value = 100; void loadRecords() })
 watch(limit, loadRecords)
 
 async function loadChoices() {
@@ -52,12 +58,15 @@ async function loadChoices() {
   try {
     const all = await pb.collection('catalog').getFullList<CatalogRecord>({
       filter: pb.filter('system = {:system} && type = {:type}', { system: props.systemId, type: props.type }),
-      fields: 'source,item_type,rarity,school,level,creature_type,challenge_rating', sort: 'source,name', requestKey: null,
+      fields: 'source,book_source,sphere,item_type,rarity,school,level,creature_type,challenge_rating', sort: 'source,name', requestKey: null,
     })
     sources.value = unique(all.map((entry) => entry.source))
     types.value = unique(all.map((entry) => typeof entry.item_type === 'string' ? entry.item_type.split('|')[0] : '').filter(Boolean))
     rarities.value = unique(all.map((entry) => entry.rarity ?? '').filter(Boolean))
-    schools.value = unique(all.map((entry) => entry.school ?? '').filter(Boolean))
+    schools.value = unique(all.flatMap((entry) => showAdndFilters.value ? (entry.school ?? '').split(/[,\n]/).map((part) => part.trim()) : [entry.school ?? '']).filter(Boolean))
+    spheres.value = unique(all.flatMap((entry) => (entry.sphere ?? '').split(/[,\n]/).map((part) => part.trim())).filter(Boolean))
+    levels.value = unique(all.map((entry) => entry.level ?? '').filter(Boolean))
+    bookSources.value = unique(all.map((entry) => entry.book_source ?? '').filter(Boolean))
     creatureTypes.value = unique(all.map((entry) => entry.creature_type ?? '').filter(Boolean))
     challengeRatings.value = unique(all.map((entry) => entry.challenge_rating ?? '').filter(Boolean)).sort(compareChallengeRating)
     if (showDndFilters.value && !source.value && sources.value.includes('PHB')) source.value = 'PHB'
@@ -75,12 +84,15 @@ async function loadRecords() {
   if (query.value.trim()) { terms.push('name ~ {:query}'); params.query = query.value.trim() }
   if (source.value) { terms.push('source = {:source}'); params.source = source.value }
   if (level.value) { terms.push('level = {:level}'); params.level = level.value }
-  if (school.value) { terms.push('school = {:school}'); params.school = school.value }
+  if (school.value && !showAdndFilters.value) { terms.push('school = {:school}'); params.school = school.value }
+  if (bookSource.value) { terms.push('book_source = {:bookSource}'); params.bookSource = bookSource.value }
   if (creatureType.value) { terms.push('creature_type = {:creatureType}'); params.creatureType = creatureType.value }
   try {
-    const result = await pb.collection('catalog').getFullList<CatalogRecord>({ filter: pb.filter(terms.join(' && '), params), sort: 'name', requestKey: null })
+    const result = await pb.collection('catalog').getFullList<CatalogRecord>({ filter: pb.filter(terms.join(' && '), params), sort: 'name', fields: 'id,name,source,book_source,level,school,sphere,creature_type,challenge_rating,item_type,item_weight,rarity', requestKey: null })
     if (current !== token) return
-    const matches = result.filter((entry) => props.type === 'item'
+    const matches = result.filter((entry) => props.type === 'spell' && showAdndFilters.value
+      ? (!school.value || entry.school.split(/[,\n]/).some((part) => part.trim() === school.value)) && (!sphere.value || (entry.sphere ?? '').split(/[,\n]/).some((part) => part.trim() === sphere.value))
+      : props.type === 'item'
       ? (!itemType.value || entry.item_type === itemType.value || (typeof entry.item_type === 'string' && entry.item_type.split('|')[0] === itemType.value)) && (!rarity.value || entry.rarity === rarity.value)
       : props.type !== 'creature' || ((!minCR.value && !maxCR.value) || !!entry.challenge_rating && (!minCR.value || compareChallengeRating(entry.challenge_rating, minCR.value) >= 0) && (!maxCR.value || compareChallengeRating(entry.challenge_rating, maxCR.value) <= 0)))
     matchCount.value = matches.length
@@ -103,10 +115,11 @@ function unique(values: string[]) { return [...new Set(values)].sort((a, b) => a
       <template v-else-if="props.type === 'spell'"><label class="filter-field"><span>Level</span><select v-model="level" class="select-input"><option value="">All levels</option><option v-for="entry in 10" :key="entry - 1" :value="String(entry - 1)">{{ entry === 1 ? 'Cantrip' : `Level ${entry - 1}` }}</option></select></label><label class="filter-field"><span>School</span><select v-model="school" class="select-input"><option value="">All schools</option><option v-for="entry in schools" :key="entry" :value="entry">{{ entry }}</option></select></label></template>
       <template v-else><label class="filter-field"><span>Creature type</span><select v-model="creatureType" class="select-input"><option value="">All types</option><option v-for="entry in creatureTypes" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>Minimum CR</span><select v-model="minCR" class="select-input"><option value="">Any</option><option v-for="entry in challengeRatings" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>Maximum CR</span><select v-model="maxCR" class="select-input"><option value="">Any</option><option v-for="entry in challengeRatings" :key="entry" :value="entry">{{ entry }}</option></select></label></template>
     </div>
+    <div v-else-if="showAdndFilters" class="catalog-filters"><label class="filter-field"><span>Source book</span><select v-model="bookSource" class="select-input"><option value="">All sources</option><option v-for="entry in bookSources" :key="entry" :value="entry">{{ entry }}</option></select></label><template v-if="props.type === 'spell'"><label class="filter-field"><span>Level</span><select v-model="level" class="select-input"><option value="">All levels</option><option v-for="entry in levels" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>School</span><select v-model="school" class="select-input"><option value="">All schools</option><option v-for="entry in schools" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>Sphere</span><select v-model="sphere" class="select-input"><option value="">All spheres</option><option v-for="entry in spheres" :key="entry" :value="entry">{{ entry }}</option></select></label></template></div>
     <p v-if="error" class="field-error" role="alert">{{ error }} <button class="inline-button" type="button" @click="loadRecords">Retry</button></p>
     <p v-else-if="loading" class="muted-hint" role="status">Searching catalog…</p>
     <p v-else-if="!records.length" class="muted-hint">No matching catalog entries.</p>
-    <div v-else class="picker-results"><button v-for="record in records" :key="record.id" class="picker-result" type="button" @click="emit('select', record)"><span><strong>{{ record.name }}</strong><small>{{ record.source }}<template v-if="props.type === 'spell'"> · {{ record.level === '0' ? 'Cantrip' : `Level ${record.level}` }} · {{ record.school }}</template><template v-else-if="props.type === 'creature'"> · {{ record.creature_type || 'Unknown type' }} · CR {{ record.challenge_rating || '—' }}</template><template v-else-if="record.rarity"> · {{ record.rarity }}</template></small></span><span aria-hidden="true">＋</span></button></div>
+    <div v-else class="picker-results"><button v-for="record in records" :key="record.id" class="picker-result" type="button" @click="emit('select', record)"><span><strong>{{ record.name }}</strong><small>{{ record.book_source || record.source }}<template v-if="props.type === 'spell'"> · {{ record.level === '0' && !showAdndFilters ? 'Cantrip' : record.level ? `Level ${record.level}` : 'Level unknown' }} · {{ record.school }}<template v-if="record.sphere"> · {{ record.sphere }}</template></template><template v-else-if="props.type === 'creature' && !showAdndFilters"> · {{ record.creature_type || 'Unknown type' }} · CR {{ record.challenge_rating || '—' }}</template><template v-else-if="record.rarity"> · {{ record.rarity }}</template></small></span><span aria-hidden="true">＋</span></button></div>
     <button v-if="!loading && records.length < matchCount" class="secondary-button" type="button" @click="limit += 100">Show more ({{ matchCount - records.length }} remaining)</button>
   </div>
 </template>

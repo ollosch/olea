@@ -11,6 +11,11 @@ const query = ref('')
 const source = ref('')
 const level = ref('')
 const school = ref('')
+const sphere = ref('')
+const bookSource = ref('')
+const levels = ref<string[]>([])
+const spheres = ref<string[]>([])
+const bookSources = ref<string[]>([])
 const creatureType = ref('')
 const minCR = ref('')
 const maxCR = ref('')
@@ -32,6 +37,7 @@ let choicesId = 0
 
 const system = computed(() => systems.value.find((entry) => entry.id === systemId.value))
 const isDnd5e = computed(() => system.value?.key === 'dnd5e')
+const isAdnd = computed(() => system.value?.key === 'adnd2e')
 const totalPages = computed(() => Math.max(1, Math.ceil(totalItems.value / perPage)))
 const sortedRecords = computed(() => selectedType.value === 'creature'
   ? [...records.value].sort((a, b) => compareChallengeRating(a.challenge_rating, b.challenge_rating) || a.name.localeCompare(b.name))
@@ -48,8 +54,8 @@ onMounted(async () => {
 })
 
 watch([systemId, selectedType], () => { page.value = 1; clearFilters(); void loadChoices() })
-watch([query, source, level, school, creatureType, minCR, maxCR, itemType, rarity], () => { page.value = 1 })
-watch([systemId, selectedType, query, source, level, school, creatureType, minCR, maxCR, itemType, rarity, page], loadRecords)
+watch([query, source, level, school, sphere, bookSource, creatureType, minCR, maxCR, itemType, rarity], () => { page.value = 1 })
+watch([systemId, selectedType, query, source, level, school, sphere, bookSource, creatureType, minCR, maxCR, itemType, rarity, page], loadRecords)
 
 function readSystemKey(): string {
   try { return localStorage.getItem('olea.catalogSystem') ?? '' } catch { return '' }
@@ -59,6 +65,7 @@ function saveSystemKey() {
 }
 function clearFilters() {
   source.value = ''; level.value = ''; school.value = ''; creatureType.value = ''
+  sphere.value = ''; bookSource.value = ''
   minCR.value = ''; maxCR.value = ''; itemType.value = ''; rarity.value = ''
 }
 
@@ -68,11 +75,14 @@ async function loadChoices() {
   try {
     const all = await pb.collection('catalog').getFullList<CatalogRecord>({
       filter: pb.filter('system = {:system} && type = {:type}', { system: systemId.value, type: selectedType.value }),
-      fields: 'source,school,creature_type,item_type,rarity', sort: 'source,name', requestKey: null,
+      fields: 'source,book_source,level,school,sphere,creature_type,item_type,rarity', sort: 'source,name', requestKey: null,
     })
     if (token !== choicesId) return
     sources.value = unique(all.map((record) => record.source))
-    schools.value = unique(all.map((record) => record.school).filter(Boolean))
+    schools.value = unique(all.flatMap((record) => isAdnd.value ? record.school.split(/[,\n]/).map((part) => part.trim()) : [record.school]).filter(Boolean))
+    spheres.value = unique(all.flatMap((record) => (record.sphere ?? '').split(/[,\n]/).map((part) => part.trim())).filter(Boolean))
+    levels.value = unique(all.map((record) => record.level).filter(Boolean))
+    bookSources.value = unique(all.map((record) => record.book_source ?? '').filter(Boolean))
     creatureTypes.value = unique(all.map((record) => record.creature_type).filter(Boolean))
     itemTypes.value = unique(all.map((record) => typeof record.item_type === 'string' ? record.item_type : '').filter(Boolean))
     rarities.value = unique(all.map((record) => record.rarity ?? '').filter(Boolean))
@@ -100,12 +110,13 @@ async function loadRecords() {
   if (query.value.trim()) { terms.push('name ~ {:query}'); params.query = query.value.trim() }
   if (source.value) { terms.push('source = {:source}'); params.source = source.value }
   if (level.value) { terms.push('level = {:level}'); params.level = level.value }
-  if (school.value) { terms.push('school = {:school}'); params.school = school.value }
+  if (school.value && !isAdnd.value) { terms.push('school = {:school}'); params.school = school.value }
+  if (bookSource.value) { terms.push('book_source = {:bookSource}'); params.bookSource = bookSource.value }
   if (creatureType.value) { terms.push('creature_type = {:creatureType}'); params.creatureType = creatureType.value }
   try {
     const filter = pb.filter(terms.join(' && '), params)
-    if (selectedType.value === 'creature' || (selectedType.value === 'item' && (itemType.value || rarity.value))) {
-      const all = await pb.collection('catalog').getFullList<CatalogRecord>({ filter, sort: 'name', expand: 'system', requestKey: null })
+    if (selectedType.value === 'creature' || (selectedType.value === 'item' && (itemType.value || rarity.value)) || (isAdnd.value && selectedType.value === 'spell' && (school.value || sphere.value))) {
+      const all = await pb.collection('catalog').getFullList<CatalogRecord>({ filter, sort: 'name', fields: 'id,name,source,book_source,level,school,sphere,creature_type,challenge_rating,item_type,rarity', requestKey: null })
       if (token !== requestId) return
       const filtered = all.filter((record) => {
         if (selectedType.value === 'creature') {
@@ -113,6 +124,7 @@ async function loadRecords() {
           return (!minCR.value || compareChallengeRating(cr, minCR.value) >= 0)
             && (!maxCR.value || compareChallengeRating(cr, maxCR.value) <= 0)
         }
+        if (selectedType.value === 'spell') return (!school.value || record.school.split(/[,\n]/).some((part) => part.trim() === school.value)) && (!sphere.value || (record.sphere ?? '').split(/[,\n]/).some((part) => part.trim() === sphere.value))
         return (!itemType.value || record.item_type === itemType.value)
           && (!rarity.value || record.rarity === rarity.value)
       }).sort((a, b) => selectedType.value === 'creature'
@@ -121,7 +133,7 @@ async function loadRecords() {
       totalItems.value = filtered.length
       records.value = filtered.slice((page.value - 1) * perPage, page.value * perPage)
     } else {
-      const result = await pb.collection('catalog').getList<CatalogRecord>(page.value, perPage, { filter, sort: 'name', expand: 'system', requestKey: null })
+      const result = await pb.collection('catalog').getList<CatalogRecord>(page.value, perPage, { filter, sort: 'name', fields: 'id,name,source,book_source,level,school,sphere,creature_type,challenge_rating,item_type,rarity', requestKey: null })
       if (token !== requestId) return
       records.value = result.items
       totalItems.value = result.totalItems
@@ -157,7 +169,8 @@ function validCR(value: string) {
       <label class="field-label" for="catalog-search">Search by name</label>
       <input id="catalog-search" v-model="query" class="text-input" type="search" placeholder="Search catalog…" autocomplete="off" />
       <div class="catalog-filters">
-        <label class="filter-field"><span>Source</span><select v-model="source" class="select-input"><option value="">All sources</option><option v-for="entry in sources" :key="entry" :value="entry">{{ entry }}</option></select></label>
+        <label v-if="isAdnd" class="filter-field"><span>Source book</span><select v-model="bookSource" class="select-input"><option value="">All sources</option><option v-for="entry in bookSources" :key="entry" :value="entry">{{ entry }}</option></select></label><label v-else class="filter-field"><span>Source</span><select v-model="source" class="select-input"><option value="">All sources</option><option v-for="entry in sources" :key="entry" :value="entry">{{ entry }}</option></select></label>
+        <template v-if="isAdnd && selectedType === 'spell'"><label class="filter-field"><span>Level</span><select v-model="level" class="select-input"><option value="">All levels</option><option v-for="entry in levels" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>School</span><select v-model="school" class="select-input"><option value="">All schools</option><option v-for="entry in schools" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>Sphere</span><select v-model="sphere" class="select-input"><option value="">All spheres</option><option v-for="entry in spheres" :key="entry" :value="entry">{{ entry }}</option></select></label></template>
         <template v-if="isDnd5e && selectedType === 'spell'">
           <label class="filter-field"><span>Level</span><select v-model="level" class="select-input"><option value="">All levels</option><option v-for="entry in 10" :key="entry - 1" :value="String(entry - 1)">{{ entry === 1 ? 'Cantrip' : `Level ${entry - 1}` }}</option></select></label>
           <label class="filter-field"><span>School</span><select v-model="school" class="select-input"><option value="">All schools</option><option v-for="entry in schools" :key="entry" :value="entry">{{ entry }}</option></select></label>
@@ -179,7 +192,7 @@ function validCR(value: string) {
     <div v-if="!loading && sortedRecords.length" class="catalog-list">
       <RouterLink v-for="record in sortedRecords" :key="record.id" class="catalog-row" :to="{ name: 'catalog-detail', params: { recordId: record.id } }">
         <span class="catalog-kind-icon" aria-hidden="true">{{ selectedType === 'spell' ? '✧' : selectedType === 'creature' ? '♜' : '◇' }}</span>
-        <span class="catalog-row-copy"><strong>{{ record.name }}</strong><small>{{ record.source }}<template v-if="selectedType === 'spell'"> · {{ record.level === '0' ? 'Cantrip' : `Level ${record.level}` }} · {{ record.school }}</template><template v-else-if="selectedType === 'creature'"> · {{ record.creature_type || 'Unknown type' }} · CR {{ record.challenge_rating || '—' }}</template><template v-else> · {{ itemTypeLabel(record.item_type) || 'Item' }}<template v-if="record.rarity"> · {{ record.rarity }}</template></template></small></span>
+        <span class="catalog-row-copy"><strong>{{ record.name }}</strong><small>{{ record.book_source || record.source }}<template v-if="selectedType === 'spell'"> · {{ record.level === '0' && !isAdnd ? 'Cantrip' : record.level ? `Level ${record.level}` : 'Level unknown' }}<template v-if="record.school"> · {{ record.school }}</template><template v-if="record.sphere"> · {{ record.sphere }}</template></template><template v-else-if="selectedType === 'creature' && !isAdnd"> · {{ record.creature_type || 'Unknown type' }} · CR {{ record.challenge_rating || '—' }}</template><template v-else-if="selectedType === 'item'"> · {{ itemTypeLabel(record.item_type) || 'Item' }}<template v-if="record.rarity"> · {{ record.rarity }}</template></template></small></span>
         <span class="catalog-open" aria-hidden="true">→</span>
       </RouterLink>
     </div>

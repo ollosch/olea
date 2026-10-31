@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import EntryContent from '../components/EntryContent.vue'
 import { pb } from '../lib/pocketbase'
 import { itemTypeLabel, recordDescription, sourceLabel, type CatalogRecord } from '../lib/catalog'
+import { adndSpellFields, adndHitDice } from '../lib/adnd'
 
 const route = useRoute()
 const record = ref<CatalogRecord | null>(null)
@@ -89,11 +90,11 @@ function hasCreatureStat(key: 'hp' | 'dex'): boolean {
       <header class="catalog-detail-heading">
         <p class="eyebrow"><span class="eyebrow-line" /> {{ record.type.toUpperCase() }}</p>
         <h1 id="page-title">{{ record.name }}</h1>
-        <p class="catalog-source">{{ sourceLabel(record) }}<template v-if="record.expand?.system"> · {{ record.expand.system.name }}</template></p>
+        <p class="catalog-source">{{ record.book_source || sourceLabel(record) }}<template v-if="record.expand?.system"> · {{ record.expand.system.name }}</template></p>
       </header>
       <dl class="catalog-stats">
-        <template v-if="record.type === 'spell'"><div><dt>Level</dt><dd>{{ record.level === '0' ? 'Cantrip' : record.level }}</dd></div><div><dt>School</dt><dd>{{ record.school || '—' }}</dd></div></template>
-        <template v-else-if="record.type === 'creature'"><div><dt>Type</dt><dd>{{ record.creature_type || '—' }}</dd></div><div><dt>Challenge rating</dt><dd>{{ record.challenge_rating || '—' }}</dd></div><div v-if="hasCreatureStat('hp') || record.hp_formula"><dt>Hit points</dt><dd>{{ hasCreatureStat('hp') ? record.hp_average : '—' }}<template v-if="record.hp_formula"> ({{ record.hp_formula }})</template></dd></div><div v-if="hasCreatureStat('dex')"><dt>Dexterity</dt><dd>{{ record.dexterity }}</dd></div></template>
+        <template v-if="record.type === 'spell'"><div><dt>Level</dt><dd>{{ record.level === '0' && record.expand?.system?.key !== 'adnd2e' ? 'Cantrip' : record.level || '—' }}</dd></div><div><dt>School</dt><dd>{{ record.school || '—' }}</dd></div><div v-if="record.sphere"><dt>Sphere</dt><dd>{{ record.sphere }}</dd></div><div v-for="field in adndSpellFields(record.original_json)" :key="field.name"><dt>{{ field.name }}</dt><dd>{{ field.value }}</dd></div></template>
+        <template v-else-if="record.type === 'creature'"><template v-if="record.expand?.system?.key !== 'adnd2e'"><div><dt>Type</dt><dd>{{ record.creature_type || '—' }}</dd></div><div><dt>Challenge rating</dt><dd>{{ record.challenge_rating || '—' }}</dd></div><div v-if="hasCreatureStat('hp') || record.hp_formula"><dt>Hit points</dt><dd>{{ hasCreatureStat('hp') ? record.hp_average : '—' }}<template v-if="record.hp_formula"> ({{ record.hp_formula }})</template></dd></div><div v-if="hasCreatureStat('dex')"><dt>Dexterity</dt><dd>{{ record.dexterity }}</dd></div></template><div v-else-if="adndHitDice(record.original_json)"><dt>HP roll</dt><dd>{{ adndHitDice(record.original_json) }}</dd></div></template>
         <template v-else><div v-if="record.item_type !== undefined"><dt>Type</dt><dd>{{ itemTypeLabel(record.item_type) || String(record.item_type) }}</dd></div><div v-if="record.item_weight !== undefined"><dt>Weight</dt><dd>{{ record.item_weight }} lb.</dd></div><div v-if="record.item_value !== undefined"><dt>Value</dt><dd>{{ record.item_value }} cp</dd></div><div v-if="record.rarity"><dt>Rarity</dt><dd>{{ record.rarity }}</dd></div></template>
       </dl>
       <p v-if="saveError" class="alert-message" role="alert">{{ saveError }}</p>

@@ -133,7 +133,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **31 — System table templates**
   Support optional system-supplied random tables as read-only templates and copying one to a game for editing. No external package service; imports remain local. Verify two games can modify their copies independently.
 
-- [ ] **32 — AD&D 2e import and views**
+- [x] **32 — AD&D 2e import and views**
   Import the supplied spell index/pages and available creature material with a source-specific parser; preserve raw markup, report unsupported/missing content and expose spell school, sphere, level and source filters where data supports them. Add safe readable rendering and system-specific monster HP roll support only where notation can be interpreted confidently. Use invented fixtures and manually validate examples; don't assume all source pages are complete.
 
 - [ ] **33 — Simple backup and restore**

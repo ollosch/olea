@@ -27,6 +27,8 @@ type InputRecord struct {
 	Name            string          `json:"name"`
 	Level           string          `json:"level,omitempty"`
 	School          string          `json:"school,omitempty"`
+	Sphere          string          `json:"sphere,omitempty"`
+	BookSource      string          `json:"book_source,omitempty"`
 	CreatureType    string          `json:"creature_type,omitempty"`
 	ChallengeRating string          `json:"challenge_rating,omitempty"`
 	HPAverage       *int            `json:"hp_average,omitempty"`
@@ -134,6 +136,8 @@ func importRecords(app core.App, systemKey string, document Document) (Summary, 
 		record.Set("name", input.Name)
 		record.Set("level", input.Level)
 		record.Set("school", input.School)
+		record.Set("sphere", input.Sphere)
+		record.Set("book_source", input.BookSource)
 		record.Set("creature_type", input.CreatureType)
 		record.Set("challenge_rating", input.ChallengeRating)
 		record.Set("hp_average", input.HPAverage)

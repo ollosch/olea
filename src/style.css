@@ -132,6 +132,7 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
 .table-results, .template-entries { margin: 18px 0; padding-left: 20px; color: #cbd6c9; line-height: 1.8; overflow-wrap: anywhere; }
 .table-outcome { margin-top: 20px; padding: 16px; border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .table-outcome p { margin: 10px 0; }
+.entry-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .secondary-button, .danger-button, .secondary-link { min-height: 42px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #ffffff25; border-radius: 9px; background: #ffffff08; color: #e8eee6; font-size: 11px; text-decoration: none; }
 .danger-button { color: #ffb9a8; border-color: #ffb9a830; }

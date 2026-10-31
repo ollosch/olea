@@ -30,7 +30,7 @@ function linkify(value: string) {
 
 <template>
   <template v-if="typeof value === 'string'">
-    <p v-html="linkify(display(value))" />
+    <p class="entry-text" v-html="linkify(display(value))" />
   </template>
   <template v-else-if="Array.isArray(value)">
     <div class="entry-stack">

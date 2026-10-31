@@ -5,6 +5,7 @@ import CatalogPicker from '../components/CatalogPicker.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
 import { abilityModifier, evaluateDice, parseHPFormula, rollGroupInitiative as rollGroupDice, rollInitiative } from '../lib/dice'
+import { adndHitDice } from '../lib/adnd'
 import { guardedUpdate, isConflict } from '../lib/records'
 
 type Game = { id: string; updated: string; name: string; system: string; encounter_visible: boolean; encounter_show_initiative: boolean; encounter_show_enemy_names: boolean; encounter_show_hp: boolean; encounter_show_conditions: boolean; expand?: { system?: { key: string; name: string } } }
@@ -166,6 +167,7 @@ function hpFromSource(participant: Combatant): { average: number | null; formula
   const prepared = entries.value.find((entry) => entry.id === participant.prepared)
   const source = prepared?.expand?.creature?.original_json
   if (!source || typeof source !== 'object') return { average: null, formula: null }
+  if ((source as Record<string, unknown>).format === 'adnd2e-html') return { average: null, formula: adndHitDice(source) }
   const hp = (source as Record<string, unknown>).hp
   if (!hp || typeof hp !== 'object') return { average: null, formula: null }
   const average = (hp as Record<string, unknown>).average

@@ -1,3 +1,5 @@
+import { htmlContent, wikiText } from './adnd'
+
 export type CatalogType = 'spell' | 'creature' | 'item'
 export type CatalogRecord = {
   id: string
@@ -7,6 +9,8 @@ export type CatalogRecord = {
   name: string
   level: string
   school: string
+  sphere?: string
+  book_source?: string
   creature_type: string
   challenge_rating: string
   hp_average?: number
@@ -27,6 +31,8 @@ export function recordDescription(record: CatalogRecord, preferAlternate = true)
   const original = record.original_json as Record<string, unknown> | null
   if (preferAlternate && record.alternate_description?.trim()) return record.alternate_description
   if (!original) return ''
+  if (original.format === 'adnd2e-wikitext') return wikiText(typeof original.body === 'string' ? original.body : '')
+  if (original.format === 'adnd2e-html') return htmlContent(typeof original.html === 'string' ? original.html : '')
   if (record.type === 'creature') {
     const fluff = original.fluff as Record<string, unknown> | undefined
     const content = fluff?.entries ?? fluff?.description
