@@ -20,6 +20,12 @@ const stashKind = ref<'personal' | 'location'>('personal')
 const stashLocation = ref('')
 const stashNotes = ref('')
 const stashFormOpen = ref(false)
+const movingItemId = ref('')
+const transferQuantity = ref(1)
+const transferTarget = ref('')
+const coinTransferAmount = ref(1)
+const coinTransferDenomination = ref<'cp' | 'sp' | 'ep' | 'gp' | 'pp'>('gp')
+const coinTransferTarget = ref('')
 const loading = ref(true)
 const error = ref('')
 const pickerOpen = ref(false)
@@ -40,12 +46,12 @@ const game = ref<{ system: string } | null>(null)
 const systemId = computed(() => game.value?.system ?? '')
 const activeStash = computed(() => stashes.value.find((entry) => entry.id === selectedStashId.value) ?? null)
 const activeStoreLabel = computed(() => activeStash.value?.name ?? 'Carried inventory')
-const activeCoins = computed(() => activeStash.value ? {
-  cp: activeStash.value.cp ?? 0, sp: activeStash.value.sp ?? 0, ep: activeStash.value.ep ?? 0,
-  gp: activeStash.value.gp ?? 0, pp: activeStash.value.pp ?? 0,
-} : coins.value)
-const displayedCoinWeight = computed(() => Object.values(activeCoins.value).reduce((sum, amount) => sum + amount, 0) / 50)
+const displayedCoinWeight = computed(() => activeStash.value ? 0 : Object.values(coins.value).reduce((sum, amount) => sum + amount, 0) / 50)
 const partyTotal = ref({ cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 })
+const transferTargets = computed(() => [
+  ...(inventory.value && !activeStash.value ? [] : inventory.value ? [{ key: `inventory:${inventory.value.id}`, name: `${character.value?.name}’s inventory` }] : []),
+  ...stashes.value.filter((stash) => stash.id !== activeStash.value?.id).map((stash) => ({ key: `stash:${stash.id}`, name: `${stash.name} (${stash.kind})` })),
+])
 
 onMounted(load)
 watch(selectedStashId, async () => {
@@ -65,6 +71,8 @@ async function load() {
     capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
     coins.value = { cp: inventory.value.cp ?? 0, sp: inventory.value.sp ?? 0, ep: inventory.value.ep ?? 0, gp: inventory.value.gp ?? 0, pp: inventory.value.pp ?? 0 }
     await loadStashes()
+    const activeStore = activeStash.value ?? inventory.value
+    coins.value = { cp: activeStore.cp ?? 0, sp: activeStore.sp ?? 0, ep: activeStore.ep ?? 0, gp: activeStore.gp ?? 0, pp: activeStore.pp ?? 0 }
     await loadItems()
   } catch {
     error.value = 'Inventory could not be loaded. Check the local server and try again.'
@@ -154,6 +162,39 @@ async function drop(item: InventoryItem) {
   try { await pb.collection('inventory_items').delete(item.id); await loadItems() }
   catch { error.value = 'The item could not be dropped.' }
 }
+function beginMove(item: InventoryItem) {
+  movingItemId.value = item.id
+  transferQuantity.value = item.quantity
+  transferTarget.value = transferTargets.value[0]?.key ?? ''
+}
+function endpoint(value: string) {
+  const [kind, id] = value.split(':', 2)
+  return kind === 'inventory' ? { inventory: id } : { stash: id }
+}
+function currentEndpoint() { return activeStash.value ? { stash: activeStash.value.id } : { inventory: inventory.value?.id ?? '' } }
+async function transferItem(item: InventoryItem) {
+  if (!transferTarget.value || !Number.isInteger(transferQuantity.value) || transferQuantity.value < 1) { error.value = 'Choose a destination and a positive whole quantity.'; return }
+  if (transferQuantity.value > item.quantity) { error.value = 'Transfer quantity exceeds the available stack.'; return }
+  if (item.is_container && transferQuantity.value !== 1) { error.value = 'Containers cannot be split.'; return }
+  try {
+    await pb.send('/api/olea/transfers/item', { method: 'POST', body: { itemId: item.id, quantity: transferQuantity.value, destination: endpoint(transferTarget.value) } })
+    movingItemId.value = ''; await loadItems(); await refreshPartyTotal()
+  } catch (cause) { error.value = transferError(cause, 'The item could not be transferred.') }
+}
+async function transferCoins() {
+  if (!coinTransferTarget.value || !Number.isInteger(coinTransferAmount.value) || coinTransferAmount.value < 1) { error.value = 'Choose a destination and a positive whole coin amount.'; return }
+  try {
+    await pb.send('/api/olea/transfers/coins', { method: 'POST', body: { source: currentEndpoint(), destination: endpoint(coinTransferTarget.value), denomination: coinTransferDenomination.value, amount: coinTransferAmount.value } })
+    await load(); await refreshPartyTotal()
+  } catch (cause) { error.value = transferError(cause, 'Coins could not be transferred.') }
+}
+function transferError(cause: unknown, fallback: string): string {
+  if (cause && typeof cause === 'object' && 'response' in cause) {
+    const response = (cause as { response?: { message?: string } }).response
+    if (response?.message) return response.message
+  }
+  return fallback
+}
 function parseWeight(value: unknown): { value: number; known: boolean } {
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return { value, known: true }
   if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value)) && Number(value) >= 0) return { value: Number(value), known: true }
@@ -222,11 +263,11 @@ function childCount(item: InventoryItem): number { return items.value.filter((en
       <section class="store-switcher"><label class="filter-field" for="inventory-store">View contents<select id="inventory-store" v-model="selectedStashId" class="select-input"><option value="">{{ character.name }}’s inventory</option><option v-for="stash in stashes" :key="stash.id" :value="stash.id">{{ stash.name }} ({{ stash.kind }})</option></select></label><button class="secondary-button" type="button" @click="stashKind = 'personal'; stashFormOpen = !stashFormOpen">＋ Personal stash</button><button class="secondary-button" type="button" @click="stashKind = 'location'; stashFormOpen = !stashFormOpen">＋ GM location stash</button></section>
       <p v-if="activeStash?.location || activeStash?.notes" class="stash-notes"><strong v-if="activeStash.location">{{ activeStash.location }}</strong>{{ activeStash.notes }}</p>
       <form v-if="stashFormOpen" class="editor-panel" @submit.prevent="createStash"><h2>{{ stashKind === 'personal' ? 'Personal stash' : 'GM location stash' }}</h2><label class="field-label" for="stash-name">Name</label><input id="stash-name" v-model="stashName" class="text-input" required maxlength="160" :placeholder="stashKind === 'personal' ? 'My pack at the inn' : 'Town armory'" /><label class="field-label" for="stash-location">Location (optional)</label><input id="stash-location" v-model="stashLocation" class="text-input" maxlength="500" /><label class="field-label" for="stash-notes">Notes (optional)</label><textarea id="stash-notes" v-model="stashNotes" class="text-area" /><div class="form-actions"><button class="secondary-button" type="button" @click="stashFormOpen = false">Cancel</button><button class="primary-button" type="submit">Create stash</button></div></form>
-      <section class="currency-panel"><div><h2>{{ activeStoreLabel }} · Coins</h2><p>Coin weight: {{ displayedCoinWeight.toFixed(2) }} lb (50 coins per lb).</p><p v-if="!activeStash">Party total (characters + party stash): {{ partyTotal.cp }} CP · {{ partyTotal.sp }} SP · {{ partyTotal.ep }} EP · {{ partyTotal.gp }} GP · {{ partyTotal.pp }} PP</p></div><div class="coin-fields"><label v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" class="filter-field">{{ denomination.toUpperCase() }}<input v-model.number="coins[denomination]" class="text-input" type="number" min="0" step="1" @change="saveCoins" /></label></div></section>
+      <section class="currency-panel"><div><h2>{{ activeStoreLabel }} · Coins</h2><p>Coin weight: {{ displayedCoinWeight.toFixed(2) }} lb (50 coins per lb).</p><p v-if="!activeStash">Party total (characters + party stash): {{ partyTotal.cp }} CP · {{ partyTotal.sp }} SP · {{ partyTotal.ep }} EP · {{ partyTotal.gp }} GP · {{ partyTotal.pp }} PP</p></div><div class="coin-fields"><label v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" class="filter-field">{{ denomination.toUpperCase() }}<input v-model.number="coins[denomination]" class="text-input" type="number" min="0" step="1" @change="saveCoins" /></label></div><div v-if="transferTargets.length" class="coin-transfer"><label class="filter-field">Transfer denomination<select v-model="coinTransferDenomination" class="select-input"><option v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" :value="denomination">{{ denomination.toUpperCase() }}</option></select></label><label class="filter-field">Amount<input v-model.number="coinTransferAmount" class="text-input" type="number" min="1" step="1" /></label><label class="filter-field">To<select v-model="coinTransferTarget" class="select-input"><option value="">Choose a store</option><option v-for="target in transferTargets" :key="target.key" :value="target.key">{{ target.name }}</option></select></label><button class="secondary-button" type="button" @click="transferCoins">Transfer coins</button></div></section>
       <p class="muted-hint">Carried weight includes container and contents once, plus coins. Container weights are per container; items with unknown weight make the total unknown.</p>
       <div v-if="pickerOpen" class="editor-panel"><div class="catalog-panel-heading"><h2>Choose an item</h2><button class="secondary-button" type="button" @click="pickerOpen = false">Close</button></div><CatalogPicker :system-id="systemId" @select="addCatalogItem" /></div>
       <form v-if="customOpen" class="editor-panel" @submit.prevent="addCustomItem"><h2>Custom item</h2><label class="field-label" for="custom-item-name">Name</label><input id="custom-item-name" v-model="customName" class="text-input" required maxlength="240" /><label class="field-label" for="custom-item-weight">Weight per item (optional)</label><input id="custom-item-weight" v-model="customWeight" class="text-input" type="number" min="0" step="any" placeholder="Unknown" /><label class="field-label" for="custom-item-notes">Notes</label><textarea id="custom-item-notes" v-model="customNotes" class="text-area" /><label class="check-field"><input v-model="containerDraft" type="checkbox" /> This item is a container</label><div class="form-actions"><button class="secondary-button" type="button" @click="customOpen = false">Cancel</button><button class="primary-button" type="submit">Add item</button></div></form>
-      <div v-if="items.length" class="inventory-list"><article v-for="item in items" :key="item.id" class="inventory-row"><div class="inventory-item-copy"><strong>{{ item.container ? '↳ ' : '' }}{{ item.name }} <span v-if="item.is_container" class="container-label">Container · {{ childCount(item) }} {{ childCount(item) === 1 ? 'item' : 'items' }}</span></strong><small>{{ item.weight_known ? `${item.weight} lb each` : 'Weight unknown' }}<template v-if="item.expand?.catalog_item"> · {{ item.expand.catalog_item.source }}</template></small><p v-if="item.notes && editing !== item.id" class="inventory-notes">{{ item.notes }}</p></div><template v-if="editing === item.id"><div class="inventory-edit"><label class="filter-field">Quantity<input v-model.number="quantityDraft" class="text-input" type="number" min="1" step="1" /></label><label class="filter-field">Weight per item (lb)<input v-model="weightDraft" class="text-input" type="number" min="0" step="any" placeholder="Unknown" @input="weightKnownDraft = weightDraft.trim() !== ''" /></label><label class="filter-field">Place inside<select v-model="parentDraft" class="select-input"><option value="">Carried outside</option><option v-for="container in items.filter((entry) => entry.is_container && entry.id !== item.id && !isDescendant(entry.id, item.id))" :key="container.id" :value="container.id">{{ container.name }}</option></select></label><label class="check-field"><input v-model="containerDraft" type="checkbox" /> This item is a container</label><label class="filter-field">Item notes<textarea v-model="notesDraft" class="text-area" /></label><div class="row-actions"><button class="primary-button" type="button" @click="saveEdit(item)">Save</button><button class="secondary-button" type="button" @click="editing = ''">Cancel</button></div></div></template><template v-else><span class="quantity-pill">× {{ item.quantity }}</span><div class="row-actions"><button class="secondary-button" type="button" @click="startEdit(item)">Edit</button><button class="danger-button" type="button" @click="drop(item)">Drop</button></div></template></article></div>
+      <div v-if="items.length" class="inventory-list"><article v-for="item in items" :key="item.id" class="inventory-row"><div class="inventory-item-copy"><strong>{{ item.container ? '↳ ' : '' }}{{ item.name }} <span v-if="item.is_container" class="container-label">Container · {{ childCount(item) }} {{ childCount(item) === 1 ? 'item' : 'items' }}</span></strong><small>{{ item.weight_known ? `${item.weight} lb each` : 'Weight unknown' }}<template v-if="item.expand?.catalog_item"> · {{ item.expand.catalog_item.source }}</template></small><p v-if="item.notes && editing !== item.id" class="inventory-notes">{{ item.notes }}</p></div><template v-if="editing === item.id"><div class="inventory-edit"><label class="filter-field">Quantity<input v-model.number="quantityDraft" class="text-input" type="number" min="1" step="1" /></label><label class="filter-field">Weight per item (lb)<input v-model="weightDraft" class="text-input" type="number" min="0" step="any" placeholder="Unknown" @input="weightKnownDraft = weightDraft.trim() !== ''" /></label><label class="filter-field">Place inside<select v-model="parentDraft" class="select-input"><option value="">Carried outside</option><option v-for="container in items.filter((entry) => entry.is_container && entry.id !== item.id && !isDescendant(entry.id, item.id))" :key="container.id" :value="container.id">{{ container.name }}</option></select></label><label class="check-field"><input v-model="containerDraft" type="checkbox" /> This item is a container</label><label class="filter-field">Item notes<textarea v-model="notesDraft" class="text-area" /></label><div class="row-actions"><button class="primary-button" type="button" @click="saveEdit(item)">Save</button><button class="secondary-button" type="button" @click="editing = ''">Cancel</button></div></div></template><template v-else-if="movingItemId === item.id"><div class="inventory-edit transfer-form"><label class="filter-field">Quantity<input v-model.number="transferQuantity" class="text-input" type="number" min="1" :max="item.quantity" step="1" /></label><label class="filter-field">Move to<select v-model="transferTarget" class="select-input"><option value="">Choose a store</option><option v-for="target in transferTargets" :key="target.key" :value="target.key">{{ target.name }}</option></select></label><div class="row-actions"><button class="primary-button" type="button" @click="transferItem(item)">Move item</button><button class="secondary-button" type="button" @click="movingItemId = ''">Cancel</button></div></div></template><template v-else><span class="quantity-pill">× {{ item.quantity }}</span><div class="row-actions"><button class="secondary-button" type="button" @click="startEdit(item)">Edit</button><button class="secondary-button" type="button" :disabled="!transferTargets.length" @click="beginMove(item)">Move</button><button class="danger-button" type="button" @click="drop(item)">Drop</button></div></template></article></div>
       <div v-else-if="!pickerOpen" class="empty-state compact-empty"><div class="empty-state-icon" aria-hidden="true">◇</div><h2>No items yet</h2><p>Add an item from the system catalog or create a custom item. Dropping an item removes it from this inventory.</p><button class="primary-button empty-action" type="button" @click="pickerOpen = true">＋ Add catalog item</button></div>
     </template>
     <p v-else-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>

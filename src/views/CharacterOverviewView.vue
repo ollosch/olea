@@ -53,6 +53,7 @@ function selectOnDevice() {
         </button>
       </div>
       <RouterLink class="tool-link" :to="{ name: 'character-inventory', params: { characterId: character.id } }"><span class="upcoming-icon" aria-hidden="true">◇</span><span><strong>Inventory</strong><small>Manage carried items and quantities</small></span><span aria-hidden="true">→</span></RouterLink>
+      <RouterLink class="tool-link" :to="{ name: 'character-spellbooks', params: { characterId: character.id } }"><span class="upcoming-icon" aria-hidden="true">✧</span><span><strong>Spellbooks</strong><small>Collect system spells in named books</small></span><span aria-hidden="true">→</span></RouterLink>
       <RouterLink class="text-link" to="/characters">← Switch character</RouterLink>
     </template>
   </section>

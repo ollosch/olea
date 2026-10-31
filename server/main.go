@@ -18,6 +18,7 @@ import (
 	"olea/catalogimport"
 	"olea/dnd5eimport"
 	_ "olea/migrations"
+	"olea/transfers"
 )
 
 // The placeholder keeps Go builds valid before the frontend is built.
@@ -104,6 +105,26 @@ func main() {
 		},
 	})
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		e.Router.POST("/api/olea/transfers/item", func(re *core.RequestEvent) error {
+			var request transfers.ItemRequest
+			if err := re.BindBody(&request); err != nil {
+				return re.BadRequestError("Invalid transfer request.", err)
+			}
+			if err := transfers.Item(re.App, request); err != nil {
+				return re.BadRequestError(err.Error(), nil)
+			}
+			return re.NoContent(204)
+		})
+		e.Router.POST("/api/olea/transfers/coins", func(re *core.RequestEvent) error {
+			var request transfers.CoinRequest
+			if err := re.BindBody(&request); err != nil {
+				return re.BadRequestError("Invalid transfer request.", err)
+			}
+			if err := transfers.Coins(re.App, request); err != nil {
+				return re.BadRequestError(err.Error(), nil)
+			}
+			return re.NoContent(204)
+		})
 		public, err := fs.Sub(frontend, "ui/dist")
 		if err != nil {
 			return err

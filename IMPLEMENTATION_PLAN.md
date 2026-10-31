@@ -81,7 +81,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **17 — Stashes**
   Create one shared party stash per game, player-created personal stashes, and GM-created location stashes. Each has a name, optional location/notes, contents and coins. Ensure party stash is open to all characters; personal stashes remain distinct and location stashes are managed through the GM interface. Verify persistence and that stash contents aren't counted as carried weight.
 
-- [ ] **18 — Atomic item and coin transfers**
+- [x] **18 — Atomic item and coin transfers**
   Add small PocketBase Go routes using transactions for transfers between character inventories and eligible stashes, including partial stacks, nested contents where supported, and coins. Restrict destinations to the same game as a domain invariant; check quantities and report errors. Verify a failed or concurrent transfer cannot duplicate or lose items/coins; all balances remain nonnegative. This is data integrity, not authentication.
 
 - [ ] **19 — Spellbooks**
