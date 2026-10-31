@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"olea/catalogimport"
+	"olea/dnd5eimport"
 	_ "olea/migrations"
 )
 
@@ -56,6 +58,42 @@ func main() {
 				return err
 			}
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(summary)
+		},
+	})
+	app.RootCmd.AddCommand(&cobra.Command{
+		Use:   "dnd5e-import spells <json-file>",
+		Short: "Import a local D&D 5e spell source file",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if args[0] != "spells" {
+				return fmt.Errorf("unsupported D&D 5e import kind %q", args[0])
+			}
+			if err := app.RunAppMigrations(); err != nil {
+				return err
+			}
+			path, err := filepath.Abs(args[1])
+			if err != nil {
+				return err
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+			parsed, err := dnd5eimport.ParseSpells(file)
+			if err != nil {
+				return err
+			}
+			imported, err := catalogimport.Import(app, "dnd5e", parsed.Document)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+				Created  int      `json:"created"`
+				Updated  int      `json:"updated"`
+				Skipped  int      `json:"skipped"`
+				Warnings []string `json:"warnings"`
+			}{imported.Created, imported.Updated, parsed.Skipped, parsed.Warnings})
 		},
 	})
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {

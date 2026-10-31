@@ -49,7 +49,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **07 — Catalog storage and local import plumbing**
   Add migrations and a simple import path for item, spell and creature records: stable system/type/source identity, useful query fields and original JSON. Imports are local and explicitly invoked; no network or bundled source content. Re-imports update matching records rather than duplicating them and don't delete user data. Provide an import summary and small synthetic fixtures. Verify import/reimport and offline operation.
 
-- [ ] **08 — D&D 5e spells importer**
+- [x] **08 — D&D 5e spells importer**
   Import the `spell` array in `data/dnd5e_spells_phb.json`, preserving source/page, name, level, school, original entries and higher-level entries. Normalize school codes and keep unknown fields. Verify synthetic examples including cantrips and higher-level entries; manually report imported and skipped counts for the supplied file without committing its contents.
 
 - [ ] **09 — D&D 5e bestiary importer**
