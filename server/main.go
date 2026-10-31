@@ -15,6 +15,7 @@ import (
 )
 
 // The placeholder keeps Go builds valid before the frontend is built.
+//
 //go:embed all:ui
 var frontend embed.FS
 

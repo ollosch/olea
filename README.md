@@ -32,6 +32,8 @@ In another terminal, run the frontend development server:
 npm run dev
 ```
 
+To start the backend directly in the foreground with a chosen data directory, use `scripts/start-server.sh /path/to/data`. For a fresh migration check, choose a new empty directory, stop the server with Ctrl+C, and run the same command again with that directory to verify restart behavior.
+
 Open the Vite URL shown in the terminal. Vite proxies `/api` to PocketBase. `npm run build` is needed once before starting the Go server; frontend edits then update through Vite. Run `npm run typecheck` to check TypeScript.
 
 ## Build and run

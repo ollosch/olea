@@ -46,12 +46,12 @@ func init() {
 		games.Fields.Add(&core.RelationField{
 			Name:         "system",
 			Required:     true,
-			Max:          1,
+			MaxSelect:    1,
 			CollectionId: systems.Id,
 		})
 		games.Fields.Add(&core.RelationField{
 			Name:         "gm_profile",
-			Max:          1,
+			MaxSelect:    1,
 			CollectionId: profiles.Id,
 		})
 		setPublicRules(games)
@@ -68,12 +68,12 @@ func init() {
 		characters.Fields.Add(&core.RelationField{
 			Name:         "game",
 			Required:     true,
-			Max:          1,
+			MaxSelect:    1,
 			CollectionId: games.Id,
 		})
 		characters.Fields.Add(&core.RelationField{
 			Name:         "owner",
-			Max:          1,
+			MaxSelect:    1,
 			CollectionId: profiles.Id,
 		})
 		setPublicRules(characters)
