@@ -95,7 +95,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **21 — Individual combatants and manual tracker**
   Start an encounter with independently editable participants and per-creature current/max HP, initiative, conditions and notes. Include game characters and custom participants when the GM chooses. Implement stable order, manual tie handling, round/active turn, next/previous, reset and end. Keep preparation separate from live state so an encounter can be reused. Verify repeated creatures have independent HP and condition state.
 
-- [ ] **22 — Dice and 5e monster HP**
+- [x] **22 — Dice and 5e monster HP**
   Add a bounded dice-expression evaluator sufficient for `NdM`, optional signed constant and clear invalid-input handling; no arbitrary code evaluation. For encounter monsters, offer average, individual rolls and manual HP, displaying each result before confirming. PocketBase number fields default missing values to zero: distinguish an absent imported HP average from zero using source data or explicit presence metadata. Test with deterministic injected rolls, invalid formulas and representative 5e data. Leave unsupported formulas editable manually.
 
 - [ ] **23 — 5e initiative rolls**
