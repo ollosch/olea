@@ -75,7 +75,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **15 — Containers and weight**
   Support moving items into and out of nested containers with an understandable touch UI. Prevent cycles; count container and contained-item weight exactly once. Add a manually entered carrying capacity per character and show total carried weight and whether capacity is exceeded. Handle unknown weight visibly rather than treating it as known. Verify nested containers, quantity changes and capacity boundaries.
 
-- [ ] **16 — Currency and party totals**
+- [x] **16 — Currency and party totals**
   Define 5e CP, SP, EP, GP and PP and store nonnegative integer balances per inventory. Display and edit denominations individually. Count coin weight according to a documented 5e setting, and recalculate encumbrance. Show party totals from character purses plus the party stash only; don't include personal or location stashes. Verify denomination totals and coin-weight calculations.
 
 - [ ] **17 — Stashes**

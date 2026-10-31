@@ -6,7 +6,7 @@ import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
 
 type Character = { id: string; name: string; game: string }
-type Inventory = { id: string; game: string; character: string; capacity: number; capacity_known: boolean }
+type Inventory = { id: string; game: string; character: string; capacity: number; capacity_known: boolean; cp: number; sp: number; ep: number; gp: number; pp: number }
 type InventoryItem = { id: string; inventory: string; catalog_item: string; container: string; name: string; quantity: number; weight: number; weight_known: boolean; is_container: boolean; notes: string; expand?: { catalog_item?: CatalogRecord } }
 const route = useRoute()
 const character = ref<Character | null>(null)
@@ -27,6 +27,7 @@ const weightKnownDraft = ref(false)
 const containerDraft = ref(false)
 const parentDraft = ref('')
 const capacityDraft = ref('')
+const coins = ref({ cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 })
 const game = ref<{ system: string } | null>(null)
 const systemId = computed(() => game.value?.system ?? '')
 
@@ -41,6 +42,7 @@ async function load() {
     const found = await pb.collection('inventories').getFullList<Inventory>({ filter: pb.filter('character = {:character}', { character: character.value.id }), perPage: 2 })
     inventory.value = found[0] ?? await pb.collection('inventories').create<Inventory>({ game: character.value.game, character: character.value.id })
     capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
+    coins.value = { cp: inventory.value.cp ?? 0, sp: inventory.value.sp ?? 0, ep: inventory.value.ep ?? 0, gp: inventory.value.gp ?? 0, pp: inventory.value.pp ?? 0 }
     await loadItems()
   } catch {
     error.value = 'Inventory could not be loaded. Check the local server and try again.'
@@ -111,8 +113,9 @@ function itemWeight(item: InventoryItem, seen = new Set<string>()): number | nul
 const carriedWeight = computed(() => {
   const roots = items.value.filter((item) => !item.container)
   const weights = roots.map((item) => itemWeight(item))
-  return weights.some((value) => value === null) ? null : weights.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+  return weights.some((value) => value === null) ? null : weights.reduce<number>((sum, value) => sum + (value ?? 0), 0) + coinWeight.value
 })
+const coinWeight = computed(() => (coins.value.cp + coins.value.sp + coins.value.ep + coins.value.gp + coins.value.pp) / 50)
 function isDescendant(candidateId: string, ancestorId: string): boolean {
   let current = items.value.find((entry) => entry.id === candidateId)
   const visited = new Set<string>()
@@ -130,6 +133,12 @@ async function saveCapacity() {
   try { inventory.value = await pb.collection('inventories').update<Inventory>(inventory.value.id, { capacity: value, capacity_known: capacityDraft.value.trim() !== '' }) }
   catch { error.value = 'Capacity could not be saved.' }
 }
+async function saveCoins() {
+  if (!inventory.value) return
+  if (Object.values(coins.value).some((amount) => !Number.isInteger(amount) || amount < 0)) { error.value = 'Coin balances must be nonnegative whole numbers.'; return }
+  try { inventory.value = await pb.collection('inventories').update<Inventory>(inventory.value.id, coins.value) }
+  catch { error.value = 'Coin balances could not be saved.' }
+}
 function childCount(item: InventoryItem): number { return items.value.filter((entry) => entry.container === item.id).length }
 </script>
 
@@ -141,6 +150,8 @@ function childCount(item: InventoryItem): number { return items.value.filter((en
       <div class="screen-heading"><div><p class="eyebrow"><span class="eyebrow-line" /> CHARACTER INVENTORY</p><h1 id="page-title">{{ character.name }}’s items</h1><p class="screen-description">Items and quantities carried by this character.</p></div><div class="heading-actions"><button class="primary-button" type="button" @click="pickerOpen = !pickerOpen">＋ Add catalog item</button><button class="secondary-button" type="button" @click="customOpen = !customOpen">Custom item</button></div></div>
       <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>
       <section class="weight-summary" aria-label="Carried weight"><div><strong>Carried weight</strong><small>{{ carriedWeight === null ? 'Unknown — at least one carried item has unknown weight' : `${carriedWeight.toFixed(2)} lb` }}</small></div><div v-if="inventory" class="capacity-editor"><label class="filter-field" for="carrying-capacity">Capacity (lb)<input id="carrying-capacity" v-model="capacityDraft" class="text-input" type="number" min="0" step="any" placeholder="Not set" @change="saveCapacity" /></label><strong v-if="inventory.capacity_known && carriedWeight !== null" :class="carriedWeight > inventory.capacity ? 'over-capacity' : 'within-capacity'">{{ carriedWeight > inventory.capacity ? 'Over capacity' : 'Within capacity' }}</strong></div></section>
+      <section class="currency-panel"><div><h2>Coins</h2><p>Coin weight: {{ coinWeight.toFixed(2) }} lb (50 coins per lb).</p></div><div class="coin-fields"><label v-for="denomination in (['cp', 'sp', 'ep', 'gp', 'pp'] as const)" :key="denomination" class="filter-field">{{ denomination.toUpperCase() }}<input v-model.number="coins[denomination]" class="text-input" type="number" min="0" step="1" @change="saveCoins" /></label></div></section>
+      <p class="muted-hint">Carried weight includes container and contents once, plus coins. Container weights are per container; items with unknown weight make the total unknown.</p>
       <div v-if="pickerOpen" class="editor-panel"><div class="catalog-panel-heading"><h2>Choose an item</h2><button class="secondary-button" type="button" @click="pickerOpen = false">Close</button></div><CatalogPicker :system-id="systemId" @select="addCatalogItem" /></div>
       <form v-if="customOpen" class="editor-panel" @submit.prevent="addCustomItem"><h2>Custom item</h2><label class="field-label" for="custom-item-name">Name</label><input id="custom-item-name" v-model="customName" class="text-input" required maxlength="240" /><label class="field-label" for="custom-item-weight">Weight per item (optional)</label><input id="custom-item-weight" v-model="customWeight" class="text-input" type="number" min="0" step="any" placeholder="Unknown" /><label class="field-label" for="custom-item-notes">Notes</label><textarea id="custom-item-notes" v-model="customNotes" class="text-area" /><label class="check-field"><input v-model="containerDraft" type="checkbox" /> This item is a container</label><div class="form-actions"><button class="secondary-button" type="button" @click="customOpen = false">Cancel</button><button class="primary-button" type="submit">Add item</button></div></form>
       <div v-if="items.length" class="inventory-list"><article v-for="item in items" :key="item.id" class="inventory-row"><div class="inventory-item-copy"><strong>{{ item.container ? '↳ ' : '' }}{{ item.name }} <span v-if="item.is_container" class="container-label">Container · {{ childCount(item) }} {{ childCount(item) === 1 ? 'item' : 'items' }}</span></strong><small>{{ item.weight_known ? `${item.weight} lb each` : 'Weight unknown' }}<template v-if="item.expand?.catalog_item"> · {{ item.expand.catalog_item.source }}</template></small><p v-if="item.notes && editing !== item.id" class="inventory-notes">{{ item.notes }}</p></div><template v-if="editing === item.id"><div class="inventory-edit"><label class="filter-field">Quantity<input v-model.number="quantityDraft" class="text-input" type="number" min="1" step="1" /></label><label class="filter-field">Weight per item (lb)<input v-model="weightDraft" class="text-input" type="number" min="0" step="any" placeholder="Unknown" @input="weightKnownDraft = weightDraft.trim() !== ''" /></label><label class="filter-field">Place inside<select v-model="parentDraft" class="select-input"><option value="">Carried outside</option><option v-for="container in items.filter((entry) => entry.is_container && entry.id !== item.id && !isDescendant(entry.id, item.id))" :key="container.id" :value="container.id">{{ container.name }}</option></select></label><label class="check-field"><input v-model="containerDraft" type="checkbox" /> This item is a container</label><label class="filter-field">Item notes<textarea v-model="notesDraft" class="text-area" /></label><div class="row-actions"><button class="primary-button" type="button" @click="saveEdit(item)">Save</button><button class="secondary-button" type="button" @click="editing = ''">Cancel</button></div></div></template><template v-else><span class="quantity-pill">× {{ item.quantity }}</span><div class="row-actions"><button class="secondary-button" type="button" @click="startEdit(item)">Edit</button><button class="danger-button" type="button" @click="drop(item)">Drop</button></div></template></article></div>

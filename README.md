@@ -75,6 +75,8 @@ Supported record types are `item`, `spell`, and `creature`. Each record requires
 
 For the supplied 5etools-style D&D 5e sources, use `go -C server run . --dir=/path/to/pb_data dnd5e-import spells data/dnd5e_spells_phb.json`, `go -C server run . --dir=/path/to/pb_data dnd5e-import bestiary data/dnd5e_bestiary-mm.json` or `go -C server run . --dir=/path/to/pb_data dnd5e-import items data/dnd5e_items.json`. These importers retain complete source objects, including fields not yet modeled, and report skipped records or warnings. Spell schools are normalized to names; monster imports support string/object creature type and CR, fractional CR, HP average/formula, Dexterity and actions. Item imports retain type, weight, value, rarity and resolve available `_copy` inheritance with append/insert/replace entry modifications while preserving the original `_copy` definition in source JSON. Unresolved bases and unsupported modifications are skipped with warnings. `itemGroup` bundle definitions are counted and deliberately not imported as standalone items. Missing stats are preserved in original JSON and are not invented. Source JSON remains local and is not included in the repository.
 
+For D&D 5e carrying weight, coins use the standard 50 coins per pound; each denomination is stored and displayed as a separate nonnegative whole-number balance. This is a fixed 5e convention in Olea, not a configurable variant rule.
+
 ## Local data
 
 `data/` contains user-provided reference material and is deliberately Git-ignored. Runtime PocketBase data, dependencies, generated frontend assets and binaries are ignored too. Never commit personal source material or campaign databases.
