@@ -1,125 +1,52 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import CatalogFilters from './CatalogFilters.vue'
 import { pb } from '../lib/pocketbase'
-import { compareChallengeRating, itemTypeLabel, type CatalogRecord } from '../lib/catalog'
+import { matchesCatalog } from '../lib/catalogFilters'
+import { systemByKey } from '../lib/systems'
+import type { CatalogRecord, CatalogType } from '../lib/catalog'
 
-const props = withDefaults(defineProps<{ systemId: string; type?: 'item' | 'spell' | 'creature' }>(), { type: 'item' })
+const props = withDefaults(defineProps<{ systemId: string; type?: CatalogType }>(), { type: 'item' })
 const emit = defineEmits<{ select: [record: CatalogRecord] }>()
 const query = ref('')
-const source = ref('')
-const itemType = ref('')
-const rarity = ref('')
-const level = ref('')
-const school = ref('')
-const sphere = ref('')
-const bookSource = ref('')
-const levels = ref<string[]>([])
-const spheres = ref<string[]>([])
-const bookSources = ref<string[]>([])
-const creatureType = ref('')
-const minCR = ref('')
-const maxCR = ref('')
+const selected = ref<Record<string, string>>({})
 const records = ref<CatalogRecord[]>([])
-const sources = ref<string[]>([])
-const types = ref<string[]>([])
-const rarities = ref<string[]>([])
-const schools = ref<string[]>([])
-const creatureTypes = ref<string[]>([])
-const challengeRatings = ref<string[]>([])
+const key = ref('')
 const loading = ref(false)
 const error = ref('')
 const limit = ref(100)
-const matchCount = ref(0)
 let token = 0
-
-const system = ref<{ key: string } | null>(null)
-const showDndFilters = computed(() => system.value?.key === 'dnd5e')
-const showAdndFilters = computed(() => system.value?.key === 'adnd2e')
-
-onMounted(async () => {
-  try {
-    system.value = await pb.collection('systems').getOne<{ key: string }>(props.systemId)
-    await loadChoices()
-  } catch { error.value = 'Catalog filters could not be loaded.' }
-})
-watch(() => props.systemId, async () => {
-  system.value = null
-  source.value = ''; itemType.value = ''; rarity.value = ''; level.value = ''; school.value = ''; sphere.value = ''; bookSource.value = ''; creatureType.value = ''; minCR.value = ''; maxCR.value = ''
-  try {
-    if (props.systemId) system.value = await pb.collection('systems').getOne<{ key: string }>(props.systemId)
-    await loadChoices()
-  } catch { error.value = 'Catalog filters could not be loaded.' }
-})
-watch([query, source, itemType, rarity, level, school, sphere, bookSource, creatureType, minCR, maxCR], () => { limit.value = 100; void loadRecords() })
-watch(limit, loadRecords)
-
-async function loadChoices() {
-  if (!props.systemId) return
-  try {
-    const all = await pb.collection('catalog').getFullList<CatalogRecord>({
-      filter: pb.filter('system = {:system} && type = {:type}', { system: props.systemId, type: props.type }),
-      fields: 'source,book_source,sphere,item_type,rarity,school,level,creature_type,challenge_rating', sort: 'source,name', requestKey: null,
-    })
-    sources.value = unique(all.map((entry) => entry.source))
-    types.value = unique(all.map((entry) => typeof entry.item_type === 'string' ? entry.item_type.split('|')[0] : '').filter(Boolean))
-    rarities.value = unique(all.map((entry) => entry.rarity ?? '').filter(Boolean))
-    schools.value = unique(all.flatMap((entry) => showAdndFilters.value ? (entry.school ?? '').split(/[,\n]/).map((part) => part.trim()) : [entry.school ?? '']).filter(Boolean))
-    spheres.value = unique(all.flatMap((entry) => (entry.sphere ?? '').split(/[,\n]/).map((part) => part.trim())).filter(Boolean))
-    levels.value = unique(all.map((entry) => entry.level ?? '').filter(Boolean))
-    bookSources.value = unique(all.map((entry) => entry.book_source ?? '').filter(Boolean))
-    creatureTypes.value = unique(all.map((entry) => entry.creature_type ?? '').filter(Boolean))
-    challengeRatings.value = unique(all.map((entry) => entry.challenge_rating ?? '').filter(Boolean)).sort(compareChallengeRating)
-    if (showDndFilters.value && !source.value && sources.value.includes('PHB')) source.value = 'PHB'
-  } catch { error.value = 'Catalog filters could not be loaded.' }
-  await loadRecords()
-}
-
-async function loadRecords() {
+const system = computed(() => systemByKey(key.value))
+const filters = computed(() => system.value.catalog.filters[props.type] ?? [])
+const matches = computed(() => records.value.filter((record) => matchesCatalog(record, filters.value, selected.value, query.value)).sort(system.value.catalog.compare))
+onMounted(load)
+watch(() => [props.systemId, props.type], () => { selected.value = {}; void load() })
+watch([query, selected], () => { limit.value = 100 })
+async function load() {
   const current = ++token
+  records.value = []; key.value = ''
   if (!props.systemId) return
-  loading.value = true
-  error.value = ''
-  const terms = ['system = {:system}', 'type = {:type}']
-  const params: Record<string, string> = { system: props.systemId, type: props.type }
-  if (query.value.trim()) { terms.push('name ~ {:query}'); params.query = query.value.trim() }
-  if (source.value) { terms.push('source = {:source}'); params.source = source.value }
-  if (level.value) { terms.push('level = {:level}'); params.level = level.value }
-  if (school.value && !showAdndFilters.value) { terms.push('school = {:school}'); params.school = school.value }
-  if (bookSource.value) { terms.push('book_source = {:bookSource}'); params.bookSource = bookSource.value }
-  if (creatureType.value) { terms.push('creature_type = {:creatureType}'); params.creatureType = creatureType.value }
+  loading.value = true; error.value = ''
   try {
-    const result = await pb.collection('catalog').getFullList<CatalogRecord>({ filter: pb.filter(terms.join(' && '), params), sort: 'name', fields: 'id,name,source,book_source,level,school,sphere,creature_type,challenge_rating,item_type,item_weight,rarity', requestKey: null })
+    const [systemRecord, entries] = await Promise.all([
+      pb.collection('systems').getOne<{ key: string }>(props.systemId, { requestKey: null }),
+      pb.collection('catalog').getFullList<CatalogRecord>({ filter: pb.filter('system = {:system} && type = {:type}', { system: props.systemId, type: props.type }), sort: 'name', requestKey: null }),
+    ])
     if (current !== token) return
-    const matches = result.filter((entry) => props.type === 'spell' && showAdndFilters.value
-      ? (!school.value || entry.school.split(/[,\n]/).some((part) => part.trim() === school.value)) && (!sphere.value || (entry.sphere ?? '').split(/[,\n]/).some((part) => part.trim() === sphere.value))
-      : props.type === 'item'
-      ? (!itemType.value || entry.item_type === itemType.value || (typeof entry.item_type === 'string' && entry.item_type.split('|')[0] === itemType.value)) && (!rarity.value || entry.rarity === rarity.value)
-      : props.type !== 'creature' || ((!minCR.value && !maxCR.value) || !!entry.challenge_rating && (!minCR.value || compareChallengeRating(entry.challenge_rating, minCR.value) >= 0) && (!maxCR.value || compareChallengeRating(entry.challenge_rating, maxCR.value) <= 0)))
-    matchCount.value = matches.length
-    records.value = matches.slice(0, limit.value)
-  } catch {
-    if (current === token) error.value = 'Catalog entries could not be loaded. Check the connection and try again.'
-  } finally { if (current === token) loading.value = false }
+    key.value = systemRecord.key; records.value = entries; selected.value = system.value.catalog.defaultFilters(props.type, entries)
+  } catch { if (current === token) error.value = 'Catalog entries could not be loaded. Check the connection and try again.' }
+  finally { if (current === token) loading.value = false }
 }
-
-function unique(values: string[]) { return [...new Set(values)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) }
 </script>
-
 <template>
   <div class="picker-panel">
-    <label class="field-label" for="item-search">Search {{ props.type === 'spell' ? 'spells' : props.type === 'creature' ? 'creatures' : 'items' }}</label>
-    <input id="item-search" v-model="query" class="text-input" type="search" :placeholder="`Search catalog ${props.type === 'spell' ? 'spells' : props.type === 'creature' ? 'creatures' : 'items'}…`" />
-    <div v-if="showDndFilters" class="catalog-filters">
-      <label class="filter-field"><span>Source</span><select v-model="source" class="select-input"><option value="">All sources</option><option v-for="entry in sources" :key="entry" :value="entry">{{ entry }}</option></select></label>
-      <template v-if="props.type === 'item'"><label class="filter-field"><span>Type</span><select v-model="itemType" class="select-input"><option value="">All types</option><option v-for="entry in types" :key="entry" :value="entry">{{ itemTypeLabel(entry) || entry }}</option></select></label><label class="filter-field"><span>Rarity</span><select v-model="rarity" class="select-input"><option value="">All rarities</option><option v-for="entry in rarities" :key="entry" :value="entry">{{ entry }}</option></select></label></template>
-      <template v-else-if="props.type === 'spell'"><label class="filter-field"><span>Level</span><select v-model="level" class="select-input"><option value="">All levels</option><option v-for="entry in 10" :key="entry - 1" :value="String(entry - 1)">{{ entry === 1 ? 'Cantrip' : `Level ${entry - 1}` }}</option></select></label><label class="filter-field"><span>School</span><select v-model="school" class="select-input"><option value="">All schools</option><option v-for="entry in schools" :key="entry" :value="entry">{{ entry }}</option></select></label></template>
-      <template v-else><label class="filter-field"><span>Creature type</span><select v-model="creatureType" class="select-input"><option value="">All types</option><option v-for="entry in creatureTypes" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>Minimum CR</span><select v-model="minCR" class="select-input"><option value="">Any</option><option v-for="entry in challengeRatings" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>Maximum CR</span><select v-model="maxCR" class="select-input"><option value="">Any</option><option v-for="entry in challengeRatings" :key="entry" :value="entry">{{ entry }}</option></select></label></template>
-    </div>
-    <div v-else-if="showAdndFilters" class="catalog-filters"><label class="filter-field"><span>Source book</span><select v-model="bookSource" class="select-input"><option value="">All sources</option><option v-for="entry in bookSources" :key="entry" :value="entry">{{ entry }}</option></select></label><template v-if="props.type === 'spell'"><label class="filter-field"><span>Level</span><select v-model="level" class="select-input"><option value="">All levels</option><option v-for="entry in levels" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>School</span><select v-model="school" class="select-input"><option value="">All schools</option><option v-for="entry in schools" :key="entry" :value="entry">{{ entry }}</option></select></label><label class="filter-field"><span>Sphere</span><select v-model="sphere" class="select-input"><option value="">All spheres</option><option v-for="entry in spheres" :key="entry" :value="entry">{{ entry }}</option></select></label></template></div>
-    <p v-if="error" class="field-error" role="alert">{{ error }} <button class="inline-button" type="button" @click="loadRecords">Retry</button></p>
+    <label class="field-label" for="item-search">Search {{ props.type }}s</label>
+    <input id="item-search" v-model="query" class="text-input" type="search" :placeholder="`Search catalog ${props.type}s…`" />
+    <CatalogFilters v-model="selected" :filters="filters" :records="records" />
+    <p v-if="error" class="field-error" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>
     <p v-else-if="loading" class="muted-hint" role="status">Searching catalog…</p>
-    <p v-else-if="!records.length" class="muted-hint">No matching catalog entries.</p>
-    <div v-else class="picker-results"><button v-for="record in records" :key="record.id" class="picker-result" type="button" @click="emit('select', record)"><span><strong>{{ record.name }}</strong><small>{{ record.book_source || record.source }}<template v-if="props.type === 'spell'"> · {{ record.level === '0' && !showAdndFilters ? 'Cantrip' : record.level ? `Level ${record.level}` : 'Level unknown' }} · {{ record.school }}<template v-if="record.sphere"> · {{ record.sphere }}</template></template><template v-else-if="props.type === 'creature' && !showAdndFilters"> · {{ record.creature_type || 'Unknown type' }} · CR {{ record.challenge_rating || '—' }}</template><template v-else-if="record.rarity"> · {{ record.rarity }}</template></small></span><span aria-hidden="true">＋</span></button></div>
-    <button v-if="!loading && records.length < matchCount" class="secondary-button" type="button" @click="limit += 100">Show more ({{ matchCount - records.length }} remaining)</button>
+    <p v-else-if="!matches.length" class="muted-hint">No matching catalog entries.</p>
+    <div v-else class="picker-results"><button v-for="record in matches.slice(0, limit)" :key="record.id" class="picker-result" type="button" @click="emit('select', record)"><span><strong>{{ record.name }}</strong><small>{{ system.catalog.resultLabel(record) }}</small></span><span aria-hidden="true">＋</span></button></div>
+    <button v-if="!loading && limit < matches.length" class="secondary-button" type="button" @click="limit += 100">Show more ({{ matches.length - limit }} remaining)</button>
   </div>
 </template>

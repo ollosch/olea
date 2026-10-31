@@ -1,7 +1,7 @@
 import { adndHitDice, adndSpellFields } from './adnd.ts'
 import { parseHPFormula } from './dice.ts'
 import { abilityModifier, rollGroupInitiative, rollInitiative } from './dnd5e.ts'
-import { itemTypeLabel, recordDescription, sourceLabel, type CatalogRecord } from './catalog.ts'
+import { compareChallengeRating, itemTypeLabel, recordDescription, sourceLabel, type CatalogRecord, type CatalogType } from './catalog.ts'
 
 /** Rules supplied by built-in systems; persistence and generic dice remain shared. */
 export type InitiativeParticipant = { initiative: number; initiative_known: boolean }
@@ -11,6 +11,8 @@ export type CatalogFilter = {
   label: string
   field: string
   match: 'exact' | 'list' | 'minimum' | 'maximum'
+  labelValue?: (value: string) => string
+  normalize?: (value: string) => string
 }
 export type Denomination = { key: string; label: string }
 export type SystemCapabilities = {
@@ -30,6 +32,8 @@ export type SystemCapabilities = {
     resultLabel: (record: CatalogRecord) => string
     detailFields: (record: CatalogRecord) => Array<{ name: string; value: string }>
     description: (record: CatalogRecord, preferAlternate?: boolean) => unknown
+    compare: (a: CatalogRecord, b: CatalogRecord) => number
+    defaultFilters: (type: CatalogType, records: readonly CatalogRecord[]) => Record<string, string>
   }
   currency: {
     denominations: readonly Denomination[]
@@ -44,7 +48,7 @@ const manualOrder = (): number => 0
 const unknown: SystemCapabilities = {
   key: '',
   encounter: { compare: manualOrder, initiative: null, creatureHP: noHP },
-  catalog: { filters: {}, resultLabel: (record) => sourceLabel(record), detailFields: () => [], description: recordDescription },
+  catalog: { filters: { spell: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], creature: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], item: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }] }, resultLabel: (record) => sourceLabel(record), detailFields: () => [], description: recordDescription, compare: (a, b) => a.name.localeCompare(b.name), defaultFilters: () => ({}) },
   currency: { denominations: [], coinWeight: null, weightUnit: null },
 }
 
@@ -76,7 +80,7 @@ const dnd5e: SystemCapabilities = {
   catalog: { filters: {
     spell: [source, level, school],
     creature: [source, { key: 'creatureType', label: 'Creature type', field: 'creature_type', match: 'exact' }, { key: 'minCR', label: 'Minimum CR', field: 'challenge_rating', match: 'minimum' }, { key: 'maxCR', label: 'Maximum CR', field: 'challenge_rating', match: 'maximum' }],
-    item: [source, { key: 'itemType', label: 'Type', field: 'item_type', match: 'exact' }, { key: 'rarity', label: 'Rarity', field: 'rarity', match: 'exact' }],
+    item: [source, { key: 'itemType', label: 'Type', field: 'item_type', match: 'exact', normalize: (value) => value.split('|')[0]!, labelValue: itemTypeLabel }, { key: 'rarity', label: 'Rarity', field: 'rarity', match: 'exact' }],
   },
   resultLabel: (record) => {
     const parts = [sourceLabel(record)]
@@ -98,7 +102,10 @@ const dnd5e: SystemCapabilities = {
     }
     if (record.type === 'item') { add('Type', itemTypeLabel(record.item_type)); if (record.item_weight !== undefined) add('Weight', `${record.item_weight} lb.`); if (record.item_value !== undefined) add('Value', `${record.item_value} cp`); add('Rarity', record.rarity) }
     return fields
-  }, description: recordDescription },
+  }, description: recordDescription,
+  compare: (a, b) => a.type === 'creature' ? compareChallengeRating(a.challenge_rating, b.challenge_rating) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name),
+  defaultFilters: (type, records): Record<string, string> => { const primary = type === 'creature' ? 'MM' : 'PHB'; return records.some((record) => record.source === primary) ? { source: primary } : {} },
+  },
   currency: { denominations: ['cp', 'sp', 'ep', 'gp', 'pp'].map((key) => ({ key, label: key.toUpperCase() })), coinWeight: (balances) => Object.values(balances).reduce((sum, amount) => sum + amount, 0) / 50, weightUnit: 'lb.' },
 }
 
@@ -110,6 +117,8 @@ const adnd2e: SystemCapabilities = {
     resultLabel: (record) => [record.book_source || record.source, ...(record.type === 'spell' ? [record.level ? `Level ${record.level}` : 'Level unknown', record.school, record.sphere] : [])].filter(Boolean).join(' · '),
     detailFields: (record) => record.type === 'spell' ? [{ name: 'Level', value: record.level || '—' }, { name: 'School', value: record.school || '—' }, ...(record.sphere ? [{ name: 'Sphere', value: record.sphere }] : []), ...adndSpellFields(record.original_json)] : record.type === 'creature' && adndHitDice(record.original_json) ? [{ name: 'HP roll', value: adndHitDice(record.original_json)! }] : [],
     description: recordDescription,
+    compare: (a, b) => a.name.localeCompare(b.name),
+    defaultFilters: () => ({}),
   },
   currency: { denominations: [], coinWeight: null, weightUnit: null },
 }

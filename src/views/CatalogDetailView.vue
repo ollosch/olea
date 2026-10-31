@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import EntryContent from '../components/EntryContent.vue'
 import { pb } from '../lib/pocketbase'
-import { itemTypeLabel, recordDescription, sourceLabel, type CatalogRecord } from '../lib/catalog'
-import { adndSpellFields, adndHitDice } from '../lib/adnd'
+import type { CatalogRecord } from '../lib/catalog'
+import { systemByKey } from '../lib/systems'
 
 const route = useRoute()
 const record = ref<CatalogRecord | null>(null)
+const system = computed(() => systemByKey(record.value?.expand?.system?.key))
 const loading = ref(true)
 const error = ref('')
 const saveError = ref('')
@@ -38,9 +39,10 @@ async function saveDescription() {
   saving.value = true
   saveError.value = ''
   try {
-    record.value = await pb.collection('catalog').update<CatalogRecord>(record.value.id, {
+    await pb.collection('catalog').update<CatalogRecord>(record.value.id, {
       alternate_description: alternateDraft.value,
     })
+    await load()
     editingDescription.value = false
   } catch {
     saveError.value = 'The alternate description could not be saved. Check the connection and try again.'
@@ -54,7 +56,8 @@ async function saveNotes() {
   saving.value = true
   saveError.value = ''
   try {
-    record.value = await pb.collection('catalog').update<CatalogRecord>(record.value.id, { notes: notesDraft.value })
+    await pb.collection('catalog').update<CatalogRecord>(record.value.id, { notes: notesDraft.value })
+    await load()
     editingNotes.value = false
   } catch {
     saveError.value = 'At-table notes could not be saved. Check the connection and try again.'
@@ -73,12 +76,6 @@ function cancelNotes() {
   editingNotes.value = false
 }
 
-function hasCreatureStat(key: 'hp' | 'dex'): boolean {
-  if (!record.value?.original_json || typeof record.value.original_json !== 'object') return false
-  const original = record.value.original_json as Record<string, unknown>
-  if (key === 'dex') return typeof original.dex === 'number'
-  return !!original.hp && typeof original.hp === 'object' && typeof (original.hp as Record<string, unknown>).average === 'number'
-}
 </script>
 
 <template>
@@ -90,12 +87,10 @@ function hasCreatureStat(key: 'hp' | 'dex'): boolean {
       <header class="catalog-detail-heading">
         <p class="eyebrow"><span class="eyebrow-line" /> {{ record.type.toUpperCase() }}</p>
         <h1 id="page-title">{{ record.name }}</h1>
-        <p class="catalog-source">{{ record.book_source || sourceLabel(record) }}<template v-if="record.expand?.system"> · {{ record.expand.system.name }}</template></p>
+        <p class="catalog-source">{{ system.catalog.resultLabel(record) }}<template v-if="record.expand?.system"> · {{ record.expand.system.name }}</template></p>
       </header>
       <dl class="catalog-stats">
-        <template v-if="record.type === 'spell'"><div><dt>Level</dt><dd>{{ record.level === '0' && record.expand?.system?.key !== 'adnd2e' ? 'Cantrip' : record.level || '—' }}</dd></div><div><dt>School</dt><dd>{{ record.school || '—' }}</dd></div><div v-if="record.sphere"><dt>Sphere</dt><dd>{{ record.sphere }}</dd></div><div v-for="field in adndSpellFields(record.original_json)" :key="field.name"><dt>{{ field.name }}</dt><dd>{{ field.value }}</dd></div></template>
-        <template v-else-if="record.type === 'creature'"><template v-if="record.expand?.system?.key !== 'adnd2e'"><div><dt>Type</dt><dd>{{ record.creature_type || '—' }}</dd></div><div><dt>Challenge rating</dt><dd>{{ record.challenge_rating || '—' }}</dd></div><div v-if="hasCreatureStat('hp') || record.hp_formula"><dt>Hit points</dt><dd>{{ hasCreatureStat('hp') ? record.hp_average : '—' }}<template v-if="record.hp_formula"> ({{ record.hp_formula }})</template></dd></div><div v-if="hasCreatureStat('dex')"><dt>Dexterity</dt><dd>{{ record.dexterity }}</dd></div></template><div v-else-if="adndHitDice(record.original_json)"><dt>HP roll</dt><dd>{{ adndHitDice(record.original_json) }}</dd></div></template>
-        <template v-else><div v-if="record.item_type !== undefined"><dt>Type</dt><dd>{{ itemTypeLabel(record.item_type) || String(record.item_type) }}</dd></div><div v-if="record.item_weight !== undefined"><dt>Weight</dt><dd>{{ record.item_weight }} lb.</dd></div><div v-if="record.item_value !== undefined"><dt>Value</dt><dd>{{ record.item_value }} cp</dd></div><div v-if="record.rarity"><dt>Rarity</dt><dd>{{ record.rarity }}</dd></div></template>
+        <div v-for="field in system.catalog.detailFields(record)" :key="field.name"><dt>{{ field.name }}</dt><dd>{{ field.value }}</dd></div>
       </dl>
       <p v-if="saveError" class="alert-message" role="alert">{{ saveError }}</p>
       <section v-if="record.type === 'creature'" class="catalog-content-panel">
@@ -111,7 +106,7 @@ function hasCreatureStat(key: 'hp' | 'dex'): boolean {
         <p v-else-if="record.notes" class="catalog-notes">{{ record.notes }}</p>
         <p v-else class="muted-hint">No at-table notes yet.</p>
       </section>
-      <section class="catalog-content-panel"><div class="catalog-panel-heading"><h2>Description</h2><span class="content-label">Source text</span></div><EntryContent :value="recordDescription(record, false)" /></section>
+      <section class="catalog-content-panel"><div class="catalog-panel-heading"><h2>Description</h2><span class="content-label">Source text</span></div><EntryContent :value="system.catalog.description(record, false)" /></section>
       <section class="catalog-content-panel">
         <div class="catalog-panel-heading">
           <div><h2>{{ record.alternate_description.trim() ? 'Alternate description' : 'Custom description' }}</h2><span class="content-label">{{ record.alternate_description.trim() ? 'Preferred at-table text' : 'Optional override' }}</span></div>
