@@ -9,6 +9,9 @@ import (
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/plugins/migratecmd"
+
+	_ "olea/migrations"
 )
 
 // The placeholder keeps Go builds valid before the frontend is built.
@@ -21,6 +24,7 @@ func main() {
 	}
 
 	app := pocketbase.New()
+	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{})
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		public, err := fs.Sub(frontend, "ui/dist")
 		if err != nil {

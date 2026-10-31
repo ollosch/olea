@@ -45,7 +45,9 @@ go -C server build -o ../bin/olea .
 
 On Windows, build to `../bin/olea.exe` and run `bin\olea.exe` with the same arguments. Visit `http://localhost:8090` on the host or `http://<host-lan-ip>:8090` from another device on the same Wi-Fi. Allow the port through the host firewall if needed. PocketBase's admin UI is at `/_/`.
 
-The binary also defaults to `serve --http=0.0.0.0:8090` if started with no arguments. PocketBase uses its default data directory in that case; use `--dir` for an explicit, predictable location. Shut down the server before copying its data directory for a backup. Convenient packaging and LAN address discovery are planned, not implemented yet.
+The binary also defaults to `serve --http=0.0.0.0:8090` if started with no arguments. PocketBase then uses its default `pb_data/` directory in the current working directory. Prefer an explicit `--dir` so the location remains predictable: the development command above uses `../pb_data` from `server/`, and the built command uses `./pb_data` from the repository root. This directory contains the SQLite database and other runtime files; it is local campaign data and must not be committed.
+
+On upgrade, stop the running server, replace it with the newly built version, and start it again with the same `--dir`. Version-controlled Go migrations in `server/migrations/` are applied automatically on startup and record their applied versions in the database. Keep the data directory when upgrading. Back it up only while the server is stopped; do not copy only the live SQLite database. To initialize a fresh install, start the server with an empty data directory and PocketBase will create the schema and seed the `dnd5e` system identifier.
 
 ## Local data
 
