@@ -6,8 +6,8 @@ import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
 
 type Character = { id: string; name: string; game: string }
-type Inventory = { id: string; game: string; character: string }
-type InventoryItem = { id: string; inventory: string; catalog_item: string; name: string; quantity: number; weight: number; notes: string; expand?: { catalog_item?: CatalogRecord } }
+type Inventory = { id: string; game: string; character: string; capacity: number; capacity_known: boolean }
+type InventoryItem = { id: string; inventory: string; catalog_item: string; container: string; name: string; quantity: number; weight: number; weight_known: boolean; is_container: boolean; notes: string; expand?: { catalog_item?: CatalogRecord } }
 const route = useRoute()
 const character = ref<Character | null>(null)
 const inventory = ref<Inventory | null>(null)
@@ -22,6 +22,11 @@ const customNotes = ref('')
 const editing = ref('')
 const quantityDraft = ref(1)
 const notesDraft = ref('')
+const weightDraft = ref('')
+const weightKnownDraft = ref(false)
+const containerDraft = ref(false)
+const parentDraft = ref('')
+const capacityDraft = ref('')
 const game = ref<{ system: string } | null>(null)
 const systemId = computed(() => game.value?.system ?? '')
 
@@ -35,6 +40,7 @@ async function load() {
     game.value = await pb.collection('games').getOne<{ system: string }>(character.value.game)
     const found = await pb.collection('inventories').getFullList<Inventory>({ filter: pb.filter('character = {:character}', { character: character.value.id }), perPage: 2 })
     inventory.value = found[0] ?? await pb.collection('inventories').create<Inventory>({ game: character.value.game, character: character.value.id })
+    capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
     await loadItems()
   } catch {
     error.value = 'Inventory could not be loaded. Check the local server and try again.'
@@ -51,7 +57,8 @@ async function loadItems() {
 async function addCatalogItem(record: CatalogRecord) {
   if (!inventory.value) return
   try {
-    await pb.collection('inventory_items').create({ inventory: inventory.value.id, catalog_item: record.id, name: record.name, quantity: 1, weight: parseWeight(record.item_weight), notes: '' })
+    const weight = parseWeight(record.item_weight)
+    await pb.collection('inventory_items').create({ inventory: inventory.value.id, catalog_item: record.id, name: record.name, quantity: 1, weight: weight.value, weight_known: weight.known, is_container: false, notes: '' })
     pickerOpen.value = false
     await loadItems()
   } catch { error.value = 'The item could not be added.' }
@@ -59,31 +66,71 @@ async function addCatalogItem(record: CatalogRecord) {
 
 async function addCustomItem() {
   if (!inventory.value || !customName.value.trim()) return
+  if (containerDraft.value && customWeight.value.trim() && Number(customWeight.value) < 0) { error.value = 'Container weight must be zero or a positive number.'; return }
   const weight = customWeight.value.trim() ? Number(customWeight.value) : 0
   if (!Number.isFinite(weight) || weight < 0) { error.value = 'Weight must be zero or a positive number.'; return }
   try {
-    await pb.collection('inventory_items').create({ inventory: inventory.value.id, name: customName.value.trim(), quantity: 1, weight, notes: customNotes.value })
-    customName.value = ''; customWeight.value = ''; customNotes.value = ''; customOpen.value = false
+    await pb.collection('inventory_items').create({ inventory: inventory.value.id, name: customName.value.trim(), quantity: 1, weight, weight_known: customWeight.value.trim() !== '', is_container: containerDraft.value, notes: customNotes.value })
+    customName.value = ''; customWeight.value = ''; customNotes.value = ''; customOpen.value = false; containerDraft.value = false
     await loadItems()
   } catch { error.value = 'The custom item could not be added.' }
 }
 
-function startEdit(item: InventoryItem) { editing.value = item.id; quantityDraft.value = item.quantity; notesDraft.value = item.notes ?? '' }
+function startEdit(item: InventoryItem) { editing.value = item.id; quantityDraft.value = item.quantity; notesDraft.value = item.notes ?? ''; weightDraft.value = item.weight_known ? String(item.weight) : ''; weightKnownDraft.value = item.weight_known; containerDraft.value = item.is_container; parentDraft.value = item.container ?? '' }
 async function saveEdit(item: InventoryItem) {
   if (!Number.isInteger(quantityDraft.value) || quantityDraft.value < 1) { error.value = 'Quantity must be a whole number greater than zero.'; return }
-  try { await pb.collection('inventory_items').update(item.id, { quantity: quantityDraft.value, notes: notesDraft.value }); editing.value = ''; await loadItems() }
+  if ((containerDraft.value || childCount(item) > 0) && quantityDraft.value !== 1) { error.value = 'Containers and items holding contents must have quantity one.'; return }
+  const weight = weightDraft.value.trim() ? Number(weightDraft.value) : 0
+  if (!Number.isFinite(weight) || weight < 0) { error.value = 'Weight must be zero or a positive number.'; return }
+  if (parentDraft.value && (parentDraft.value === item.id || isDescendant(parentDraft.value, item.id))) { error.value = 'A container cannot be moved inside itself or one of its contents.'; return }
+  if (parentDraft.value && !items.value.find((entry) => entry.id === parentDraft.value)?.is_container) { error.value = 'Choose a container as the destination.'; return }
+  try { await pb.collection('inventory_items').update(item.id, { quantity: quantityDraft.value, notes: notesDraft.value, weight, weight_known: weightKnownDraft.value, is_container: containerDraft.value, container: parentDraft.value }); editing.value = ''; await loadItems() }
   catch { error.value = 'The item could not be updated.' }
 }
 async function drop(item: InventoryItem) {
+  if (childCount(item) > 0) { error.value = 'Move the contents out before dropping this container.'; return }
   try { await pb.collection('inventory_items').delete(item.id); await loadItems() }
   catch { error.value = 'The item could not be dropped.' }
 }
-function parseWeight(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
-  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value)) && Number(value) >= 0) return Number(value)
+function parseWeight(value: unknown): { value: number; known: boolean } {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return { value, known: true }
+  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value)) && Number(value) >= 0) return { value: Number(value), known: true }
   if (value && typeof value === 'object' && 'value' in value) return parseWeight((value as { value: unknown }).value)
-  return 0
+  return { value: 0, known: false }
 }
+
+function itemWeight(item: InventoryItem, seen = new Set<string>()): number | null {
+  if (seen.has(item.id)) return null
+  if (!item.weight_known) return null
+  const nested = new Set(seen).add(item.id)
+  const children = items.value.filter((entry) => entry.container === item.id)
+  const childWeights = children.map((child) => itemWeight(child, nested))
+  if (childWeights.some((value) => value === null)) return null
+  return item.weight * item.quantity + childWeights.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+}
+const carriedWeight = computed(() => {
+  const roots = items.value.filter((item) => !item.container)
+  const weights = roots.map((item) => itemWeight(item))
+  return weights.some((value) => value === null) ? null : weights.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+})
+function isDescendant(candidateId: string, ancestorId: string): boolean {
+  let current = items.value.find((entry) => entry.id === candidateId)
+  const visited = new Set<string>()
+  while (current?.container && !visited.has(current.id)) {
+    if (current.container === ancestorId) return true
+    visited.add(current.id)
+    current = items.value.find((entry) => entry.id === current?.container)
+  }
+  return false
+}
+async function saveCapacity() {
+  if (!inventory.value) return
+  const value = capacityDraft.value.trim() ? Number(capacityDraft.value) : 0
+  if (!Number.isFinite(value) || value < 0) { error.value = 'Capacity must be zero or a positive number.'; return }
+  try { inventory.value = await pb.collection('inventories').update<Inventory>(inventory.value.id, { capacity: value, capacity_known: capacityDraft.value.trim() !== '' }) }
+  catch { error.value = 'Capacity could not be saved.' }
+}
+function childCount(item: InventoryItem): number { return items.value.filter((entry) => entry.container === item.id).length }
 </script>
 
 <template>
@@ -93,9 +140,10 @@ function parseWeight(value: unknown): number {
       <RouterLink class="text-link" :to="{ name: 'character-overview', params: { characterId: character.id } }">← {{ character.name }}</RouterLink>
       <div class="screen-heading"><div><p class="eyebrow"><span class="eyebrow-line" /> CHARACTER INVENTORY</p><h1 id="page-title">{{ character.name }}’s items</h1><p class="screen-description">Items and quantities carried by this character.</p></div><div class="heading-actions"><button class="primary-button" type="button" @click="pickerOpen = !pickerOpen">＋ Add catalog item</button><button class="secondary-button" type="button" @click="customOpen = !customOpen">Custom item</button></div></div>
       <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>
+      <section class="weight-summary" aria-label="Carried weight"><div><strong>Carried weight</strong><small>{{ carriedWeight === null ? 'Unknown — at least one carried item has unknown weight' : `${carriedWeight.toFixed(2)} lb` }}</small></div><div v-if="inventory" class="capacity-editor"><label class="filter-field" for="carrying-capacity">Capacity (lb)<input id="carrying-capacity" v-model="capacityDraft" class="text-input" type="number" min="0" step="any" placeholder="Not set" @change="saveCapacity" /></label><strong v-if="inventory.capacity_known && carriedWeight !== null" :class="carriedWeight > inventory.capacity ? 'over-capacity' : 'within-capacity'">{{ carriedWeight > inventory.capacity ? 'Over capacity' : 'Within capacity' }}</strong></div></section>
       <div v-if="pickerOpen" class="editor-panel"><div class="catalog-panel-heading"><h2>Choose an item</h2><button class="secondary-button" type="button" @click="pickerOpen = false">Close</button></div><CatalogPicker :system-id="systemId" @select="addCatalogItem" /></div>
-      <form v-if="customOpen" class="editor-panel" @submit.prevent="addCustomItem"><h2>Custom item</h2><label class="field-label" for="custom-item-name">Name</label><input id="custom-item-name" v-model="customName" class="text-input" required maxlength="240" /><label class="field-label" for="custom-item-weight">Weight per item (optional)</label><input id="custom-item-weight" v-model="customWeight" class="text-input" type="number" min="0" step="any" placeholder="Unknown" /><label class="field-label" for="custom-item-notes">Notes</label><textarea id="custom-item-notes" v-model="customNotes" class="text-area" /><div class="form-actions"><button class="secondary-button" type="button" @click="customOpen = false">Cancel</button><button class="primary-button" type="submit">Add item</button></div></form>
-      <div v-if="items.length" class="inventory-list"><article v-for="item in items" :key="item.id" class="inventory-row"><div class="inventory-item-copy"><strong>{{ item.name }}</strong><small>{{ item.weight > 0 ? `${item.weight} lb each` : 'Weight unknown' }}<template v-if="item.expand?.catalog_item"> · {{ item.expand.catalog_item.source }}</template></small><p v-if="item.notes && editing !== item.id" class="inventory-notes">{{ item.notes }}</p></div><template v-if="editing === item.id"><div class="inventory-edit"><label class="filter-field">Quantity<input v-model.number="quantityDraft" class="text-input" type="number" min="1" step="1" /></label><label class="filter-field">Item notes<textarea v-model="notesDraft" class="text-area" /></label><div class="row-actions"><button class="primary-button" type="button" @click="saveEdit(item)">Save</button><button class="secondary-button" type="button" @click="editing = ''">Cancel</button></div></div></template><template v-else><span class="quantity-pill">× {{ item.quantity }}</span><div class="row-actions"><button class="secondary-button" type="button" @click="startEdit(item)">Edit</button><button class="danger-button" type="button" @click="drop(item)">Drop</button></div></template></article></div>
+      <form v-if="customOpen" class="editor-panel" @submit.prevent="addCustomItem"><h2>Custom item</h2><label class="field-label" for="custom-item-name">Name</label><input id="custom-item-name" v-model="customName" class="text-input" required maxlength="240" /><label class="field-label" for="custom-item-weight">Weight per item (optional)</label><input id="custom-item-weight" v-model="customWeight" class="text-input" type="number" min="0" step="any" placeholder="Unknown" /><label class="field-label" for="custom-item-notes">Notes</label><textarea id="custom-item-notes" v-model="customNotes" class="text-area" /><label class="check-field"><input v-model="containerDraft" type="checkbox" /> This item is a container</label><div class="form-actions"><button class="secondary-button" type="button" @click="customOpen = false">Cancel</button><button class="primary-button" type="submit">Add item</button></div></form>
+      <div v-if="items.length" class="inventory-list"><article v-for="item in items" :key="item.id" class="inventory-row"><div class="inventory-item-copy"><strong>{{ item.container ? '↳ ' : '' }}{{ item.name }} <span v-if="item.is_container" class="container-label">Container · {{ childCount(item) }} {{ childCount(item) === 1 ? 'item' : 'items' }}</span></strong><small>{{ item.weight_known ? `${item.weight} lb each` : 'Weight unknown' }}<template v-if="item.expand?.catalog_item"> · {{ item.expand.catalog_item.source }}</template></small><p v-if="item.notes && editing !== item.id" class="inventory-notes">{{ item.notes }}</p></div><template v-if="editing === item.id"><div class="inventory-edit"><label class="filter-field">Quantity<input v-model.number="quantityDraft" class="text-input" type="number" min="1" step="1" /></label><label class="filter-field">Weight per item (lb)<input v-model="weightDraft" class="text-input" type="number" min="0" step="any" placeholder="Unknown" @input="weightKnownDraft = weightDraft.trim() !== ''" /></label><label class="filter-field">Place inside<select v-model="parentDraft" class="select-input"><option value="">Carried outside</option><option v-for="container in items.filter((entry) => entry.is_container && entry.id !== item.id && !isDescendant(entry.id, item.id))" :key="container.id" :value="container.id">{{ container.name }}</option></select></label><label class="check-field"><input v-model="containerDraft" type="checkbox" /> This item is a container</label><label class="filter-field">Item notes<textarea v-model="notesDraft" class="text-area" /></label><div class="row-actions"><button class="primary-button" type="button" @click="saveEdit(item)">Save</button><button class="secondary-button" type="button" @click="editing = ''">Cancel</button></div></div></template><template v-else><span class="quantity-pill">× {{ item.quantity }}</span><div class="row-actions"><button class="secondary-button" type="button" @click="startEdit(item)">Edit</button><button class="danger-button" type="button" @click="drop(item)">Drop</button></div></template></article></div>
       <div v-else-if="!pickerOpen" class="empty-state compact-empty"><div class="empty-state-icon" aria-hidden="true">◇</div><h2>No items yet</h2><p>Add an item from the system catalog or create a custom item. Dropping an item removes it from this inventory.</p><button class="primary-button empty-action" type="button" @click="pickerOpen = true">＋ Add catalog item</button></div>
     </template>
     <p v-else-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>

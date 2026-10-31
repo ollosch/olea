@@ -72,7 +72,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **14 — Inventory and catalog picker**
   Add character inventories, item instances and quantities, plus a reusable context-aware catalog picker with name search and the appropriate system filters. Allow adding, editing quantities and dropping items; dropping removes them. Preserve item-specific notes and custom items. Verify no negative quantities and that multiple characters have separate inventories.
 
-- [ ] **15 — Containers and weight**
+- [x] **15 — Containers and weight**
   Support moving items into and out of nested containers with an understandable touch UI. Prevent cycles; count container and contained-item weight exactly once. Add a manually entered carrying capacity per character and show total carried weight and whether capacity is exceeded. Handle unknown weight visibly rather than treating it as known. Verify nested containers, quantity changes and capacity boundaries.
 
 - [ ] **16 — Currency and party totals**
