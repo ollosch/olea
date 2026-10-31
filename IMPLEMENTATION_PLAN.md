@@ -84,7 +84,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **18 — Atomic item and coin transfers**
   Add small PocketBase Go routes using transactions for transfers between character inventories and eligible stashes, including partial stacks, nested contents where supported, and coins. Restrict destinations to the same game as a domain invariant; check quantities and report errors. Verify a failed or concurrent transfer cannot duplicate or lose items/coins; all balances remain nonnegative. This is data integrity, not authentication.
 
-- [ ] **19 — Spellbooks**
+- [x] **19 — Spellbooks**
   Allow a character to have multiple named spellbooks. Add/remove spells via the shared filtered picker and view system-specific details and alternate descriptions. GM can manage every character's spellbooks. Avoid rules-heavy known/prepared/slot automation for now. Verify one character's changes do not affect another's collection.
 
 ## Encounters and live play
