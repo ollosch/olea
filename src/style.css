@@ -218,6 +218,31 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
   .secondary-button, .danger-button, .secondary-link { min-height: 44px; padding: 0 8px; }
 }
 
+.inventory-list, .picker-results { margin-top: 20px; display: grid; gap: 9px; }
+.inventory-row { min-width: 0; padding: 14px; display: flex; align-items: center; gap: 13px; border: 1px solid #ffffff16; border-radius: 13px; background: #1b251caa; }
+.inventory-item-copy { min-width: 0; flex: 1; }
+.inventory-item-copy strong, .inventory-item-copy small { display: block; overflow-wrap: anywhere; }
+.inventory-item-copy strong { font-size: 13px; }
+.inventory-item-copy small, .inventory-notes { margin-top: 5px; color: #97a597; font-size: 10px; line-height: 1.5; }
+.inventory-notes { color: #b7c2b5; white-space: pre-wrap; }
+.quantity-pill { padding: 7px 10px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent); border-radius: 99px; font-size: 11px; white-space: nowrap; }
+.inventory-edit { width: 100%; display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; }
+.inventory-edit .row-actions { grid-column: 1 / -1; }
+.picker-panel { margin-top: 16px; }
+.picker-results { max-height: 360px; overflow: auto; }
+.picker-result { min-height: 55px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #e8eee6; text-align: left; border: 1px solid #ffffff16; border-radius: 10px; background: #ffffff06; }
+.picker-result:hover { border-color: color-mix(in srgb, var(--accent) 42%, transparent); }
+.picker-result strong, .picker-result small { display: block; }
+.picker-result strong { font-size: 12px; }
+.picker-result small { margin-top: 4px; color: #9caa9c; font-size: 10px; }
+.tool-link { min-height: 72px; margin-top: 18px; padding: 14px; display: flex; align-items: center; gap: 13px; color: #e8eee6; border: 1px solid #ffffff16; border-radius: 13px; background: #1b251caa; text-decoration: none; }
+.tool-link:hover { border-color: color-mix(in srgb, var(--accent) 42%, transparent); }
+.tool-link > span:nth-child(2) { flex: 1; }
+.tool-link strong, .tool-link small { display: block; }
+.tool-link strong { font-size: 13px; }
+.tool-link small { margin-top: 5px; color: #97a597; font-size: 10px; }
+@media (max-width: 600px) { .inventory-row { align-items: flex-start; flex-wrap: wrap; }.inventory-row > .row-actions { width: 100%; }.inventory-edit { grid-template-columns: 1fr; }.inventory-edit .row-actions { grid-column: auto; } }
+
 .entry-stack { display: grid; gap: 9px; }
 .entry-stack > p, .entry-section > p, .entry-list p, .entry-table p, .entry-unknown { color: #b7c2b5; font-size: 13px; line-height: 1.75; white-space: pre-wrap; }
 .entry-section { margin: 12px 0; }

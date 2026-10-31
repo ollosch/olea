@@ -69,7 +69,7 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 
 ## Inventory, stashes and spellbooks
 
-- [ ] **14 — Inventory and catalog picker**
+- [x] **14 — Inventory and catalog picker**
   Add character inventories, item instances and quantities, plus a reusable context-aware catalog picker with name search and the appropriate system filters. Allow adding, editing quantities and dropping items; dropping removes them. Preserve item-specific notes and custom items. Verify no negative quantities and that multiple characters have separate inventories.
 
 - [ ] **15 — Containers and weight**

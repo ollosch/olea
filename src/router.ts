@@ -5,6 +5,7 @@ import GameCharactersView from './views/GameCharactersView.vue'
 import GamesView from './views/GamesView.vue'
 import CatalogView from './views/CatalogView.vue'
 import CatalogDetailView from './views/CatalogDetailView.vue'
+import InventoryView from './views/InventoryView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -15,6 +16,7 @@ export const router = createRouter({
     { path: '/catalog/:recordId', name: 'catalog-detail', component: CatalogDetailView, meta: { title: 'Catalog entry' } },
     { path: '/games/:gameId/characters', name: 'game-characters', component: GameCharactersView, meta: { title: 'Game characters' } },
     { path: '/characters/:characterId', name: 'character-overview', component: CharacterOverviewView, meta: { title: 'Character overview' } },
+    { path: '/characters/:characterId/inventory', name: 'character-inventory', component: InventoryView, meta: { title: 'Inventory' } },
     { path: '/characters', name: 'characters', component: CharacterSelectionView, meta: { title: 'Choose a character' } },
     { path: '/:pathMatch(.*)*', redirect: '/games' },
   ],

@@ -52,11 +52,7 @@ function selectOnDevice() {
           {{ activeCharacter === character.id ? 'Selected on this device' : 'Use this character on this device' }}
         </button>
       </div>
-      <aside class="upcoming-panel">
-        <div class="upcoming-icon" aria-hidden="true">▤</div>
-        <div><h2>More character tools are coming</h2><p>Character sheets, inventories, coins, and spellbooks will appear here as they become available.</p></div>
-        <span class="coming-soon">COMING SOON</span>
-      </aside>
+      <RouterLink class="tool-link" :to="{ name: 'character-inventory', params: { characterId: character.id } }"><span class="upcoming-icon" aria-hidden="true">◇</span><span><strong>Inventory</strong><small>Manage carried items and quantities</small></span><span aria-hidden="true">→</span></RouterLink>
       <RouterLink class="text-link" to="/characters">← Switch character</RouterLink>
     </template>
   </section>
