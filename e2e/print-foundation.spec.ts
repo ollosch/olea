@@ -72,3 +72,18 @@ fixtureTest('monster cards union selected encounters by catalog identity', async
   await expect(page.locator('.card-choice')).toHaveCount(2)
   await expect(page.locator('.card-choice').filter({ hasText: 'E2E Custom Wisp' })).toContainText('Custom participant')
 })
+
+fixtureTest('inventory item cards include weapon fields, custom items, and partial A7 sheets', async ({ page, ids }) => {
+  await page.goto(`/characters/${ids.characterId}/inventory`)
+  await page.getByRole('link', { name: 'Print item cards' }).click()
+  await expect(page.getByRole('heading', { name: 'Choose item cards' })).toBeVisible()
+  await expect(page.locator('.print-sheet[aria-label="Sheet 1 fronts"] .print-card')).toHaveCount(8)
+  await expect(page.locator('.print-sheet[aria-label="Sheet 1 fronts"] .card-name')).toHaveCount(5)
+  await expect(page.locator('.card-choice')).toHaveCount(5)
+  await expect(page.locator('.physical-page .card-face-front').filter({ hasText: 'E2E Practice sword' })).toContainText('Damage')
+  await expect(page.locator('.physical-page .card-face-front').filter({ hasText: 'E2E Practice sword' })).toContainText('1d6')
+  await expect(page.locator('.physical-page .card-face-back').filter({ hasText: 'E2E Practice sword' })).toContainText('Painted blue.')
+  await page.getByLabel('E2E Practice sword', { exact: false }).uncheck()
+  await expect(page.locator('.physical-page')).toHaveCount(2)
+  await expect(page.locator('.print-sheet[aria-label="Sheet 1 fronts"] .print-card')).toHaveCount(8)
+})

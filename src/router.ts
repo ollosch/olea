@@ -13,6 +13,7 @@ import GameTablesView from './views/GameTablesView.vue'
 import PrintCalibrationView from './views/PrintCalibrationView.vue'
 import PrintSpellbookView from './views/PrintSpellbookView.vue'
 import PrintMonstersView from './views/PrintMonstersView.vue'
+import PrintItemsView from './views/PrintItemsView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -30,6 +31,7 @@ export const router = createRouter({
     { path: '/characters/:characterId/spellbooks/:spellbookId/print', name: 'print-spellbook', component: PrintSpellbookView, meta: { title: 'Spellbook cards' } },
     { path: '/characters/:characterId', name: 'character-overview', component: CharacterOverviewView, meta: { title: 'Character overview' } },
     { path: '/characters/:characterId/inventory', name: 'character-inventory', component: InventoryView, meta: { title: 'Inventory' } },
+    { path: '/characters/:characterId/inventory/print', name: 'print-items', component: PrintItemsView, meta: { title: 'Item cards' } },
     { path: '/characters/:characterId/spellbooks', name: 'character-spellbooks', component: SpellbooksView, meta: { title: 'Spellbooks' } },
     { path: '/characters', name: 'characters', component: CharacterSelectionView, meta: { title: 'Choose a character' } },
     { path: '/:pathMatch(.*)*', redirect: '/games' },

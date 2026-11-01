@@ -1,5 +1,5 @@
-import type { CatalogRecord } from './catalog'
-import type { SystemCapabilities } from './systems'
+import { itemTypeLabel, type CatalogRecord } from './catalog.ts'
+import type { SystemCapabilities } from './systems.ts'
 import type { PrintCard } from '../components/CardPrintPreview.vue'
 import { getCardOverflowWarnings } from './cardPrintWarnings.ts'
 
@@ -177,6 +177,57 @@ export function monsterPrintCard(input: MonsterCardInput, system: SystemCapabili
     name: record.name,
     front: { title: system.catalog.resultLabel(record), fields: stats, content: frontContent.length ? frontContent : 'No actions or description are available.' },
     back: { title: 'Creature', content: backContent.length ? backContent : missingFluff ? 'No flavour text is available.' : undefined, note: notes.length ? undefined : 'No encounter notes.' },
+    warnings,
+  }
+}
+
+export type ItemCardInput = { id: string; name: string; record?: CatalogRecord; quantity: number; weight: string; notes: string }
+
+export function itemPrintCard(input: ItemCardInput, system: SystemCapabilities): PrintCard {
+  const record = input.record
+  const original = object(record?.original_json)
+  const fields: Array<{ label: string; value: string }> = []
+  const add = (label: string, value: unknown) => {
+    const formatted = text(value)
+    if (formatted) fields.push({ label, value: formatted })
+  }
+  if (record) {
+    const rawType = record.item_type
+    const typeCode = typeof rawType === 'string' ? rawType : text(rawType)
+    const type = itemTypeLabel(typeCode) || record.type
+    const weapon = /weapon/i.test(type) || Boolean(original.dmg1 || original.dmg2 || original.damage)
+    add('Type', type)
+    if (record.rarity) add('Rarity', record.rarity)
+    if (input.weight) add('Weight', input.weight)
+    else if (record.item_weight !== undefined) add('Weight', record.item_weight)
+    if (record.item_value !== undefined) add('Value', record.item_value)
+    if (weapon) {
+      add('Damage', original.dmg1 ?? original.damage ?? original.dmg2)
+      add('Versatile damage', original.dmg2)
+      add('Range', original.range)
+      add('Properties', original.property ?? original.properties)
+      add('Mastery', original.mastery)
+      add('Attack type', original.weaponCategory ?? original.weapon_category)
+      add('Strength requirement', original.strength)
+    } else {
+      add('Attunement', original.reqAttune === true ? 'Required' : typeof original.reqAttune === 'string' ? original.reqAttune : '')
+      add('Value', original.value && record.item_value === undefined ? original.value : '')
+      add('Weight', original.weight && record.item_weight === undefined ? original.weight : '')
+    }
+  } else {
+    add('Custom item', true)
+    add('Weight', input.weight)
+  }
+  add('Quantity', input.quantity > 1 ? input.quantity : '')
+  const description = record ? system.catalog.description(record) : ''
+  const preferred = record?.alternate_description?.trim() || (typeof description === 'string' ? description : description)
+  const warnings = getCardOverflowWarnings([JSON.stringify({ fields, preferred, notes: input.notes })], 1250)
+  if (!preferred && !input.notes.trim()) warnings.push('No item description or notes are available.')
+  return {
+    id: input.id,
+    name: input.name,
+    front: { title: record ? itemTypeLabel(record.item_type) || 'Item' : 'Custom item', subtitle: record?.source, fields, content: preferred || 'No description available.' },
+    back: { title: input.notes.trim() ? 'Notes' : 'Item', content: input.notes.trim() || undefined, note: input.notes.trim() ? undefined : 'No additional notes.' },
     warnings,
   }
 }

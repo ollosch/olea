@@ -1,5 +1,5 @@
 import { backSlotForFront, CARD_LAYOUTS, cardsPerSheet, pageCards, sheetCount } from './cardPrint.ts'
-import { monsterPrintCard, spellPrintCard } from './printCards.ts'
+import { itemPrintCard, monsterPrintCard, spellPrintCard } from './printCards.ts'
 import type { CatalogRecord } from './catalog.ts'
 import { systemByKey } from './systems.ts'
 
@@ -55,3 +55,11 @@ const repeatedCard = monsterPrintCard({ record: monster, encounterNotes: ['Guard
 assert((JSON.stringify(repeatedCard.back.content).match(/Encounter notes/g) ?? []).length === 2, 'deduplicated monster card retains notes from each encounter')
 const noFluff = monsterPrintCard({ record: { ...monster, id: 'catalog-monster-b', source_id: 'b', original_json: { action: [{ name: 'Claw', entries: ['An attack.'] }] }, alternate_description: '' } as CatalogRecord }, systemByKey('dnd5e'))
 assert(noFluff.warnings?.some((warning) => warning.includes('No alternate description')), 'missing fluff is warned')
+
+const weapon: CatalogRecord = { ...spell, id: 'weapon-id', type: 'item', source: 'SYNTHETIC', source_id: 'sword', name: 'Training blade', item_type: 'M|M', item_weight: 3, item_value: 10, rarity: '', original_json: { dmg1: '1d6', dmgType: 'S', property: ['V', 'L'], range: { normal: 5 } }, alternate_description: 'A wooden practice weapon.' }
+const weaponCard = itemPrintCard({ id: 'weapon-copy', name: 'Training blade', record: weapon, quantity: 1, weight: '3 lb.', notes: 'Painted red.' }, systemByKey('dnd5e'))
+assert(weaponCard.front.fields?.some((field) => field.label === 'Damage' && field.value === '1d6'), 'weapon card includes damage')
+assert(weaponCard.front.fields?.some((field) => field.label === 'Properties' && field.value.includes('V')), 'weapon card includes properties')
+assert(JSON.stringify(weaponCard.back.content).includes('Painted red.'), 'item card back contains item notes')
+const customItem = itemPrintCard({ id: 'custom-item-id', name: 'Handmade charm', quantity: 2, weight: '', notes: 'Keepsake.' }, systemByKey('dnd5e'))
+assert(customItem.front.title === 'Custom item' && JSON.stringify(customItem.back.content).includes('Keepsake.'), 'custom item receives a printable card')

@@ -15,6 +15,7 @@ type FixtureIds = {
   spellIds: string[]
   encounterIds: string[]
   monsterIds: string[]
+  itemRecordIds: string[]
 }
 
 type Fixtures = { ids: FixtureIds }
@@ -98,6 +99,11 @@ export const test = base.extend<Fixtures>({
       weight_known: true,
       is_container: false,
     })
+    const sword = await create<FixtureIds>('catalog', { system: systemId, type: 'item', source: 'SYNTHETIC', source_id: `e2e-sword-${uniqueFixtureKey()}`, name: 'E2E Practice sword', item_type: 'M|M', item_weight: 2, item_value: 1, rarity: '', original_json: { dmg1: '1d6', dmgType: 'S', property: ['V'] }, alternate_description: 'A plain invented training blade.', notes: '' })
+    const potion = await create<FixtureIds>('catalog', { system: systemId, type: 'item', source: 'SYNTHETIC', source_id: `e2e-potion-${uniqueFixtureKey()}`, name: 'E2E Healing draught', item_type: 'P', item_weight: 0.5, item_value: 5, rarity: 'common', original_json: { entries: ['A small invented potion.'] }, alternate_description: '', notes: '' })
+    await create<FixtureIds>('inventory_items', { inventory: inventory.id, catalog_item: sword.id, name: sword.name, quantity: 1, weight: 2, weight_known: true, is_container: false, notes: 'Painted blue.' })
+    await create<FixtureIds>('inventory_items', { inventory: inventory.id, catalog_item: potion.id, name: potion.name, quantity: 2, weight: 0.5, weight_known: true, is_container: false, notes: '' })
+    await create<FixtureIds>('inventory_items', { inventory: inventory.id, name: 'E2E Custom talisman', quantity: 1, weight: 0, weight_known: false, is_container: false, notes: 'Found at the river.' })
     const container = await create<FixtureIds>('inventory_items', {
       inventory: inventory.id,
       name: 'E2E Satchel',
@@ -152,6 +158,7 @@ export const test = base.extend<Fixtures>({
       spellIds: [spell.id, longSpell.id],
       encounterIds: [encounter.id, secondEncounter.id],
       monsterIds: [catalogA.id, catalogB.id],
+      itemRecordIds: [sword.id, potion.id],
     })
 
     const cleanup = await request.delete(`${api}/games/records/${game.id}`)
@@ -160,7 +167,7 @@ export const test = base.extend<Fixtures>({
       const removed = await request.delete(`${api}/catalog/records/${id}`)
       expect(removed.ok(), 'E2E catalog fixture cleanup should succeed').toBeTruthy()
     }
-    for (const id of [catalogA.id, catalogB.id]) {
+    for (const id of [catalogA.id, catalogB.id, sword.id, potion.id]) {
       const removed = await request.delete(`${api}/catalog/records/${id}`)
       expect(removed.ok(), 'E2E monster fixture cleanup should succeed').toBeTruthy()
     }

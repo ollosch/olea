@@ -119,8 +119,8 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 - [x] **28 — Single- and multi-encounter monster cards**
   Let the GM print creatures directly from a single encounter or select several encounters from the same game and print their union. Deduplicate catalog-backed creatures by stable creature identity, not display name or combatant count. Use four slightly-smaller-than-A6 cards per A4 page; print exactly one card per monster type with stats/actions and preferred short text on the front and large name plus available flavour/notes on the back. Clearly handle custom participants and missing fluff. Verified single/multi-encounter selection, repeated creature deduplication with notes retained, distinct same-name catalog identities, custom entries, partial pages and paired backs with invented fixtures in desktop and mobile Chromium. Physical printing still requires alignment testing.
 
-- [ ] **28a — Item cards**
-  Design and implement printable item cards, including appropriate weapon presentation. The tentative format is approximately A7 with eight cards per A4 page; confirm the card size, front/back content and weapon-specific layout before implementation. Provide preview, legible overflow handling and print alignment checks consistent with the card foundation. Verify ordinary items, weapons, custom items and incomplete sheets.
+- [x] **28a — Item cards**
+  Design and implement printable item cards, including appropriate weapon presentation. Use the confirmed flexible A7 landscape format with eight cards per A4 sheet; dimensions and grid remain data-driven for future sizes such as A8. Fronts show item type, available rarity/value/weight, description and weapon damage/range/properties; backs contain item notes. Print from character inventory, including custom items. Verified ordinary items, weapons, custom items and incomplete sheets with invented fixtures in desktop and mobile Chromium. Actual printer alignment remains a hands-on check.
 
 ## Tables, systems and distribution
 
