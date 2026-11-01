@@ -87,3 +87,32 @@ fixtureTest('inventory item cards include weapon fields, custom items, and parti
   await expect(page.locator('.physical-page')).toHaveCount(2)
   await expect(page.locator('.print-sheet[aria-label="Sheet 1 fronts"] .print-card')).toHaveCount(8)
 })
+
+test('AD&D creature cards render imported stats and sanitized source content', async ({ page, request }) => {
+  const api = `${e2eApiBase}/api/collections`
+  const systems = await request.get(`${api}/systems/records?filter=(key='adnd2e')`)
+  const system = (await systems.json() as { items: Array<{ id: string }> }).items[0]!
+  const create = async (collection: string, data: object) => {
+    const response = await request.post(`${api}/${collection}/records`, { data })
+    expect(response.ok(), `${collection}: ${await response.text()}`).toBeTruthy()
+    return await response.json() as { id: string }
+  }
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const game = await create('games', { name: `AD&D print ${suffix}`, system: system.id })
+  const creature = await create('catalog', { system: system.id, type: 'creature', source: 'TEST', source_id: suffix, name: 'Invented Wisp', original_json: { format: 'adnd2e-html', stats: { 'Hit Dice': '3+1', Movement: '12' }, html: '<span><p>A gentle invented wisp.</p><script>window.cardScriptRan = true</script><table><tr><td>Frequency</td><td>Rare</td></tr></table></span>' } })
+  try {
+    const encounter = await create('encounters', { game: game.id, name: 'An invented encounter' })
+    await create('encounter_creatures', { encounter: encounter.id, creature: creature.id, name: 'Invented Wisp', quantity: 1 })
+    await page.goto(`/games/${game.id}/monsters/print?encounter=${encounter.id}`)
+    await page.getByRole('button', { name: 'Select all cards' }).click()
+    const front = page.locator('.physical-page .card-face-front')
+    await expect(front).toContainText('Hit Dice')
+    await expect(front).toContainText('3+1')
+    await expect(front).toContainText('A gentle invented wisp.')
+    await expect(front.locator('table')).toContainText('Rare')
+    expect(await page.evaluate(() => (window as unknown as { cardScriptRan?: boolean }).cardScriptRan)).toBeUndefined()
+  } finally {
+    await request.delete(`${api}/games/records/${game.id}`)
+    await request.delete(`${api}/catalog/records/${creature.id}`)
+  }
+})

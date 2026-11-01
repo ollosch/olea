@@ -138,7 +138,7 @@ Spell cards can be selected and printed from a character's spellbook, four per A
 
 To add a built-in system:
 
-1. Implement `SystemCapabilities` in a built-in frontend module and register it in `src/lib/systems.ts` with a stable key. Define ordering, optional initiative and HP rules, catalog filters and presentation, currency, weight units and catalog item-weight interpretation. Use manual or unknown fallbacks for unverified rules.
+1. Implement `SystemCapabilities` in a built-in frontend module and register it in `src/lib/systems.ts` with a stable key. Define ordering, optional initiative and HP rules, catalog filters and presentation, currency, weight units and catalog item-weight interpretation. Supply `cards` presentation functions for system-specific spell fields, creature stats/actions/flavour and item fields, or use `neutralCardPresentation` for unsupported formats. Shared card builders handle layout, notes and warnings without parsing system source formats. Use manual or unknown fallbacks for unverified rules.
 2. Register the same stable key and denomination keys in `server/currency/currency.go`; seed the system record with a versioned migration, and add an importer if local source data is available. The frontend registry controls presentation; the server registry enforces currency edits and transfers.
 3. Add invented fixtures and tests covering the capability module, persistence, conflicts and transfers. `src/lib/inventedSystem.test.ts` and the invented server currency tests demonstrate different rules without runtime plugins or reference content.
 

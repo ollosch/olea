@@ -45,7 +45,7 @@ const monster = {
 } as CatalogRecord
 const monsterCard = monsterPrintCard({ record: monster, encounterNotes: ['Guard the bridge.'] }, systemByKey('dnd5e'))
 assert(monsterCard.front.fields?.some((field) => field.label === 'DEX' && field.value === '14'), 'monster card contains ability scores')
-assert(JSON.stringify(monsterCard.front.content).includes('Bite. A short bite.'), 'monster card contains actions')
+assert(JSON.stringify(monsterCard.front.content).includes('Bite') && JSON.stringify(monsterCard.front.content).includes('A short bite.'), 'monster card contains actions')
 assert(JSON.stringify(monsterCard.back.content).includes('An invented, small beast.'), 'monster back contains available fluff')
 assert(JSON.stringify(monsterCard.back.content).includes('Guard the bridge.'), 'monster back contains encounter notes')
 const sameNameDifferentRecord = { ...monster, id: 'catalog-monster-b', source_id: 'b' } as CatalogRecord
@@ -64,3 +64,23 @@ assert(weaponCard.front.fields?.some((field) => field.label === 'Properties' && 
 assert(JSON.stringify(weaponCard.back.content).includes('Painted red.'), 'item card back contains item notes')
 const customItem = itemPrintCard({ id: 'custom-item-id', name: 'Handmade charm', quantity: 2, weight: '', notes: 'Keepsake.' }, systemByKey('dnd5e'))
 assert(customItem.front.title === 'Custom item' && JSON.stringify(customItem.back.content).includes('Keepsake.'), 'custom item receives a printable card')
+
+const adndSpell = { ...spell, original_json: { format: 'adnd2e-wikitext', fields: { castingtime: '[[Action|1 round]]', range: '10 yards', duration: '1 turn', verbal: '1', somatic: '0', material: '1' }, body: 'A safe invented spell.' }, alternate_description: '' } as CatalogRecord
+const adndCard = spellPrintCard(adndSpell, systemByKey('adnd2e'))
+assert(adndCard.front.fields?.some((field) => field.label === 'Casting time' && field.value === '1 round'), 'AD&D casting time uses the wiki formatter')
+assert(adndCard.front.fields?.some((field) => field.label === 'Components' && field.value === 'V, M'), 'AD&D false components are not included')
+assert(JSON.stringify(adndCard.front.content).includes('A safe invented spell.'), 'AD&D source description remains readable')
+
+const fiveEScores = monsterPrintCard({ record: { ...monster, original_json: { str: 15, dex: 13, hp: { formula: '2d8' }, action: [{ name: 'Glance', entries: [{ type: 'list', items: ['Nested effect'] }] }] } } }, systemByKey('dnd5e'))
+assert(fiveEScores.front.fields?.some((field) => field.label === 'STR' && field.value === '15'), '5e top-level scores are printed')
+assert(!fiveEScores.front.fields?.some((field) => field.label === 'Hit points' && field.value.startsWith('0')), 'absent source average is not interpreted as zero')
+assert(JSON.stringify(fiveEScores.front.content).includes('Nested effect'), 'structured action content is retained')
+const unknown = systemByKey('not-registered')
+const unknownSpell = spellPrintCard(spell, unknown)
+assert(unknownSpell.front.fields?.length === 0 && !unknownSpell.warnings?.some((warning) => warning.includes('Casting time')), 'unknown spell does not use 5e formatting or required fields')
+const unknownMonster = monsterPrintCard({ record: monster }, unknown)
+assert(unknownMonster.front.fields?.length === 0 && !JSON.stringify(unknownMonster.front.content).includes('Bite'), 'unknown creature does not assume 5e stats or actions')
+const unknownDescription = monsterPrintCard({ record: { ...monster, alternate_description: '', original_json: { description: 'Unfamiliar but readable.' } } }, unknown)
+assert(JSON.stringify(unknownDescription.front.content).includes('Unfamiliar but readable.'), 'unknown creature preserves neutral source description')
+const unknownWeapon = itemPrintCard({ id: 'unknown-weapon', name: weapon.name, record: weapon, quantity: 1, weight: '', notes: '' }, unknown)
+assert(unknownWeapon.front.title === 'Item' && !unknownWeapon.front.fields?.some((field) => field.label === 'Damage'), 'unknown item does not assume 5e weapon conventions')

@@ -2,6 +2,9 @@ import { adndHitDice, adndSpellFields } from './adnd.ts'
 import { parseHPFormula } from './dice.ts'
 import { abilityModifier, rollGroupInitiative, rollInitiative } from './dnd5e.ts'
 import { compareChallengeRating, itemTypeLabel, neutralDescription, recordDescription, sourceLabel, type CatalogRecord, type CatalogType } from './catalog.ts'
+import { neutralCardPresentation, type CardPresentation } from './cardPresentation.ts'
+import { dnd5eCardPresentation } from './dnd5eCardPresentation.ts'
+import { adndCardPresentation } from './adndCardPresentation.ts'
 
 /** Rules supplied by built-in systems; persistence and generic dice remain shared. */
 export type InitiativeParticipant = { initiative: number; initiative_known: boolean }
@@ -45,6 +48,7 @@ export type SystemCapabilities = {
   weightUnit: string | null
   }
   inventory: { catalogWeight: (record: CatalogRecord) => number | null }
+  cards: CardPresentation
 }
 
 const noHP = (): CreatureHP => ({ average: null, formula: null })
@@ -55,6 +59,7 @@ const unknown: SystemCapabilities = {
   catalog: { filters: { spell: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], creature: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], item: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }] }, resultLabel: (record) => record.source, detailFields: () => [], description: neutralDescription, compare: (a, b) => a.name.localeCompare(b.name), defaultFilters: () => ({}) },
   currency: { denominations: [], coinWeight: null, weightUnit: null },
   inventory: { catalogWeight: () => null },
+  cards: { ...neutralCardPresentation, creature: (record) => ({ ...neutralCardPresentation.creature(record), flavour: neutralDescription(record, false) }) },
 }
 
 const source: CatalogFilter = { key: 'source', label: 'Source', field: 'source', match: 'exact' }
@@ -121,6 +126,7 @@ const dnd5e: SystemCapabilities = {
     const value = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN
     return Number.isFinite(value) && value >= 0 ? value : null
   } },
+  cards: dnd5eCardPresentation,
 }
 
 const book: CatalogFilter = { key: 'bookSource', label: 'Source book', field: 'book_source', match: 'exact' }
@@ -136,6 +142,7 @@ const adnd2e: SystemCapabilities = {
   },
   currency: { denominations: [], coinWeight: null, weightUnit: null },
   inventory: { catalogWeight: () => null },
+  cards: adndCardPresentation,
 }
 
 const builtIns: Readonly<Record<string, SystemCapabilities>> = { dnd5e, adnd2e }

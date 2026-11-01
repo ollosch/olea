@@ -3,6 +3,7 @@ import { orderParticipants, activeParticipant } from './encounterOrder.ts'
 import { filterChoices, matchesCatalog } from './catalogFilters.ts'
 import { coinWeight, totalBalances } from './currency.ts'
 import type { CatalogRecord } from './catalog.ts'
+import { itemPrintCard, monsterPrintCard, spellPrintCard } from './printCards.ts'
 
 // Test-only built-in module: lower initiative first, shells, and a source-specific field.
 const invented: SystemCapabilities = {
@@ -22,6 +23,11 @@ const invented: SystemCapabilities = {
   },
   currency: { denominations: [{ key: 'shell', label: 'Shells' }], weightUnit: 'stone', coinWeight: (balances) => (balances.shell ?? 0) / 10 },
   inventory: { catalogWeight: (record) => typeof (record.original_json as { stones?: unknown })?.stones === 'number' ? (record.original_json as { stones: number }).stones : null },
+  cards: {
+    spell: (record) => ({ fields: [{ label: 'Resonance', value: String((record.original_json as { resonance: string }).resonance) }], missingFields: [] }),
+    creature: (record) => ({ fields: [{ label: 'Temperament', value: (record.original_json as { temperament: string }).temperament }], actions: ['Drift gently'], flavour: 'A floating cloud.' }),
+    item: () => ({ title: 'Relic', fields: [{ label: 'Charge', value: '3 shells' }] }),
+  },
 }
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
 const registry = createSystemRegistry([invented])
@@ -39,3 +45,12 @@ const total = totalBalances([{ shell: 7 }, { shell: 13 }])
 assert(total.shell === 20 && coinWeight(total, system.currency) === 2, 'invented denomination, party total, and weight')
 const weighted = { original_json: { stones: 4 }, item_weight: 99 } as CatalogRecord
 assert(system.inventory.catalogWeight(weighted) === 4 && registry('missing').inventory.catalogWeight(weighted) === null, 'catalog weight uses only system-specific units')
+const inventedMonster = monsterPrintCard({ record: creature }, system)
+assert(inventedMonster.front.fields?.some((field) => field.label === 'Temperament' && field.value === 'sleepy'), 'invented creature card uses registered fields')
+assert(JSON.stringify(inventedMonster.front.content).includes('Drift gently'), 'invented creature card uses registered actions')
+const inventedSpell = spellPrintCard({ ...creature, type: 'spell', original_json: { resonance: 'violet', description: 'Invented spell.' } }, system)
+assert(inventedSpell.front.fields?.some((field) => field.label === 'Resonance' && field.value === 'violet'), 'invented spell card uses registered fields')
+assert(!inventedSpell.warnings?.some((warning) => warning.includes('Casting time')), 'invented spell does not receive 5e missing-field warnings')
+const inventedItem = itemPrintCard({ id: 'item', name: 'Cloud relic', record: { ...creature, type: 'item' }, quantity: 1, weight: '', notes: '' }, system)
+assert(inventedItem.front.title === 'Relic' && inventedItem.front.fields?.[0]?.value === '3 shells', 'invented item uses registered presentation')
+assert(registry('missing').cards.spell(creature).fields.length === 0, 'unregistered systems use neutral card presentation')
