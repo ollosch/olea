@@ -81,6 +81,8 @@ For D&D 5e carrying weight, coins use the standard 50 coins per pound; each deno
 
 Currency balances are stored as a denomination-keyed JSON object on each inventory or stash. A one-way migration copies every legacy balance, including zeroes; the old columns remain as a historical snapshot and are no longer authoritative. Unsupported balances are retained and cannot be silently removed or changed. Guarded balance edits and transfers check the game's registered denomination set; the server's `server/currency` registry must be updated alongside the frontend capability definition for each built-in system.
 
+AD&D 2e and unknown systems currently have no verified denomination or coin-weight rules configured. Legacy nonzero balances remain visible as unsupported, and their coin weight and carried total are unknown. Item weights and capacity can still be entered in manual units. Party totals include character inventories and the party stash only.
+
 ## Encounters and player display
 
 Encounters are reusable preparation groups; starting combat creates independent live participants whose HP, initiative, conditions and notes are separate from preparation. The GM can optionally show the active encounter, initiative, enemy names, enemy HP and conditions in the player-facing encounter view. These settings are all off by default and only hide details in the UI. This is a trusted-LAN application: they are not access controls, and connected devices can still query local records through the API.
