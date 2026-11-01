@@ -3,8 +3,8 @@ package transfers
 import (
 	"errors"
 	"fmt"
-	"math"
-	"strings"
+
+	"olea/currency"
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
@@ -113,10 +113,9 @@ func Item(app core.App, request ItemRequest) error {
 }
 
 func Coins(app core.App, request CoinRequest) error {
-	if !validDenomination(request.Denomination) || request.Amount <= 0 {
-		return fmt.Errorf("%w: use CP, SP, EP, GP, or PP and a positive whole amount", ErrInvalid)
+	if request.Denomination == "" || request.Amount <= 0 {
+		return fmt.Errorf("%w: choose a denomination and a positive whole amount", ErrInvalid)
 	}
-	request.Denomination = strings.ToLower(request.Denomination)
 	return app.RunInTransaction(func(tx core.App) error {
 		source, err := resolveStore(tx, request.Source)
 		if err != nil {
@@ -133,15 +132,28 @@ func Coins(app core.App, request CoinRequest) error {
 			return fmt.Errorf("%w: source and destination are identical", ErrInvalid)
 		}
 		field := request.Denomination
-		if source.record.GetInt(field) < request.Amount {
+		if !currency.Supported(tx, source.game, field) {
+			return fmt.Errorf("%w: unsupported denomination %s", ErrInvalid, field)
+		}
+		from, err := currency.Decode(source.record.Get("balances"))
+		if err != nil {
+			return err
+		}
+		to, err := currency.Decode(destination.record.Get("balances"))
+		if err != nil {
+			return err
+		}
+		if from[field] < int64(request.Amount) {
 			return fmt.Errorf("%w: insufficient %s balance", ErrInvalid, field)
 		}
-		newBalance, err := safeAdd(destination.record.GetInt(field), request.Amount)
+		newBalance, err := currency.Add(to[field], int64(request.Amount))
 		if err != nil {
 			return fmt.Errorf("%w: destination balance would overflow", ErrInvalid)
 		}
-		source.record.Set(field, source.record.GetInt(field)-request.Amount)
-		destination.record.Set(field, newBalance)
+		from[field] -= int64(request.Amount)
+		to[field] = newBalance
+		source.record.Set("balances", from)
+		destination.record.Set("balances", to)
 		if err := tx.Save(source.record); err != nil {
 			return err
 		}
@@ -232,21 +244,4 @@ func isDescendant(app core.App, candidate, ancestor string) bool {
 		}
 	}
 	return false
-}
-
-func validDenomination(value string) bool {
-	value = strings.ToLower(value)
-	switch value {
-	case "cp", "sp", "ep", "gp", "pp":
-		return true
-	default:
-		return false
-	}
-}
-
-func safeAdd(left, right int) (int, error) {
-	if left < 0 || right < 0 || left > math.MaxInt-right {
-		return 0, ErrInvalid
-	}
-	return left + right, nil
 }

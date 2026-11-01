@@ -7,8 +7,8 @@ import type { CatalogRecord } from '../lib/catalog'
 import { guardedUpdate, isConflict } from '../lib/records'
 
 type Character = { id: string; name: string; game: string }
-type Inventory = { id: string; updated: string; game: string; character: string; capacity: number; capacity_known: boolean; cp: number; sp: number; ep: number; gp: number; pp: number }
-type Stash = { id: string; updated: string; game: string; kind: 'party' | 'personal' | 'location'; name: string; location: string; notes: string; owner: string; cp: number; sp: number; ep: number; gp: number; pp: number }
+type Inventory = { id: string; updated: string; game: string; character: string; capacity: number; capacity_known: boolean; balances: Record<string, number> | null }
+type Stash = { id: string; updated: string; game: string; kind: 'party' | 'personal' | 'location'; name: string; location: string; notes: string; owner: string; balances: Record<string, number> | null }
 type InventoryItem = { id: string; updated: string; inventory: string; stash: string; catalog_item: string; container: string; name: string; quantity: number; weight: number; weight_known: boolean; is_container: boolean; notes: string; expand?: { catalog_item?: CatalogRecord } }
 const route = useRoute()
 const character = ref<Character | null>(null)
@@ -97,13 +97,13 @@ async function refreshLiveInventory() {
     await loadItems()
     if (!coinSnapshot.value) {
       const store = activeStash.value ?? inventory.value
-      coins.value = { cp: store.cp, sp: store.sp, ep: store.ep, gp: store.gp, pp: store.pp }
+      coins.value = legacyCoins(store)
     }
   } catch { error.value = 'Live inventory could not be refreshed. Check the connection.' }
 }
 watch(selectedStashId, () => {
   const store = activeStash.value ?? inventory.value
-  coins.value = { cp: store?.cp ?? 0, sp: store?.sp ?? 0, ep: store?.ep ?? 0, gp: store?.gp ?? 0, pp: store?.pp ?? 0 }
+  coins.value = legacyCoins(store)
   editing.value = ''; editingSnapshot.value = null; coinSnapshot.value = null; movingItemId.value = ''; coinTransferTarget.value = ''; editingStash.value = false
   void loadItems().catch(() => { error.value = 'Items could not be loaded.' })
 })
@@ -121,10 +121,10 @@ async function load() {
     inventory.value = found[0] ?? await ensureInventory(character.value.id)
     if (generation !== inventoryGeneration) return
     capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
-    coins.value = { cp: inventory.value.cp ?? 0, sp: inventory.value.sp ?? 0, ep: inventory.value.ep ?? 0, gp: inventory.value.gp ?? 0, pp: inventory.value.pp ?? 0 }
+    coins.value = legacyCoins(inventory.value)
     await loadStashes()
     const activeStore = activeStash.value ?? inventory.value
-    coins.value = { cp: activeStore.cp ?? 0, sp: activeStore.sp ?? 0, ep: activeStore.ep ?? 0, gp: activeStore.gp ?? 0, pp: activeStore.pp ?? 0 }
+    coins.value = legacyCoins(activeStore)
     await loadItems()
   } catch {
     error.value = 'Inventory could not be loaded. Check the local server and try again.'
@@ -169,10 +169,10 @@ async function refreshPartyTotal() {
   if (!character.value) return
   try {
     const [inventories, party] = await Promise.all([
-      pb.collection('inventories').getFullList<Inventory>({ filter: pb.filter('game = {:game} && character != ""', { game: character.value.game }), fields: 'cp,sp,ep,gp,pp' }),
-      pb.collection('stashes').getFirstListItem<Stash>(pb.filter('game = {:game} && kind = "party"', { game: character.value.game }), { fields: 'cp,sp,ep,gp,pp' }),
+      pb.collection('inventories').getFullList<Inventory>({ filter: pb.filter('game = {:game} && character != ""', { game: character.value.game }), fields: 'balances' }),
+      pb.collection('stashes').getFirstListItem<Stash>(pb.filter('game = {:game} && kind = "party"', { game: character.value.game }), { fields: 'balances' }),
     ])
-    partyTotal.value = inventories.reduce((sum, entry) => ({ cp: sum.cp + (entry.cp ?? 0), sp: sum.sp + (entry.sp ?? 0), ep: sum.ep + (entry.ep ?? 0), gp: sum.gp + (entry.gp ?? 0), pp: sum.pp + (entry.pp ?? 0) }), { cp: party.cp ?? 0, sp: party.sp ?? 0, ep: party.ep ?? 0, gp: party.gp ?? 0, pp: party.pp ?? 0 })
+    partyTotal.value = inventories.reduce((sum, entry) => { const balance = legacyCoins(entry); return { cp: sum.cp + balance.cp, sp: sum.sp + balance.sp, ep: sum.ep + balance.ep, gp: sum.gp + balance.gp, pp: sum.pp + balance.pp } }, legacyCoins(party))
   } catch { /* Party total is secondary to the active inventory view. */ }
 }
 
@@ -333,7 +333,8 @@ async function saveCoins(denomination: keyof typeof coins.value) {
   if (!inventory.value) return
   if (!Number.isSafeInteger(coins.value[denomination]) || coins.value[denomination] < 0) { error.value = 'Coin balances must be nonnegative whole numbers.'; return }
   try {
-    const update = { [denomination]: coins.value[denomination] }
+    const snapshot = coinSnapshot.value ?? activeStash.value ?? inventory.value
+    const update = { balances: { ...(snapshot.balances ?? {}), [denomination]: coins.value[denomination] } }
     if (coinSnapshot.value && coinSnapshot.value.id !== (activeStash.value ?? inventory.value).id) throw new Error('The active store changed.')
     if (activeStash.value) {
       await guardedUpdate('stashes', coinSnapshot.value?.id === activeStash.value.id ? coinSnapshot.value : activeStash.value, update)
@@ -347,6 +348,7 @@ async function saveCoins(denomination: keyof typeof coins.value) {
   finally { coinSnapshot.value = null }
 }
 function beginCoinEdit() { const store = activeStash.value ?? inventory.value; coinSnapshot.value = store ? { ...store } : null }
+function legacyCoins(store: Inventory | Stash | null) { return { cp: store?.balances?.cp ?? 0, sp: store?.balances?.sp ?? 0, ep: store?.balances?.ep ?? 0, gp: store?.balances?.gp ?? 0, pp: store?.balances?.pp ?? 0 } }
 function childCount(item: InventoryItem): number { return items.value.filter((entry) => entry.container === item.id).length }
 </script>
 

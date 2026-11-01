@@ -36,6 +36,21 @@ func main() {
 	}
 
 	app := pocketbase.New()
+	// Balance writes must use the guarded route or atomic transfer route.
+	protectBalances := func(e *core.RecordRequestEvent) error {
+		info, err := e.RequestInfo()
+		if err != nil {
+			return err
+		}
+		for _, key := range []string{"balances", "cp", "sp", "ep", "gp", "pp"} {
+			if _, present := info.Body[key]; present {
+				return e.BadRequestError("Currency balances must be changed through the guarded currency routes.", nil)
+			}
+		}
+		return e.Next()
+	}
+	app.OnRecordCreateRequest("inventories", "stashes").BindFunc(protectBalances)
+	app.OnRecordUpdateRequest("inventories", "stashes").BindFunc(protectBalances)
 	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{})
 	app.RootCmd.AddCommand(&cobra.Command{
 		Use:   "adnd2e-import <spells|bestiary> <index-or-directory> [pages-file]",

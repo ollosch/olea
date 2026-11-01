@@ -79,6 +79,8 @@ AD&D 2e is available as a system after migration. Import the supplied local spel
 
 For D&D 5e carrying weight, coins use the standard 50 coins per pound; each denomination is stored and displayed as a separate nonnegative whole-number balance. This is a fixed 5e convention in Olea, not a configurable variant rule.
 
+Currency balances are stored as a denomination-keyed JSON object on each inventory or stash. A one-way migration copies every legacy balance, including zeroes; the old columns remain as a historical snapshot and are no longer authoritative. Unsupported balances are retained and cannot be silently removed or changed. Guarded balance edits and transfers check the game's registered denomination set; the server's `server/currency` registry must be updated alongside the frontend capability definition for each built-in system.
+
 ## Encounters and player display
 
 Encounters are reusable preparation groups; starting combat creates independent live participants whose HP, initiative, conditions and notes are separate from preparation. The GM can optionally show the active encounter, initiative, enemy names, enemy HP and conditions in the player-facing encounter view. These settings are all off by default and only hide details in the UI. This is a trusted-LAN application: they are not access controls, and connected devices can still query local records through the API.

@@ -6,6 +6,7 @@ import (
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
+	"olea/currency"
 	_ "olea/migrations"
 )
 
@@ -141,7 +142,7 @@ func TestConcurrentMovesCannotDuplicateItem(t *testing.T) {
 func TestCoinTransferRejectsInsufficientBalanceWithoutMutation(t *testing.T) {
 	app := testApp(t)
 	_, inventory, stash := fixture(t, app, 1)
-	inventory.Set("gp", 2)
+	inventory.Set("balances", map[string]int{"gp": 2})
 	if err := app.Save(inventory); err != nil {
 		t.Fatal(err)
 	}
@@ -153,8 +154,12 @@ func TestCoinTransferRejectsInsufficientBalanceWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.GetInt("gp") != 2 {
-		t.Fatalf("failed transfer changed source balance: %d", updated.GetInt("gp"))
+	balances, err := currency.Decode(updated.Get("balances"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balances["gp"] != 2 {
+		t.Fatalf("failed transfer changed source balance: %d", balances["gp"])
 	}
 }
 
@@ -182,7 +187,7 @@ func TestTransfersRejectCrossGameDestination(t *testing.T) {
 func TestCoinTransferMovesBalanceAtomically(t *testing.T) {
 	app := testApp(t)
 	_, inventory, stash := fixture(t, app, 1)
-	inventory.Set("sp", 12)
+	inventory.Set("balances", map[string]int{"sp": 12})
 	if err := app.Save(inventory); err != nil {
 		t.Fatal(err)
 	}
@@ -197,8 +202,57 @@ func TestCoinTransferMovesBalanceAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updatedInventory.GetInt("sp") != 5 || updatedStash.GetInt("sp") != 7 {
-		t.Fatalf("unexpected coin balances: source %d, destination %d", updatedInventory.GetInt("sp"), updatedStash.GetInt("sp"))
+	from, err := currency.Decode(updatedInventory.Get("balances"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	to, err := currency.Decode(updatedStash.Get("balances"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if from["sp"] != 5 || to["sp"] != 7 {
+		t.Fatalf("unexpected coin balances: source %d, destination %d", from["sp"], to["sp"])
+	}
+}
+
+func TestInventedCurrencyConcurrentTransfers(t *testing.T) {
+	cleanup := currency.SetDenominationsForTest("invented", []string{"shell"})
+	defer cleanup()
+	app := testApp(t)
+	system := makeRecord(t, app, "systems", map[string]any{"key": "invented", "name": "Invented"})
+	game := makeRecord(t, app, "games", map[string]any{"name": "Test", "system": system.Id})
+	character := makeRecord(t, app, "characters", map[string]any{"name": "Test", "game": game.Id})
+	inventory := makeRecord(t, app, "inventories", map[string]any{"game": game.Id, "character": character.Id, "balances": map[string]int{"shell": 10, "old": 8}})
+	stash := makeRecord(t, app, "stashes", map[string]any{"game": game.Id, "kind": "party", "name": "Test"})
+	var wait sync.WaitGroup
+	results := make(chan error, 2)
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			results <- Coins(app, CoinRequest{Source: Endpoint{Inventory: inventory.Id}, Destination: Endpoint{Stash: stash.Id}, Denomination: "shell", Amount: 7})
+		}()
+	}
+	wait.Wait()
+	close(results)
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected one transfer, got %d", successes)
+	}
+	fromRecord, _ := app.FindRecordById("inventories", inventory.Id)
+	toRecord, _ := app.FindRecordById("stashes", stash.Id)
+	from, _ := currency.Decode(fromRecord.Get("balances"))
+	to, _ := currency.Decode(toRecord.Get("balances"))
+	if from["shell"] != 3 || to["shell"] != 7 || from["old"] != 8 {
+		t.Fatalf("bad balances %v %v", from, to)
+	}
+	if err := Coins(app, CoinRequest{Source: Endpoint{Inventory: inventory.Id}, Destination: Endpoint{Stash: stash.Id}, Denomination: "old", Amount: 1}); err == nil {
+		t.Fatal("unsupported denomination transferred")
 	}
 }
 

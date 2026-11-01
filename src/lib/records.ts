@@ -5,9 +5,9 @@ export type VersionedRecord = { id: string; updated: string }
 const conflictFields: Record<string, string[]> = {
   combatants: ['initiative', 'initiative_known', 'initiative_modifier', 'initiative_modifier_override', 'current_hp', 'max_hp', 'hp_known', 'conditions', 'notes', 'dexterity_modifier', 'dexterity_known'],
   combats: ['active', 'round', 'turn', 'active_participant', 'tie_order', 'visible', 'show_initiative', 'show_enemy_names', 'show_hp', 'show_conditions'],
-  inventories: ['cp', 'sp', 'ep', 'gp', 'pp', 'capacity', 'capacity_known'],
+  inventories: ['balances', 'capacity', 'capacity_known'],
   inventory_items: ['quantity', 'notes', 'weight', 'weight_known', 'is_container', 'container'],
-  stashes: ['cp', 'sp', 'ep', 'gp', 'pp', 'name', 'location', 'notes'],
+  stashes: ['balances', 'name', 'location', 'notes'],
   games: ['encounter_visible', 'encounter_show_initiative', 'encounter_show_enemy_names', 'encounter_show_hp', 'encounter_show_conditions'],
 }
 
@@ -17,7 +17,7 @@ export async function guardedUpdate<T extends VersionedRecord>(collection: strin
   }
   const expected = Object.fromEntries((conflictFields[collection] ?? []).map((key) => {
     const raw = (record as unknown as Record<string, unknown>)[key]
-    return [key, raw ?? (key === 'container' || key === 'notes' || key === 'location' || key === 'active_participant' ? '' : typeof fields[key] === 'boolean' ? false : typeof fields[key] === 'string' ? '' : 0)]
+    return [key, raw ?? (key === 'balances' ? {} : key === 'container' || key === 'notes' || key === 'location' || key === 'active_participant' ? '' : typeof fields[key] === 'boolean' ? false : typeof fields[key] === 'string' ? '' : 0)]
   }))
   if (collection === 'inventory_items') {
     expected.inventory = (record as unknown as { inventory: string }).inventory ?? ''
