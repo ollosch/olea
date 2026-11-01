@@ -54,6 +54,15 @@ export function recordDescription(record: CatalogRecord, preferAlternate = true)
   return original.entries ?? original.description ?? ''
 }
 
+/** Neutral fallback: show common text without assuming a specific ruleset's format. */
+export function neutralDescription(record: CatalogRecord, preferAlternate = true): unknown {
+  if (preferAlternate && record.alternate_description?.trim()) return record.alternate_description
+  const original = record.original_json
+  if (!original || typeof original !== 'object') return typeof original === 'string' ? original : ''
+  const data = original as Record<string, unknown>
+  return data.entries ?? data.description ?? ''
+}
+
 export function sourceLabel(record: CatalogRecord): string {
   const original = record.original_json as Record<string, unknown> | null
   const page = original?.page

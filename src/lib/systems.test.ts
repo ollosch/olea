@@ -12,6 +12,7 @@ assert(five.encounter.creatureHP({ hp: { average: 0, formula: '2d6+1' } }).avera
 assert(five.encounter.creatureHP({ hp: { formula: '2d6/2' } }).formula === null, 'unsupported HP is manual')
 assert(five.encounter.compare({ initiative: 12, initiative_known: true }, { initiative: 5, initiative_known: true }) < 0, '5e highest initiative first')
 assert(five.currency.coinWeight?.({ gp: 50 }) === 1, '5e coin weight')
+assert(five.inventory.catalogWeight({ item_weight: { value: 3 } } as CatalogRecord) === 3, '5e resolved item weight')
 
 const adnd = systemByKey('adnd2e')
 assert(adnd.encounter.initiative === null, 'AD&D initiative is manual')

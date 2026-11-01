@@ -226,7 +226,8 @@ async function deleteStash() {
 async function addCatalogItem(record: CatalogRecord) {
   if (!inventory.value) return
   try {
-    const weight = parseWeight(record.item_weight)
+    const systemWeight = systemForGame(game.value).inventory.catalogWeight(record)
+    const weight = { value: systemWeight ?? 0, known: systemWeight !== null }
     await pb.collection('inventory_items').create(activeStash.value ? { stash: activeStash.value.id, catalog_item: record.id, name: record.name, quantity: 1, weight: weight.value, weight_known: weight.known, is_container: false, notes: '' } : { inventory: inventory.value.id, catalog_item: record.id, name: record.name, quantity: 1, weight: weight.value, weight_known: weight.known, is_container: false, notes: '' })
     pickerOpen.value = false
     await loadItems()
@@ -296,13 +297,6 @@ function transferError(cause: unknown, fallback: string): string {
   }
   return fallback
 }
-function parseWeight(value: unknown): { value: number; known: boolean } {
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return { value, known: true }
-  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value)) && Number(value) >= 0) return { value: Number(value), known: true }
-  if (value && typeof value === 'object' && 'value' in value) return parseWeight((value as { value: unknown }).value)
-  return { value: 0, known: false }
-}
-
 function itemWeight(item: InventoryItem, seen = new Set<string>()): number | null {
   if (seen.has(item.id)) return null
   if (!item.weight_known) return null

@@ -1,7 +1,7 @@
 import { adndHitDice, adndSpellFields } from './adnd.ts'
 import { parseHPFormula } from './dice.ts'
 import { abilityModifier, rollGroupInitiative, rollInitiative } from './dnd5e.ts'
-import { compareChallengeRating, itemTypeLabel, recordDescription, sourceLabel, type CatalogRecord, type CatalogType } from './catalog.ts'
+import { compareChallengeRating, itemTypeLabel, neutralDescription, recordDescription, sourceLabel, type CatalogRecord, type CatalogType } from './catalog.ts'
 
 /** Rules supplied by built-in systems; persistence and generic dice remain shared. */
 export type InitiativeParticipant = { initiative: number; initiative_known: boolean }
@@ -24,6 +24,9 @@ export type SystemCapabilities = {
       modifier: (original: unknown) => number | null
       roll: typeof rollInitiative
       rollGroup: typeof rollGroupInitiative
+      groupLabel: string
+      modifierMin: number
+      modifierMax: number
     }
     creatureHP: (original: unknown) => CreatureHP
   }
@@ -39,8 +42,9 @@ export type SystemCapabilities = {
     denominations: readonly Denomination[]
     /** Null means coin weight is unknown, not zero. */
     coinWeight: ((balances: Readonly<Record<string, number>>) => number) | null
-    weightUnit: string | null
+  weightUnit: string | null
   }
+  inventory: { catalogWeight: (record: CatalogRecord) => number | null }
 }
 
 const noHP = (): CreatureHP => ({ average: null, formula: null })
@@ -48,8 +52,9 @@ const manualOrder = (): number => 0
 const unknown: SystemCapabilities = {
   key: '',
   encounter: { compare: manualOrder, initiative: null, creatureHP: noHP },
-  catalog: { filters: { spell: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], creature: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], item: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }] }, resultLabel: (record) => sourceLabel(record), detailFields: () => [], description: recordDescription, compare: (a, b) => a.name.localeCompare(b.name), defaultFilters: () => ({}) },
+  catalog: { filters: { spell: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], creature: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], item: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }] }, resultLabel: (record) => record.source, detailFields: () => [], description: neutralDescription, compare: (a, b) => a.name.localeCompare(b.name), defaultFilters: () => ({}) },
   currency: { denominations: [], coinWeight: null, weightUnit: null },
+  inventory: { catalogWeight: () => null },
 }
 
 const source: CatalogFilter = { key: 'source', label: 'Source', field: 'source', match: 'exact' }
@@ -68,6 +73,9 @@ const dnd5e: SystemCapabilities = {
       },
       roll: rollInitiative,
       rollGroup: rollGroupInitiative,
+      groupLabel: 'Roll selected initiative with one shared d20',
+      modifierMin: -20,
+      modifierMax: 20,
     },
     creatureHP: (original) => {
       if (!original || typeof original !== 'object') return noHP()
@@ -107,6 +115,12 @@ const dnd5e: SystemCapabilities = {
   defaultFilters: (type, records): Record<string, string> => { const primary = type === 'creature' ? 'MM' : 'PHB'; return records.some((record) => record.source === primary) ? { source: primary } : {} },
   },
   currency: { denominations: ['cp', 'sp', 'ep', 'gp', 'pp'].map((key) => ({ key, label: key.toUpperCase() })), coinWeight: (balances) => Object.values(balances).reduce((sum, amount) => sum + amount, 0) / 50, weightUnit: 'lb.' },
+  inventory: { catalogWeight: (record) => {
+    let raw = record.item_weight
+    if (raw && typeof raw === 'object' && 'value' in raw) raw = (raw as { value: unknown }).value
+    const value = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN
+    return Number.isFinite(value) && value >= 0 ? value : null
+  } },
 }
 
 const book: CatalogFilter = { key: 'bookSource', label: 'Source book', field: 'book_source', match: 'exact' }
@@ -121,9 +135,21 @@ const adnd2e: SystemCapabilities = {
     defaultFilters: () => ({}),
   },
   currency: { denominations: [], coinWeight: null, weightUnit: null },
+  inventory: { catalogWeight: () => null },
 }
 
 const builtIns: Readonly<Record<string, SystemCapabilities>> = { dnd5e, adnd2e }
+
+/** Construct a static registry from built-in modules; no runtime discovery or plugins. */
+export function createSystemRegistry(modules: readonly SystemCapabilities[]) {
+  const registry = new Map<string, SystemCapabilities>()
+  for (const module of modules) {
+    if (!module.key || registry.has(module.key)) throw new Error(`Invalid or duplicate system key: ${module.key}`)
+    registry.set(module.key, module)
+  }
+  return (key: string | null | undefined): SystemCapabilities => key ? registry.get(key) ?? unknown : unknown
+}
+const resolveBuiltIn = createSystemRegistry(Object.values(builtIns))
 
 /** A missing expansion, stale relation, or unregistered key always resolves to manual rules. */
 export function systemForGame(game: { system?: string; expand?: { system?: { id?: string; key?: string } } } | null | undefined): SystemCapabilities {
@@ -133,5 +159,5 @@ export function systemForGame(game: { system?: string; expand?: { system?: { id?
 }
 
 export function systemByKey(key: string | null | undefined): SystemCapabilities {
-  return key && Object.hasOwn(builtIns, key) ? builtIns[key]! : unknown
+  return resolveBuiltIn(key)
 }

@@ -157,7 +157,7 @@ Keep the design practical: use small, built-in system modules and explicit capab
 - [x] **32e — System-aware currency and encumbrance UI**
   Drive denomination labels, editable balances, transfer options, weight units and coin-weight calculations from system capabilities across character inventories and stashes. Retain the documented 5e 50-coins-per-pound convention for 5e only. Configure AD&D 2e only from verified source rules; where a rule is unavailable, clearly show an unknown/manual weight instead of applying 5e assumptions. Preserve separate denominations, unknown item weights, capacity calculations, nested containers and the defined party-total scope. Verify 5e regressions, AD&D or manual fallback, a synthetic system with different currency and weight behavior, and phone/desktop use.
 
-- [ ] **32f — Extension and integration verification**
+- [x] **32f — Extension and integration verification**
   Add an invented test-only system with meaningfully different initiative ordering, currency and catalog fields to exercise the complete built-in extension path without copyrighted data. Verify that adding it requires registration and system-specific modules, not edits to shared encounter, inventory or catalog screens; verify unsupported capabilities remain manual and no 5e defaults leak into it. Run frontend and backend suites and migration/restart checks against both fresh and populated data; verify 5e, AD&D and unknown-system behavior, and report browser/device coverage. Update the developer documentation with the actual extension steps, persistence boundaries and known limitations.
 
 - [ ] **33 — Simple backup and restore**
