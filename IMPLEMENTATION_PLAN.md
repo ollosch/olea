@@ -166,20 +166,14 @@ Keep the design practical: use small, built-in system modules and explicit capab
 - [ ] **34 — Cross-platform release and LAN startup**
   Build and package self-contained executables for Linux, Windows and macOS with the Vue frontend embedded and clear start instructions; persist data at a predictable writable path that survives upgrades. Display usable LAN address/port and optionally a QR code. Check firewall and offline guidance. Cross-compilation is useful but does not replace testing on each OS; report actual platform test coverage. Docker can be offered as an optional convenience, not a prerequisite.
 
----
+- [ ] **35 — Two-browser realtime and reconnect verification**
+  Using two browser contexts against the same running instance, verify live encounter and inventory changes appear on both clients. Exercise concurrent quantity/container/coin edits and item or coin transfers; confirm stale edits surface a conflict and refresh authoritative values without losing or duplicating data. Disconnect one client, make changes in the other, then reconnect/refocus and confirm the disconnected client refetches current state. Verify player encounter visibility settings update as expected. Record the browsers/devices and outcomes; fix any defects discovered before marking complete.
 
-STOP IMPLEMENTATION HERE. THE DATA FOR LAND OF EEM AND DOLMENWOOD IS NOT YET AVAILABLE
-
----
-
-- [ ] **35 — Land of Eem system support**
+- [ ] **36 — Land of Eem system support**
   Follow the same data-first approach as step 32 for Land of Eem, including appropriate system-specific filters and manual fallbacks. If data is unavailable, document the blocker. Verify with synthetic fixtures and available local examples.
 
-- [ ] **36 — Dolmenwood system support**
+- [ ] **37 — Dolmenwood system support**
   Inspect user-provided data before choosing an importer. Add local import, relevant catalog fields, filters, readable views, currency/encumbrance configuration and roll behavior only where source data supports them; preserve manual fallback. If data is unavailable, document what is needed and stop instead of inventing rules. Verify with synthetic fixtures and available local examples.
-
-- [ ] **37 — Two-browser realtime and reconnect verification**
-  Using two browser contexts against the same running instance, verify live encounter and inventory changes appear on both clients. Exercise concurrent quantity/container/coin edits and item or coin transfers; confirm stale edits surface a conflict and refresh authoritative values without losing or duplicating data. Disconnect one client, make changes in the other, then reconnect/refocus and confirm the disconnected client refetches current state. Verify player encounter visibility settings update as expected. Record the browsers/devices and outcomes; fix any defects discovered before marking complete.
 
 ## Verification milestones
 
