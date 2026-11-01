@@ -11,7 +11,18 @@ function text(value: unknown): string {
   if (typeof value === 'string') return value.trim()
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (Array.isArray(value)) return value.map(text).filter(Boolean).join(', ')
+  if (value && typeof value === 'object') return Object.entries(value as Record<string, unknown>).map(([key, entry]) => {
+    const formatted = text(entry)
+    return formatted ? `${key}: ${formatted}` : ''
+  }).filter(Boolean).join(', ')
   return ''
+}
+
+function hasContent(value: unknown): boolean {
+  if (typeof value === 'string') return Boolean(value.trim())
+  if (Array.isArray(value)) return value.some(hasContent)
+  if (value && typeof value === 'object') return Object.values(value).some(hasContent)
+  return value !== null && value !== undefined
 }
 
 function componentsLabel(value: unknown): string {
@@ -104,6 +115,68 @@ export function spellPrintCard(record: CatalogRecord, system: SystemCapabilities
     name: record.name,
     front: { title: 'Spell', subtitle: record.source, fields, content },
     back: { nameOnly: true },
+    warnings,
+  }
+}
+
+export type MonsterCardInput = { record: CatalogRecord; encounterNotes?: string[] }
+
+export function monsterPrintCard(input: MonsterCardInput, system: SystemCapabilities): PrintCard {
+  const { record } = input
+  const original = object(record.original_json)
+  const stats: Array<{ label: string; value: string }> = system.catalog.detailFields(record).map((field) => ({ label: field.name, value: field.value }))
+  if (original.format === 'adnd2e-html') {
+    const rawStats = object(original.stats)
+    for (const [label, raw] of Object.entries(rawStats)) if (typeof raw === 'string' && raw.trim()) stats.push({ label, value: raw.trim() })
+  }
+  if (record.hp_average !== undefined && record.hp_average !== null) stats.push({ label: 'Hit points', value: `${record.hp_average}${record.hp_formula ? ` (${record.hp_formula})` : ''}` })
+  const abilityScores = object(original.abilities)
+  if (Object.keys(abilityScores).length) {
+    for (const [key, label] of [['str', 'STR'], ['dex', 'DEX'], ['con', 'CON'], ['int', 'INT'], ['wis', 'WIS'], ['cha', 'CHA']] as const) {
+      const score = abilityScores[key]
+      if (typeof score === 'number' || typeof score === 'string') stats.push({ label, value: String(score) })
+    }
+  }
+  for (const [key, label] of [['ac', 'Armor'], ['speed', 'Speed'], ['saves', 'Saves'], ['skills', 'Skills'], ['damageResistances', 'Resistances'], ['damageImmunities', 'Immunities'], ['conditionImmune', 'Condition immunity'], ['senses', 'Senses'], ['languages', 'Languages']] as const) {
+    const value = text(original[key])
+    if (value) stats.push({ label, value })
+  }
+  const actionEntries = (key: string) => {
+    const raw = key === 'action' && Array.isArray(record.actions_json) ? record.actions_json : original[key]
+    return Array.isArray(raw) ? raw.map((entry) => {
+    const data = object(entry)
+    const name = text(data.name)
+    const description = text(data.entries ?? data.desc ?? data.text)
+    return name && description ? `${name}. ${description}` : name || description
+    }).filter(Boolean) : []
+  }
+  const sections = [
+    ...actionEntries('trait').map((entry) => ({ type: 'entries', name: 'Traits', entries: [entry] })),
+    ...actionEntries('action').map((entry) => ({ type: 'entries', name: 'Actions', entries: [entry] })),
+    ...actionEntries('reaction').map((entry) => ({ type: 'entries', name: 'Reactions', entries: [entry] })),
+    ...actionEntries('legendary').map((entry) => ({ type: 'entries', name: 'Legendary actions', entries: [entry] })),
+  ]
+  const fluff = object(original.fluff)
+  const sourceFluff: unknown = fluff.entries ?? fluff.description ?? (original.format === 'adnd2e-html' ? system.catalog.description(record, false) : '')
+  const flavour = text(sourceFluff)
+  const rawNotes = (input.encounterNotes ?? []).map((note) => note.trim()).filter(Boolean)
+  if (record.notes?.trim()) rawNotes.push(record.notes.trim())
+  const notes = [...new Set(rawNotes)]
+  const missingFluff = !record.alternate_description?.trim() && !hasContent(sourceFluff)
+  const frontContent = [
+    record.alternate_description?.trim() ? { type: 'entries', name: 'At-table description', entries: [record.alternate_description.trim()] } : null,
+    !record.alternate_description?.trim() && hasContent(sourceFluff) ? { type: 'entries', name: 'Flavour', entries: [sourceFluff] } : null,
+    ...sections,
+  ].filter(Boolean)
+  const backContent = [hasContent(sourceFluff) ? { type: 'entries', name: 'Flavour', entries: [sourceFluff] } : null, ...notes.map((note) => ({ type: 'entries', name: 'Encounter notes', entries: [note] }))].filter(Boolean)
+  const warnings = getCardOverflowWarnings([JSON.stringify({ stats, frontContent, backContent, notes })], 1250)
+  if (missingFluff) warnings.push('No alternate description or source flavour is available.')
+  if (!stats.length) warnings.push('Creature has no modeled stats; consult the original source or enter them manually.')
+  return {
+    id: record.id,
+    name: record.name,
+    front: { title: system.catalog.resultLabel(record), fields: stats, content: frontContent.length ? frontContent : 'No actions or description are available.' },
+    back: { title: 'Creature', content: backContent.length ? backContent : missingFluff ? 'No flavour text is available.' : undefined, note: notes.length ? undefined : 'No encounter notes.' },
     warnings,
   }
 }

@@ -36,7 +36,7 @@ export function recordDescription(record: CatalogRecord, preferAlternate = true)
   if (record.type === 'creature') {
     const fluff = original.fluff as Record<string, unknown> | undefined
     const content = fluff?.entries ?? fluff?.description
-    return [
+    const body = [
       ...(Array.isArray(content) ? content : content ? [content] : []),
       ...(['trait', 'action', 'reaction', 'legendary'] as const).flatMap((key) => {
         const entries = original[key]
@@ -47,8 +47,12 @@ export function recordDescription(record: CatalogRecord, preferAlternate = true)
           return { type: 'entries', name: value.name, entries: value.entries ?? value.desc ?? value.text ?? value }
         })
       }),
-    ]
-      .filter((entry) => Array.isArray(entry) ? entry.length > 0 : Boolean(entry))
+    ].filter((entry) => Array.isArray(entry) ? entry.length > 0 : Boolean(entry))
+    return preferAlternate && record.alternate_description?.trim() ? [
+      { type: 'entries', name: 'At-table description', entries: [record.alternate_description.trim()] },
+      ...body,
+      ...(record.notes?.trim() ? [{ type: 'entries', name: 'At-table notes', entries: [record.notes.trim()] }] : []),
+    ] : body
   }
   if (record.type === 'spell') return [original.entries ?? original.description ?? '', original.entriesHigherLevel ? { type: 'entries', name: 'At Higher Levels', entries: original.entriesHigherLevel } : []]
   return original.entries ?? original.description ?? ''

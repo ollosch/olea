@@ -1,5 +1,5 @@
 import { backSlotForFront, CARD_LAYOUTS, cardsPerSheet, pageCards, sheetCount } from './cardPrint.ts'
-import { spellPrintCard } from './printCards.ts'
+import { monsterPrintCard, spellPrintCard } from './printCards.ts'
 import type { CatalogRecord } from './catalog.ts'
 import { systemByKey } from './systems.ts'
 
@@ -36,3 +36,22 @@ assert(card.front.fields?.some((field) => field.label === 'Range' && field.value
 assert(!card.warnings?.some((warning) => warning.includes('may exceed')), 'complete short spell has no content overflow warning')
 const fallbackCard = spellPrintCard({ ...spell, alternate_description: '' }, systemByKey('dnd5e'))
 assert(JSON.stringify(fallbackCard.front.content).includes('Source text.'), 'spell card falls back to original entries')
+
+const monster = {
+  id: 'catalog-monster-a', type: 'creature', source: 'SYNTHETIC', source_id: 'a', name: 'Same Name', level: '', school: '', creature_type: 'beast', challenge_rating: '1/2',
+  hp_average: 11, hp_formula: '2d8+2', actions_json: [{ name: 'Bite', entries: ['A short bite.'] }],
+  original_json: { ac: [{ ac: 13 }], hp: { average: 11, formula: '2d8+2' }, speed: { walk: 30 }, abilities: { str: 12, dex: 14, con: 12 }, action: [{ name: 'Bite', entries: ['A short bite.'] }], fluff: { entries: ['An invented, small beast.'] } },
+  alternate_description: 'A quick table description.', notes: '',
+} as CatalogRecord
+const monsterCard = monsterPrintCard({ record: monster, encounterNotes: ['Guard the bridge.'] }, systemByKey('dnd5e'))
+assert(monsterCard.front.fields?.some((field) => field.label === 'DEX' && field.value === '14'), 'monster card contains ability scores')
+assert(JSON.stringify(monsterCard.front.content).includes('Bite. A short bite.'), 'monster card contains actions')
+assert(JSON.stringify(monsterCard.back.content).includes('An invented, small beast.'), 'monster back contains available fluff')
+assert(JSON.stringify(monsterCard.back.content).includes('Guard the bridge.'), 'monster back contains encounter notes')
+const sameNameDifferentRecord = { ...monster, id: 'catalog-monster-b', source_id: 'b' } as CatalogRecord
+const distinctCards = [monsterPrintCard({ record: monster }, systemByKey('dnd5e')), monsterPrintCard({ record: sameNameDifferentRecord }, systemByKey('dnd5e'))]
+assert(distinctCards.length === 2 && distinctCards[0]!.id !== distinctCards[1]!.id && distinctCards[0]!.name === distinctCards[1]!.name, 'same-name different-identity monsters remain separate')
+const repeatedCard = monsterPrintCard({ record: monster, encounterNotes: ['Guard the bridge.', 'At dusk.'] }, systemByKey('dnd5e'))
+assert((JSON.stringify(repeatedCard.back.content).match(/Encounter notes/g) ?? []).length === 2, 'deduplicated monster card retains notes from each encounter')
+const noFluff = monsterPrintCard({ record: { ...monster, id: 'catalog-monster-b', source_id: 'b', original_json: { action: [{ name: 'Claw', entries: ['An attack.'] }] }, alternate_description: '' } as CatalogRecord }, systemByKey('dnd5e'))
+assert(noFluff.warnings?.some((warning) => warning.includes('No alternate description')), 'missing fluff is warned')

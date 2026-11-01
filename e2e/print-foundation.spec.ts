@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { e2eApiBase } from './fixtures'
+import { openEncounters, test as fixtureTest } from './fixtures'
 
 test('print calibration preview shows four positions, duplex pages, and overflow warnings', async ({ page }) => {
   await page.goto('/print/calibration')
@@ -50,4 +51,24 @@ test('spellbook selection prints preferred text with matched name-only backs', a
     await request.delete(`${e2eApiBase}/api/collections/games/records/${game.id}`)
     await request.delete(`${e2eApiBase}/api/collections/catalog/records/${spell.id}`)
   }
+})
+
+fixtureTest('monster cards union selected encounters by catalog identity', async ({ page, ids }) => {
+  await openEncounters(page, ids.gameId)
+  await page.getByRole('link', { name: 'Print monster cards' }).click()
+  await expect(page.getByRole('heading', { name: 'Choose encounters and creatures' })).toBeVisible()
+  const encounterPicker = page.getByLabel('Encounters (select multiple)')
+  await encounterPicker.selectOption(ids.encounterIds)
+  await expect(page.locator('.card-choice')).toHaveCount(3)
+  await expect(page.locator('.card-choice').filter({ hasText: 'E2E Shared Name' })).toHaveCount(2)
+  await page.getByRole('button', { name: 'Select all cards' }).click()
+  await expect(page.locator('.physical-page')).toHaveCount(2)
+  await expect(page.locator('.physical-page .card-face-front').filter({ hasText: 'SYNTHETIC · beast' })).toContainText('Claw')
+  const backs = await page.locator('.physical-page .card-face-back').allTextContents()
+  expect(backs.join(' ')).toContain('By the old bridge.')
+  expect(backs.join(' ')).toContain('At dusk.')
+
+  await encounterPicker.selectOption([ids.encounterIds[0]!])
+  await expect(page.locator('.card-choice')).toHaveCount(2)
+  await expect(page.locator('.card-choice').filter({ hasText: 'E2E Custom Wisp' })).toContainText('Custom participant')
 })

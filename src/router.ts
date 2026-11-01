@@ -12,6 +12,7 @@ import PlayerEncounterView from './views/PlayerEncounterView.vue'
 import GameTablesView from './views/GameTablesView.vue'
 import PrintCalibrationView from './views/PrintCalibrationView.vue'
 import PrintSpellbookView from './views/PrintSpellbookView.vue'
+import PrintMonstersView from './views/PrintMonstersView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -22,6 +23,7 @@ export const router = createRouter({
     { path: '/catalog/:recordId', name: 'catalog-detail', component: CatalogDetailView, meta: { title: 'Catalog entry' } },
     { path: '/games/:gameId/characters', name: 'game-characters', component: GameCharactersView, meta: { title: 'Game characters' } },
     { path: '/games/:gameId/encounters', name: 'game-encounters', component: GameEncountersView, meta: { title: 'Game encounters' } },
+    { path: '/games/:gameId/monsters/print', name: 'print-monsters', component: PrintMonstersView, meta: { title: 'Monster cards' } },
     { path: '/games/:gameId/tables', name: 'game-tables', component: GameTablesView, meta: { title: 'Random tables' } },
     { path: '/games/:gameId/encounter', name: 'player-encounter', component: PlayerEncounterView, meta: { title: 'Active encounter' } },
     { path: '/print/calibration', name: 'print-calibration', component: PrintCalibrationView, meta: { title: 'Print calibration' } },

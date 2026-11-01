@@ -13,17 +13,20 @@ type FixtureIds = {
   combatantId: string
   spellbookId: string
   spellIds: string[]
+  encounterIds: string[]
+  monsterIds: string[]
 }
 
 type Fixtures = { ids: FixtureIds }
 export const e2eApiBase = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${process.env.E2E_PORT ?? '8091'}`
+const uniqueFixtureKey = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 export const test = base.extend<Fixtures>({
   ids: async ({ request }, use) => {
     const api = `${e2eApiBase}/api/collections`
     const create = async <T extends { id: string }>(collection: string, fields: Record<string, unknown>) => {
       const response = await request.post(`${api}/${collection}/records`, { data: fields })
-      expect(response.ok(), `${collection} fixture creation should succeed`).toBeTruthy()
+      expect(response.ok(), `${collection} fixture creation should succeed: ${await response.text()}`).toBeTruthy()
       return await response.json() as T
     }
 
@@ -49,7 +52,7 @@ export const test = base.extend<Fixtures>({
       system: systemId,
       type: 'spell',
       source: 'SYNTHETIC',
-      source_id: `e2e-card-spark-${Date.now()}`,
+      source_id: `e2e-card-spark-${uniqueFixtureKey()}`,
       name: 'E2E Spark',
       level: '1',
       school: 'Evocation',
@@ -60,7 +63,7 @@ export const test = base.extend<Fixtures>({
       system: systemId,
       type: 'spell',
       source: 'SYNTHETIC',
-      source_id: `e2e-card-long-verse-${Date.now()}`,
+      source_id: `e2e-card-long-verse-${uniqueFixtureKey()}`,
       name: 'E2E Long Verse',
       level: '2',
       school: 'Illusion',
@@ -104,6 +107,15 @@ export const test = base.extend<Fixtures>({
       is_container: true,
     })
     const encounter = await create<FixtureIds>('encounters', { game: game.id, name: 'E2E Bridge Encounter' })
+    const secondEncounter = await create<FixtureIds>('encounters', { game: game.id, name: 'E2E Forest Encounter' })
+    const catalogA = await create<FixtureIds>('catalog', { system: systemId, type: 'creature', source: 'SYNTHETIC', source_id: `e2e-monster-a-${uniqueFixtureKey()}`, name: 'E2E Shared Name', creature_type: 'beast', challenge_rating: '1/2', original_json: { hp: { average: 8, formula: '2d8' }, abilities: { str: 12, dex: 14 }, action: [{ name: 'Claw', entries: ['A synthetic claw.'] }], fluff: { entries: ['A synthetic creature.'] } }, alternate_description: 'A quick invented creature.', notes: '' })
+    const catalogB = await create<FixtureIds>('catalog', { system: systemId, type: 'creature', source: 'OTHER', source_id: `e2e-monster-b-${uniqueFixtureKey()}`, name: 'E2E Shared Name', creature_type: 'construct', challenge_rating: '1', original_json: { hp: { average: 10, formula: '2d8+2' }, abilities: { str: 14, dex: 10 }, action: [{ name: 'Slam', entries: ['A different invented slam.'] }] }, alternate_description: '', notes: '' })
+    for (const [targetEncounter, creature, name, notes, custom] of [
+      [encounter.id, catalogA.id, catalogA.name, 'By the old bridge.', false],
+      [secondEncounter.id, catalogA.id, catalogA.name, 'At dusk.', false],
+      [secondEncounter.id, catalogB.id, catalogB.name, '', false],
+      [encounter.id, '', 'E2E Custom Wisp', 'Glows blue.', true],
+    ] as const) await create<FixtureIds>('encounter_creatures', { encounter: targetEncounter, creature, name, quantity: 3, notes, custom })
     const combat = await create<FixtureIds>('combats', {
       encounter: encounter.id,
       active: true,
@@ -138,6 +150,8 @@ export const test = base.extend<Fixtures>({
       combatantId: combatant.id,
       spellbookId: spellbook.id,
       spellIds: [spell.id, longSpell.id],
+      encounterIds: [encounter.id, secondEncounter.id],
+      monsterIds: [catalogA.id, catalogB.id],
     })
 
     const cleanup = await request.delete(`${api}/games/records/${game.id}`)
@@ -145,6 +159,10 @@ export const test = base.extend<Fixtures>({
     for (const id of [spell.id, longSpell.id]) {
       const removed = await request.delete(`${api}/catalog/records/${id}`)
       expect(removed.ok(), 'E2E catalog fixture cleanup should succeed').toBeTruthy()
+    }
+    for (const id of [catalogA.id, catalogB.id]) {
+      const removed = await request.delete(`${api}/catalog/records/${id}`)
+      expect(removed.ok(), 'E2E monster fixture cleanup should succeed').toBeTruthy()
     }
   },
 })
