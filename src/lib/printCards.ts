@@ -203,6 +203,7 @@ export function itemPrintCard(input: ItemCardInput, system: SystemCapabilities):
     if (record.item_value !== undefined) add('Value', record.item_value)
     if (weapon) {
       add('Damage', original.dmg1 ?? original.damage ?? original.dmg2)
+      add('Damage type', original.dmgType ?? original.damageType ?? original.damage_type)
       add('Versatile damage', original.dmg2)
       add('Range', original.range)
       add('Properties', original.property ?? original.properties)

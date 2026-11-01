@@ -59,6 +59,7 @@ assert(noFluff.warnings?.some((warning) => warning.includes('No alternate descri
 const weapon: CatalogRecord = { ...spell, id: 'weapon-id', type: 'item', source: 'SYNTHETIC', source_id: 'sword', name: 'Training blade', item_type: 'M|M', item_weight: 3, item_value: 10, rarity: '', original_json: { dmg1: '1d6', dmgType: 'S', property: ['V', 'L'], range: { normal: 5 } }, alternate_description: 'A wooden practice weapon.' }
 const weaponCard = itemPrintCard({ id: 'weapon-copy', name: 'Training blade', record: weapon, quantity: 1, weight: '3 lb.', notes: 'Painted red.' }, systemByKey('dnd5e'))
 assert(weaponCard.front.fields?.some((field) => field.label === 'Damage' && field.value === '1d6'), 'weapon card includes damage')
+assert(weaponCard.front.fields?.some((field) => field.label === 'Damage type' && field.value === 'S'), 'weapon card includes damage type')
 assert(weaponCard.front.fields?.some((field) => field.label === 'Properties' && field.value.includes('V')), 'weapon card includes properties')
 assert(JSON.stringify(weaponCard.back.content).includes('Painted red.'), 'item card back contains item notes')
 const customItem = itemPrintCard({ id: 'custom-item-id', name: 'Handmade charm', quantity: 2, weight: '', notes: 'Keepsake.' }, systemByKey('dnd5e'))
