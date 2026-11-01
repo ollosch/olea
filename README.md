@@ -66,6 +66,28 @@ The binary also defaults to `serve --http=0.0.0.0:8090` if started with no argum
 
 On upgrade, stop the running server, replace it with the newly built version, and start it again with the same `--dir`. Version-controlled Go migrations in `server/migrations/` are applied automatically on startup and record their applied versions in the database. Keep the data directory when upgrading. Back it up only while the server is stopped; do not copy only the live SQLite database. To initialize a fresh install, start the server with an empty data directory and PocketBase will create the schema and seed the `dnd5e` system identifier.
 
+## Backup and restore
+
+Back up the **entire PocketBase data directory**, not just its SQLite database. It contains campaign records, imported catalog content, alternate descriptions and notes, uploaded files, and PocketBase metadata. Stop Olea first (Ctrl+C in the terminal running it), then copy the directory to a separate location outside the data directory. Keep backups somewhere safe and separate from the application install; the directory can contain private campaign data.
+
+On Linux or macOS, for a server started with `--dir=./pb_data` from the repository root:
+
+```sh
+mkdir -p "$HOME/olea-backups"
+cp -a ./pb_data "$HOME/olea-backups/pb_data-2026-11-01"
+```
+
+Create the parent backup folder first if it does not exist. On Windows, stop Olea and use File Explorer to copy the complete `pb_data` folder to a separate backup location. Do not copy only `data.db`.
+
+To verify or restore a backup, copy the **whole backed-up directory** to a new location whose destination path does not already exist, then start Olea with that location as `--dir`. This leaves the original data untouched and lets PocketBase apply any pending migrations during startup:
+
+```sh
+cp -a "$HOME/olea-backups/pb_data-2026-11-01" ./pb_data-restore-check
+./bin/olea serve --http=127.0.0.1:8090 --dir=./pb_data-restore-check
+```
+
+On Windows, copy the backed-up folder to a new folder such as `pb_data-restore-check` in File Explorer, then pass that folder to `bin\olea.exe serve --http=127.0.0.1:8090 --dir=./pb_data-restore-check`. Check that expected games and catalog records are present before relying on the restored copy. To replace the original data after verification, stop Olea, move the current data directory aside, and copy the verified restored directory into its place; never merge a restore into a running or non-empty data directory. Keep the backup until the restored instance has been checked.
+
 ## Local catalog imports
 
 Catalog imports are explicitly invoked on the host; the application does not fetch or bundle reference data. `go -C server run . --dir=/path/to/pb_data catalog-import <system-key> <json-file>` accepts the source-neutral JSON interchange format below. Omit `--dir` to use PocketBase's default directory relative to the server working directory. The importer updates records with the same system/type/source/source_id and leaves alternate descriptions and notes intact.
