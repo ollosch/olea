@@ -8,5 +8,7 @@
 /server/ui/dist/
 /dist/
 /bin/
+/test-results/
+/playwright-report/
 *.log
 .DS_Store

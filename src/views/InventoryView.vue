@@ -256,7 +256,11 @@ async function saveEdit(item: InventoryItem) {
   if (parentDraft.value && (parentDraft.value === item.id || isDescendant(parentDraft.value, item.id))) { error.value = 'A container cannot be moved inside itself or one of its contents.'; return }
   if (parentDraft.value && !items.value.find((entry) => entry.id === parentDraft.value)?.is_container) { error.value = 'Choose a container as the destination.'; return }
   try { await guardedUpdate('inventory_items', editingSnapshot.value ?? item, { quantity: quantityDraft.value, notes: notesDraft.value, weight, weight_known: weightKnownDraft.value, is_container: containerDraft.value, container: parentDraft.value }); editing.value = ''; editingSnapshot.value = null; await loadItems() }
-  catch (cause) { await loadItems(); error.value = isConflict(cause) ? 'This item changed or moved elsewhere. Current contents were refreshed; review before editing again.' : 'The item could not be updated.' }
+  catch (cause) {
+    if (isConflict(cause)) { editing.value = ''; editingSnapshot.value = null }
+    await loadItems()
+    error.value = isConflict(cause) ? 'This item changed or moved elsewhere. Current contents were refreshed; review before editing again.' : 'The item could not be updated.'
+  }
 }
 async function drop(item: InventoryItem) {
   if (childCount(item) > 0) { error.value = 'Move the contents out before dropping this container.'; return }

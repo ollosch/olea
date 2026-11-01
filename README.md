@@ -36,6 +36,21 @@ To start the backend directly in the foreground with a chosen data directory, us
 
 Open the Vite URL shown in the terminal. Vite proxies `/api` to PocketBase. `npm run build` is needed once before starting the Go server; frontend edits then update through Vite. Run `npm run typecheck` to check TypeScript.
 
+## Browser tests
+
+Playwright runs end-to-end tests in Chromium. After installing npm dependencies, install the browser once:
+
+```sh
+npx playwright install chromium
+npm run test:e2e
+```
+
+The test command starts Vite and a disposable Go/PocketBase server automatically, seeds invented records for each test, and removes its temporary database when the server exits. The backend always starts in a fresh temporary directory and will not reuse a server on the E2E port. Tests run on desktop Chromium with mouse input and Pixel 8 touch emulation. Use `npm run test:e2e:desktop` or `npm run test:e2e:mobile` to run one project. Browser E2E tests do not use or modify `pb_data/`.
+
+Current E2E coverage includes two-context inventory and player encounter updates, stale quantity/container/coin conflicts, inventory and coin transfers, offline/reconnect refresh, player encounter visibility, app-shell loading, mobile touch target sizing and overflow, and desktop workspace overflow. Device coverage is browser emulation; physical phones and laptops still need hands-on verification.
+
+The default per-test timeout is **10 seconds**, configured by `timeout` in `playwright.config.ts`. For a test or group that legitimately needs longer, set `test.setTimeout(milliseconds)` inside the test or `test.describe.configure({ timeout: milliseconds })` inside its describe block. Keep those overrides local instead of increasing the suite-wide limit.
+
 ## Build and run
 
 ```sh
