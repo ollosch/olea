@@ -122,9 +122,11 @@ Optional system templates are locally imported, read-only, and copied into games
 }
 ```
 
-## Planned paper cards
+## Paper cards
 
-Printing is planned, not yet available. Spell and monster cards are intended to print four per A4 sheet, each slightly smaller than A6 to leave room for margins and cut guides. Monster cards should be printable from a single encounter or a selection of encounters, with repeated creature types deduplicated. Item cards are also planned; approximately A7 and eight per A4 sheet is the current preference, while their layout, especially for weapons, remains undecided. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the planned preview, duplex and overflow requirements.
+The shared print preview and A4 print foundation are available, including duplex pairing, long-/short-edge flips, cut guides, local system fonts, a calibration page (open **Print calibration** at `/print/calibration`), and visible overflow warnings. The calibration page includes a 50 mm square and a ruler; print at 100% / Actual size with “Fit to page” disabled. Browser print-to-PDF was verified in Chromium. Actual printer scaling, duplex registration and cut alignment still need hands-on verification for each printer.
+
+Spell and monster cards are planned at four per A4 sheet, each slightly smaller than A6 to leave room for margins and cut guides. Monster cards should be printable from a single encounter or a selection of encounters, with repeated catalog creature identities deduplicated. Item cards use the confirmed flexible A7 landscape format, eight per A4 sheet; the layout data is structured so another size such as A8 can be added without another renderer. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for card content and verification requirements.
 
 ## Local data
 

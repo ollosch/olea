@@ -110,8 +110,8 @@ This plan is intended for a sequence of small, independent LLM sessions. Ask for
 
 ## Paper cards
 
-- [ ] **26 — A4 card print foundation**
-  Build an on-screen print preview and browser print stylesheet for exactly four slightly-smaller-than-A6 card positions per A4 sheet, with front/back pages, clear cut guides, modest margins, deterministic ordering, and duplex flip options. Use local assets/fonts only. Implement a calibration/test page and visible overflow warnings rather than clipping or shrinking text to unreadable sizes. Verify single/multiple pages and browser print-to-PDF; document actual-printer alignment testing.
+- [x] **26 — A4 card print foundation**
+  Build an on-screen print preview and browser print stylesheet for exactly four slightly-smaller-than-A6 card positions per A4 sheet, with front/back pages, clear cut guides, modest margins, deterministic ordering, and duplex flip options. Use local assets/fonts only. Implement a calibration/test page and visible overflow warnings rather than clipping or shrinking text to unreadable sizes. Verified four positions and partial sheets, both duplex mappings, overflow notice, and five-page A4 browser PDF in desktop/mobile Chromium. Physical printer alignment still requires hands-on testing.
 
 - [ ] **27 — Spellbook cards**
   Add selection and printing from a character's spellbook. Use four slightly-smaller-than-A6 cards per A4 page. The front contains at-table spell fields and the preferred alternate description with original fallback; the back contains only the large spell name. Reuse the print foundation and test incomplete final pages, long text and front/back correspondence.
