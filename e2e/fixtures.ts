@@ -11,6 +11,8 @@ type FixtureIds = {
   itemId: string
   containerId: string
   combatantId: string
+  spellbookId: string
+  spellIds: string[]
 }
 
 type Fixtures = { ids: FixtureIds }
@@ -42,6 +44,31 @@ export const test = base.extend<Fixtures>({
     })
     const character = await create<FixtureIds>('characters', { game: game.id, name: 'E2E Ranger' })
     const otherCharacter = await create<FixtureIds>('characters', { game: game.id, name: 'E2E Bard' })
+    const spellbook = await create<FixtureIds>('spellbooks', { character: character.id, name: 'E2E Spellbook' })
+    const spell = await create<FixtureIds>('catalog', {
+      system: systemId,
+      type: 'spell',
+      source: 'SYNTHETIC',
+      source_id: `e2e-card-spark-${Date.now()}`,
+      name: 'E2E Spark',
+      level: '1',
+      school: 'Evocation',
+      original_json: { time: [{ number: 1, unit: 'action' }], range: { type: 'point', distance: { amount: 60, type: 'feet' } }, duration: [{ type: 'instant' }], components: { v: true, s: true }, entries: ['A bright invented spark.'] },
+      alternate_description: 'A table-friendly invented spark.',
+    })
+    const longSpell = await create<FixtureIds>('catalog', {
+      system: systemId,
+      type: 'spell',
+      source: 'SYNTHETIC',
+      source_id: `e2e-card-long-verse-${Date.now()}`,
+      name: 'E2E Long Verse',
+      level: '2',
+      school: 'Illusion',
+      original_json: { time: [{ number: 1, unit: 'minute' }], range: { type: 'self' }, duration: [{ type: 'timed', duration: { amount: 1, type: 'hour' } }], components: { v: true, m: 'a harmless pebble' }, entries: ['An invented phrase.'] },
+      alternate_description: 'A '.repeat(400),
+    })
+    await create<FixtureIds>('spellbook_spells', { spellbook: spellbook.id, spell: spell.id })
+    await create<FixtureIds>('spellbook_spells', { spellbook: spellbook.id, spell: longSpell.id })
     const inventory = await create<FixtureIds>('inventories', {
       game: game.id,
       character: character.id,
@@ -109,10 +136,16 @@ export const test = base.extend<Fixtures>({
       itemId: item.id,
       containerId: container.id,
       combatantId: combatant.id,
+      spellbookId: spellbook.id,
+      spellIds: [spell.id, longSpell.id],
     })
 
     const cleanup = await request.delete(`${api}/games/records/${game.id}`)
     expect(cleanup.ok(), 'E2E game cleanup should remove its fixture records').toBeTruthy()
+    for (const id of [spell.id, longSpell.id]) {
+      const removed = await request.delete(`${api}/catalog/records/${id}`)
+      expect(removed.ok(), 'E2E catalog fixture cleanup should succeed').toBeTruthy()
+    }
   },
 })
 

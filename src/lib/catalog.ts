@@ -50,7 +50,7 @@ export function recordDescription(record: CatalogRecord, preferAlternate = true)
     ]
       .filter((entry) => Array.isArray(entry) ? entry.length > 0 : Boolean(entry))
   }
-  if (record.type === 'spell') return [original.entries ?? original.description ?? '', original.entriesHigherLevel ?? []]
+  if (record.type === 'spell') return [original.entries ?? original.description ?? '', original.entriesHigherLevel ? { type: 'entries', name: 'At Higher Levels', entries: original.entriesHigherLevel } : []]
   return original.entries ?? original.description ?? ''
 }
 

@@ -11,6 +11,7 @@ import GameEncountersView from './views/GameEncountersView.vue'
 import PlayerEncounterView from './views/PlayerEncounterView.vue'
 import GameTablesView from './views/GameTablesView.vue'
 import PrintCalibrationView from './views/PrintCalibrationView.vue'
+import PrintSpellbookView from './views/PrintSpellbookView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -24,6 +25,7 @@ export const router = createRouter({
     { path: '/games/:gameId/tables', name: 'game-tables', component: GameTablesView, meta: { title: 'Random tables' } },
     { path: '/games/:gameId/encounter', name: 'player-encounter', component: PlayerEncounterView, meta: { title: 'Active encounter' } },
     { path: '/print/calibration', name: 'print-calibration', component: PrintCalibrationView, meta: { title: 'Print calibration' } },
+    { path: '/characters/:characterId/spellbooks/:spellbookId/print', name: 'print-spellbook', component: PrintSpellbookView, meta: { title: 'Spellbook cards' } },
     { path: '/characters/:characterId', name: 'character-overview', component: CharacterOverviewView, meta: { title: 'Character overview' } },
     { path: '/characters/:characterId/inventory', name: 'character-inventory', component: InventoryView, meta: { title: 'Inventory' } },
     { path: '/characters/:characterId/spellbooks', name: 'character-spellbooks', component: SpellbooksView, meta: { title: 'Spellbooks' } },
