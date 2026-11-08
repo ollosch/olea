@@ -2,6 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle, DialogTrigger } from 'reka-ui'
+import ActionMenu from '../components/ActionMenu.vue'
+import ActionMenuItem from '../components/ActionMenuItem.vue'
+import FeedbackRegion from '../components/FeedbackRegion.vue'
+import PageHeader from '../components/PageHeader.vue'
 import { pb } from '../lib/pocketbase'
 
 type ProfileRecord = { id: string; name: string }
@@ -155,49 +159,27 @@ async function deleteEmptyGame() {
 
 <template>
   <section class="screen" aria-labelledby="page-title">
-    <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Try again</button></p>
-    <div v-if="loading" class="loading-state" role="status">Loading game…</div>
-    <template v-else-if="game">
-      <div class="screen-heading">
-        <div>
-          <p class="eyebrow"><span class="eyebrow-line" /> {{ game.expand?.system?.name ?? 'GAME' }}</p>
-          <h1 id="page-title">{{ game.name }}</h1>
-          <p class="screen-description">Create and manage the characters in this game.</p>
-        </div>
-        <div class="heading-actions">
+    <template v-if="game">
+      <PageHeader
+        :eyebrow="game.expand?.system?.name ?? 'GAME MASTER'"
+        :title="game.name"
+        description="Open a character's workspace, or go straight to this game's encounters, tables, and roster."
+      >
+        <template #actions>
           <RouterLink class="secondary-link" to="/games">All games</RouterLink>
           <RouterLink class="secondary-link" :to="{ name: 'game-encounters', params: { gameId: game.id } }">Encounters</RouterLink>
           <RouterLink class="secondary-link" :to="{ name: 'game-tables', params: { gameId: game.id } }">Random tables</RouterLink>
           <button class="primary-button" type="button" @click="beginCreate"><span aria-hidden="true">＋</span> Add character</button>
-        </div>
-      </div>
+        </template>
+      </PageHeader>
+    </template>
 
-      <section class="gm-settings" aria-labelledby="gm-title">
-        <div class="gm-copy"><p class="eyebrow">GAME MASTER</p><h2 id="gm-title">{{ game.expand?.gm_profile?.name ?? 'Not assigned' }}</h2><p class="muted-hint">Profiles organize ownership and preferences; they are not accounts or access controls.</p></div>
-        <label class="field-label gm-select-label" for="gm-profile">Assign GM
-          <select id="gm-profile" class="select-input" :value="game.gm_profile" :disabled="updatingGm" @change="assignGameMaster(($event.target as HTMLSelectElement).value)">
-            <option value="">Not assigned</option>
-            <option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
-          </select>
-        </label>
-        <DialogRoot v-model:open="profileFormOpen">
-          <DialogTrigger class="secondary-button" @click="profileFormError = ''">New profile</DialogTrigger>
-          <DialogPortal>
-            <DialogOverlay class="dialog-overlay" />
-            <DialogContent class="dialog-content">
-              <div class="dialog-heading"><div><p class="eyebrow">LOCAL PROFILE</p><DialogTitle class="dialog-title">Create a profile</DialogTitle></div><DialogClose class="icon-button" aria-label="Close profile form">×</DialogClose></div>
-              <DialogDescription class="dialog-description">Profiles are names used to assign character ownership and a game's GM. They do not create login accounts or restrict access.</DialogDescription>
-              <form @submit.prevent="createProfile">
-                <label class="field-label" for="profile-name">Name</label>
-                <input id="profile-name" v-model="profileName" class="text-input" maxlength="120" required autocomplete="off" placeholder="e.g. Alex" />
-                <p v-if="profileFormError" class="field-error" role="alert">{{ profileFormError }}</p>
-                <div class="form-actions"><DialogClose class="secondary-button">Cancel</DialogClose><button class="primary-button" type="submit" :disabled="profileSaving">{{ profileSaving ? 'Saving…' : 'Create profile' }}</button></div>
-              </form>
-            </DialogContent>
-          </DialogPortal>
-        </DialogRoot>
-      </section>
+    <div class="feedback-slot">
+      <FeedbackRegion v-if="error" tone="error" action-label="Try again" @action="load">{{ error }}</FeedbackRegion>
+      <FeedbackRegion v-else-if="loading">Loading game…</FeedbackRegion>
+    </div>
 
+    <template v-if="game">
       <form v-if="formOpen" class="editor-panel" @submit.prevent="saveCharacter">
         <h2>{{ editingId ? 'Rename character' : 'Add a character' }}</h2>
         <label class="field-label" for="character-name">Character name</label>
@@ -206,22 +188,67 @@ async function deleteEmptyGame() {
         <div class="form-actions"><button class="secondary-button" type="button" @click="formOpen = false">Cancel</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? 'Saving…' : 'Save character' }}</button></div>
       </form>
 
+      <details class="management-panel game-management">
+        <summary>
+          <span>Game management</span>
+          <span class="management-summary">{{ game.expand?.gm_profile?.name ?? 'No GM assigned' }} · {{ characters.length }} {{ characters.length === 1 ? 'character' : 'characters' }}</span>
+        </summary>
+        <div class="management-body">
+          <section class="gm-settings" aria-labelledby="gm-title">
+            <div class="gm-copy"><p class="eyebrow">GAME MASTER</p><h2 id="gm-title">{{ game.expand?.gm_profile?.name ?? 'Not assigned' }}</h2><p class="muted-hint">Profiles organize ownership and preferences; they are not accounts or access controls.</p></div>
+            <label class="field-label gm-select-label" for="gm-profile">Assign GM
+              <select id="gm-profile" class="select-input" :value="game.gm_profile" :disabled="updatingGm" @change="assignGameMaster(($event.target as HTMLSelectElement).value)">
+                <option value="">Not assigned</option>
+                <option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
+              </select>
+            </label>
+            <DialogRoot v-model:open="profileFormOpen">
+              <DialogTrigger class="secondary-button" @click="profileFormError = ''">New profile</DialogTrigger>
+              <DialogPortal>
+                <DialogOverlay class="dialog-overlay" />
+                <DialogContent class="dialog-content">
+                  <div class="dialog-heading"><div><p class="eyebrow">LOCAL PROFILE</p><DialogTitle class="dialog-title">Create a profile</DialogTitle></div><DialogClose class="icon-button" aria-label="Close profile form">×</DialogClose></div>
+                  <DialogDescription class="dialog-description">Profiles are names used to assign character ownership and a game's GM. They do not create login accounts or restrict access.</DialogDescription>
+                  <form @submit.prevent="createProfile">
+                    <label class="field-label" for="profile-name">Name</label>
+                    <input id="profile-name" v-model="profileName" class="text-input" maxlength="120" required autocomplete="off" placeholder="e.g. Alex" />
+                    <p v-if="profileFormError" class="field-error" role="alert">{{ profileFormError }}</p>
+                    <div class="form-actions"><DialogClose class="secondary-button">Cancel</DialogClose><button class="primary-button" type="submit" :disabled="profileSaving">{{ profileSaving ? 'Saving…' : 'Create profile' }}</button></div>
+                  </form>
+                </DialogContent>
+              </DialogPortal>
+            </DialogRoot>
+          </section>
+
+          <div class="management-footer"><button class="danger-button" type="button" :disabled="characters.length > 0" :title="characters.length ? 'Delete the characters first' : 'Delete this empty game'" @click="deleteEmptyGame">Delete empty game</button><span v-if="characters.length" class="muted-hint">Delete characters before deleting this game.</span></div>
+        </div>
+      </details>
+
       <div v-if="characters.length" class="character-list" aria-label="Game characters">
         <article v-for="character in characters" :key="character.id" class="character-management-row">
           <div class="game-icon" aria-hidden="true">✧</div>
           <div class="game-copy"><h2>{{ character.name }}</h2><p>{{ character.expand?.owner?.name ? `Owned by ${character.expand.owner.name}` : 'No owner assigned' }}</p></div>
-          <label class="owner-field" :for="`owner-${character.id}`">Owner
-            <select :id="`owner-${character.id}`" class="select-input" :value="character.owner" :disabled="updatingOwner === character.id" @change="assignOwner(character, ($event.target as HTMLSelectElement).value)">
-              <option value="">Unassigned</option>
-              <option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
-            </select>
-          </label>
-          <div class="row-actions"><RouterLink class="secondary-link" :to="{ name: 'character-overview', params: { characterId: character.id } }">Overview</RouterLink><button class="secondary-button" type="button" @click="beginEdit(character)">Rename</button><button class="danger-button" type="button" @click="deleteCharacter(character)">Delete</button></div>
+          <div class="row-actions">
+            <RouterLink class="secondary-link" :to="{ name: 'character-overview', params: { characterId: character.id } }">Open character</RouterLink>
+            <ActionMenu :label="`Character actions for ${character.name}`">
+              <ActionMenuItem @select="beginEdit(character)">Rename character</ActionMenuItem>
+              <ActionMenuItem danger @select="deleteCharacter(character)">Delete character</ActionMenuItem>
+            </ActionMenu>
+          </div>
+          <details class="row-management">
+            <summary>Ownership for {{ character.name }}</summary>
+            <div class="row-management-body">
+              <label class="owner-field" :for="`owner-${character.id}`">Owner
+                <select :id="`owner-${character.id}`" class="select-input" :value="character.owner" :disabled="updatingOwner === character.id" @change="assignOwner(character, ($event.target as HTMLSelectElement).value)">
+                  <option value="">Unassigned</option>
+                  <option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
+                </select>
+              </label>
+            </div>
+          </details>
         </article>
       </div>
       <div v-else class="empty-state compact-empty"><div class="empty-state-icon" aria-hidden="true">✧</div><h2>No characters yet</h2><p>Add the characters who will play in {{ game.name }}.</p><button class="primary-button empty-action" type="button" @click="beginCreate">Add the first character</button></div>
-
-      <div class="management-footer"><button class="danger-button" type="button" :disabled="characters.length > 0" :title="characters.length ? 'Delete the characters first' : 'Delete this empty game'" @click="deleteEmptyGame">Delete empty game</button><span v-if="characters.length" class="muted-hint">Delete characters before deleting this game.</span></div>
     </template>
   </section>
 </template>

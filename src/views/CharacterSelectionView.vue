@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import FeedbackRegion from '../components/FeedbackRegion.vue'
+import PageHeader from '../components/PageHeader.vue'
 import { pb } from '../lib/pocketbase'
 
-type CharacterRecord = { id: string; name: string; game: string; owner?: string; expand?: { game?: { id: string; name: string; system: string } } }
+type CharacterRecord = { id: string; name: string; game: string; owner?: string; expand?: { game?: { id: string; name: string; system: string; encounter_visible?: boolean } } }
 
 const router = useRouter()
 const characters = ref<CharacterRecord[]>([])
@@ -56,16 +58,24 @@ function clearSelection() {
 function viewCharacter(character: CharacterRecord) {
   router.push({ name: 'character-overview', params: { characterId: character.id } })
 }
+
+function chooseCharacter(character: CharacterRecord) {
+  select(character)
+  viewCharacter(character)
+}
 </script>
 
 <template>
   <section class="screen" aria-labelledby="page-title">
-    <div class="screen-heading">
-      <div>
-        <p class="eyebrow"><span class="eyebrow-line" /> PLAYER SPACE</p>
-        <h1 id="page-title">Choose your character</h1>
-        <p class="screen-description">Choose a character on this device. No account or separate profile is needed.</p>
-      </div>
+    <PageHeader
+      eyebrow="PLAYER SPACE"
+      title="Choose your character"
+      description="Select a character to open its workspace. No account or separate profile is needed."
+    />
+
+    <div class="feedback-slot">
+      <FeedbackRegion v-if="error" tone="error" action-label="Try again" @action="load">{{ error }}</FeedbackRegion>
+      <FeedbackRegion v-else-if="loading">Loading characters…</FeedbackRegion>
     </div>
 
     <div v-if="selectedCharacter" class="selected-character" role="status">
@@ -74,22 +84,23 @@ function viewCharacter(character: CharacterRecord) {
       <h2>{{ selectedCharacter.name }}</h2>
       <p>{{ selectedCharacter.expand?.game?.name ?? 'Game' }}</p>
       <div class="selection-actions">
-        <button class="primary-button" type="button" @click="viewCharacter(selectedCharacter)">Character overview</button>
+        <button class="primary-button" type="button" @click="viewCharacter(selectedCharacter)">Resume character</button>
+        <RouterLink class="secondary-link" :to="{ name: 'character-inventory', params: { characterId: selectedCharacter.id } }">Inventory</RouterLink>
+        <RouterLink class="secondary-link" :to="{ name: 'character-spellbooks', params: { characterId: selectedCharacter.id } }">Spellbooks</RouterLink>
+        <RouterLink v-if="selectedCharacter.expand?.game?.encounter_visible" class="secondary-link" :to="{ name: 'player-encounter', params: { gameId: selectedCharacter.game } }">Active encounter</RouterLink>
         <button class="secondary-button" type="button" @click="clearSelection">Switch character</button>
       </div>
     </div>
 
-    <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Try again</button></p>
-    <div v-if="loading" class="loading-state" role="status">Loading characters…</div>
-    <div v-else-if="characters.length" class="character-grid" aria-label="Available characters">
-      <button v-for="character in characters" :key="character.id" class="character-card" :class="{ 'is-selected': character.id === selectedId }" type="button" @click="select(character)">
+    <div v-if="!loading && characters.length" class="character-grid" aria-label="Available characters">
+      <button v-for="character in characters" :key="character.id" class="character-card" :class="{ 'is-selected': character.id === selectedId }" type="button" @click="chooseCharacter(character)">
         <span class="character-avatar" aria-hidden="true">✧</span>
         <span class="character-name">{{ character.name }}</span>
         <span class="character-game">{{ character.expand?.game?.name ?? 'Game' }}</span>
-        <span class="character-select-label">{{ character.id === selectedId ? 'Selected' : 'Select character' }}</span>
+        <span class="character-select-label">{{ character.id === selectedId ? 'Open selected character' : 'Open character' }}</span>
       </button>
     </div>
-    <div v-else-if="!selectedCharacter" class="empty-state">
+    <div v-else-if="!loading && !error && !selectedCharacter" class="empty-state">
       <div class="empty-state-icon" aria-hidden="true">✧</div>
       <p class="eyebrow">READY WHEN YOU ARE</p>
       <h2>No characters to choose from</h2>

@@ -135,7 +135,9 @@ async function deleteGame(game: GameRecord) {
           <p>{{ game.expand?.system?.name ?? 'Unknown system' }}</p>
         </div>
         <div class="row-actions">
-          <RouterLink class="secondary-link" :to="{ name: 'game-characters', params: { gameId: game.id } }">Open</RouterLink>
+          <RouterLink class="secondary-link" :to="{ name: 'game-characters', params: { gameId: game.id } }">Open game</RouterLink>
+          <RouterLink class="secondary-link" :to="{ name: 'game-encounters', params: { gameId: game.id } }">Encounters</RouterLink>
+          <RouterLink class="secondary-link" :to="{ name: 'game-tables', params: { gameId: game.id } }">Tables</RouterLink>
           <ActionMenu :label="`Game actions for ${game.name}`">
             <ActionMenuItem @select="beginEdit(game)">Edit game</ActionMenuItem>
             <ActionMenuItem danger @select="deleteGame(game)">Delete game</ActionMenuItem>
