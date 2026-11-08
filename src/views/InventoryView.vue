@@ -8,7 +8,7 @@ import type { CatalogRecord } from '../lib/catalog'
 import { guardedUpdate, isConflict, isDefiniteWriteRejection } from '../lib/records'
 import { inventoryRows } from '../lib/inventory'
 import { systemForGame } from '../lib/systems'
-import { coinWeight as calculateCoinWeight, totalBalances, type Balances } from '../lib/currency'
+import { balanceDraft, coinWeight as calculateCoinWeight, mergeBalances, nonZeroBalances, parseBalanceDraft, totalBalances, unsupportedBalanceEntries, type Balances } from '../lib/currency'
 
 type Character = { id: string; name: string; game: string }
 type Inventory = { id: string; updated: string; game: string; character: string; capacity: number; capacity_known: boolean; balances: Record<string, number> | null }
@@ -33,6 +33,8 @@ const transferTarget = ref('')
 const coinTransferAmount = ref(1)
 const coinTransferDenomination = ref('')
 const coinTransferTarget = ref('')
+const coinTransferOpen = ref(false)
+const coinTransferPending = ref(false)
 const loading = ref(true)
 const error = ref('')
 const pickerOpen = ref(false)
@@ -45,7 +47,6 @@ const customNotes = ref('')
 const customContainer = ref(false)
 const editing = ref('')
 const editingSnapshot = ref<InventoryItem | null>(null)
-const coinSnapshot = ref<Inventory | Stash | null>(null)
 const quantityDraft = ref(1)
 const notesDraft = ref('')
 const weightDraft = ref('')
@@ -53,7 +54,23 @@ const weightKnownDraft = ref(false)
 const containerDraft = ref(false)
 const parentDraft = ref('')
 const capacityDraft = ref('')
+const capacitySnapshot = ref<Inventory | null>(null)
+const editingCapacity = ref(false)
+const capacityPending = ref(false)
+const capacityUncertain = ref(false)
+const capacityRefreshFailed = ref(false)
+const capacityConflict = ref<{ current: Inventory | null } | null>(null)
+const capacityFeedback = ref('')
 const coins = ref<Balances>({})
+const partyTotal = ref<Balances>({})
+const currencyDraft = ref<Record<string, string>>({})
+const currencySnapshot = ref<Inventory | Stash | null>(null)
+const editingCurrency = ref(false)
+const currencyPending = ref(false)
+const currencyUncertain = ref(false)
+const currencyRefreshFailed = ref(false)
+const currencyConflict = ref<{ current: Inventory | Stash | null } | null>(null)
+const currencyFeedback = ref('')
 const game = ref<{ system: string; expand?: { system?: { key: string } } } | null>(null)
 const searchQuery = ref('')
 const collapsedContainers = ref<Set<string>>(new Set())
@@ -70,12 +87,29 @@ const customUncertain = ref(false)
 const systemId = computed(() => game.value?.system ?? '')
 const currency = computed(() => systemForGame(game.value).currency)
 const denominations = computed(() => currency.value.denominations)
-const unsupportedBalances = computed(() => Object.entries(coins.value).filter(([key, value]) => value !== 0 && !denominations.value.some((entry) => entry.key === key)))
+const unsupportedBalances = computed(() => unsupportedBalanceEntries(coins.value, denominations.value))
 const weightUnit = computed(() => currency.value.weightUnit ?? 'units')
 const activeStash = computed(() => stashes.value.find((entry) => entry.id === selectedStashId.value) ?? null)
 const activeStoreLabel = computed(() => activeStash.value?.name ?? 'Carried inventory')
 const displayedCoinWeight = computed(() => calculateCoinWeight(coins.value, currency.value))
-const partyTotal = ref<Balances>({})
+const coinWeightSummary = computed(() => {
+  if (!denominations.value.length) return 'Unknown for this system; retained balances are not converted.'
+  if (displayedCoinWeight.value === null) return 'Unknown — a retained balance or coin weight is unknown'
+  return `${displayedCoinWeight.value.toFixed(2)} ${weightUnit.value}`
+})
+const currentBalances = computed(() => nonZeroBalances(coins.value, denominations.value))
+const partyTotalBalances = computed(() => nonZeroBalances(partyTotal.value, denominations.value))
+const partyTotalKeys = computed(() => Object.entries(partyTotal.value).filter(([key, amount]) => amount !== 0 && !denominations.value.some((entry) => entry.key === key)))
+const storePending = computed(() => currencyPending.value || coinTransferPending.value || capacityPending.value)
+const storeUnresolved = computed(() => currencyUncertain.value || currencyRefreshFailed.value || capacityUncertain.value || capacityRefreshFailed.value)
+const storeConflict = computed(() => Boolean(currencyConflict.value) || Boolean(capacityConflict.value))
+const storeLocked = computed(() => storePending.value || storeUnresolved.value || storeConflict.value)
+const storeDirty = computed(() => editingCurrency.value || editingCapacity.value || coinTransferOpen.value)
+const storeSwitchLocked = computed(() => storeLocked.value || storeDirty.value)
+const currencyEditBlocked = computed(() => storeLocked.value || editingCapacity.value || coinTransferOpen.value)
+const capacityEditBlocked = computed(() => storeLocked.value || editingCurrency.value || coinTransferOpen.value)
+const transferOpenBlocked = computed(() => storeLocked.value || editingCurrency.value || editingCapacity.value)
+const hasStoreReconciliation = computed(() => storeUnresolved.value)
 const containerCount = computed(() => items.value.filter((item) => item.is_container).length)
 const inventoryDisplay = computed(() => inventoryRows(items.value, {
   collapsed: collapsedContainers.value,
@@ -93,6 +127,7 @@ const matchedItemCount = computed(() => inventoryDisplay.value.matched)
 const totalItemCount = computed(() => inventoryDisplay.value.total)
 const searchActive = computed(() => searchQuery.value.trim() !== '')
 const hasItemReconciliation = computed(() => Object.keys(uncertainItems.value).length > 0 || Object.keys(refreshFailedItems.value).length > 0 || customUncertain.value)
+const needsReconciliation = computed(() => hasItemReconciliation.value || hasStoreReconciliation.value)
 const transferTargets = computed(() => [
   ...(inventory.value && !activeStash.value ? [] : inventory.value ? [{ key: `inventory:${inventory.value.id}`, name: `${character.value?.name}’s inventory` }] : []),
   ...otherCharacters.value.map((entry) => ({ key: `character:${entry.id}`, name: `${entry.name}’s inventory` })),
@@ -131,19 +166,29 @@ async function refreshAfterReconnect() { await refreshLiveInventory(); await sub
 async function refreshLiveInventory() {
   if (!character.value || !inventory.value) return
   try {
-    inventory.value = await pb.collection('inventories').getOne<Inventory>(inventory.value.id, { requestKey: null })
-    await loadStashes()
+    await refreshStoreRecords()
     await loadItems()
-    if (!coinSnapshot.value) {
-      const store = activeStash.value ?? inventory.value
-      coins.value = storeBalances(store)
-    }
   } catch { if (!error.value) error.value = 'Live inventory could not be refreshed. Check the connection.' }
+}
+async function refreshStoreRecords() {
+  if (!inventory.value) return
+  inventory.value = await pb.collection('inventories').getOne<Inventory>(inventory.value.id, { requestKey: null })
+  await loadStashes()
+  const store = activeStash.value ?? inventory.value
+  coins.value = storeBalances(store)
+  if (currencyConflict.value) currencyConflict.value = { current: store ? { ...store } : null }
+  if (capacityConflict.value) capacityConflict.value = { current: inventory.value ? { ...inventory.value } : null }
+  if (!editingCapacity.value && !capacityUncertain.value) capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
 }
 watch(selectedStashId, () => {
   const store = activeStash.value ?? inventory.value
   coins.value = storeBalances(store)
-  editing.value = ''; editingSnapshot.value = null; coinSnapshot.value = null; movingItemId.value = ''; coinTransferTarget.value = ''; editingStash.value = false
+  editing.value = ''; editingSnapshot.value = null; movingItemId.value = ''; coinTransferTarget.value = ''; editingStash.value = false
+  editingCurrency.value = false; currencyDraft.value = {}; currencySnapshot.value = null; currencyConflict.value = null; coinTransferOpen.value = false
+  editingCapacity.value = false; capacitySnapshot.value = null; capacityConflict.value = null
+  capacityDraft.value = inventory.value?.capacity_known ? String(inventory.value.capacity) : ''
+  if (!currencyUncertain.value && !currencyRefreshFailed.value) currencyFeedback.value = ''
+  if (!capacityUncertain.value && !capacityRefreshFailed.value) capacityFeedback.value = ''
   searchQuery.value = ''
   collapsedContainers.value = new Set()
   rowFeedback.value = null
@@ -163,7 +208,7 @@ async function load() {
     const found = await pb.collection('inventories').getFullList<Inventory>({ filter: pb.filter('character = {:character}', { character: character.value.id }), perPage: 2 })
     inventory.value = found[0] ?? await ensureInventory(character.value.id)
     if (generation !== inventoryGeneration) return
-    capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
+    if (!editingCapacity.value && !capacityUncertain.value) capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
     coins.value = storeBalances(inventory.value)
     await loadStashes()
     const activeStore = activeStash.value ?? inventory.value
@@ -207,10 +252,10 @@ async function ensureInventory(characterId: string): Promise<Inventory> {
 
 async function loadStashes() {
   if (!character.value) return
-  stashes.value = await pb.collection('stashes').getFullList<Stash>({ filter: pb.filter('game = {:game}', { game: character.value.game }), sort: 'kind,name' })
+  stashes.value = await pb.collection('stashes').getFullList<Stash>({ filter: pb.filter('game = {:game}', { game: character.value.game }), sort: 'kind,name', requestKey: null })
   if (!stashes.value.some((entry) => entry.kind === 'party')) {
     try { await pb.collection('stashes').create({ game: character.value.game, kind: 'party', name: 'Party stash' }) } catch { /* Another client may have created it. */ }
-    stashes.value = await pb.collection('stashes').getFullList<Stash>({ filter: pb.filter('game = {:game}', { game: character.value.game }), sort: 'kind,name' })
+    stashes.value = await pb.collection('stashes').getFullList<Stash>({ filter: pb.filter('game = {:game}', { game: character.value.game }), sort: 'kind,name', requestKey: null })
   }
   stashes.value = stashes.value.filter((entry) => entry.kind !== 'personal' || entry.owner === character.value?.id)
   await refreshPartyTotal()
@@ -220,8 +265,8 @@ async function refreshPartyTotal() {
   if (!character.value) return
   try {
     const [inventories, party] = await Promise.all([
-      pb.collection('inventories').getFullList<Inventory>({ filter: pb.filter('game = {:game} && character != ""', { game: character.value.game }), fields: 'balances' }),
-      pb.collection('stashes').getFirstListItem<Stash>(pb.filter('game = {:game} && kind = "party"', { game: character.value.game }), { fields: 'balances' }),
+      pb.collection('inventories').getFullList<Inventory>({ filter: pb.filter('game = {:game} && character != ""', { game: character.value.game }), fields: 'balances', requestKey: null }),
+      pb.collection('stashes').getFirstListItem<Stash>(pb.filter('game = {:game} && kind = "party"', { game: character.value.game }), { fields: 'balances', requestKey: null }),
     ])
     partyTotal.value = totalBalances([party.balances, ...inventories.map((entry) => entry.balances)])
   } catch { /* Party total is secondary to the active inventory view. */ }
@@ -262,9 +307,65 @@ async function loadItemById(id: string): Promise<InventoryItem | null> {
   try { return await pb.collection('inventory_items').getOne<InventoryItem>(id, { expand: 'catalog_item', requestKey: null }) }
   catch { return null }
 }
-function recoverInventory() {
-  if (hasItemReconciliation.value) void reconcileItems()
-  else void load()
+async function recoverInventory() {
+  const itemsNeedRefresh = hasItemReconciliation.value
+  const storeNeedsRefresh = hasStoreReconciliation.value
+  if (!itemsNeedRefresh && !storeNeedsRefresh) { await load(); return }
+  let storeMessage = ''
+  if (storeNeedsRefresh) {
+    const result = await reconcileStore()
+    if (result === null) return
+    storeMessage = result
+  }
+  let itemMessage = ''
+  if (itemsNeedRefresh) {
+    await reconcileItems()
+    itemMessage = reconciliationMessage.value
+  }
+  reconciliationMessage.value = [storeMessage, itemMessage].filter(Boolean).join(' ')
+}
+async function reconcileStore(): Promise<string | null> {
+  error.value = ''
+  const hadCurrency = currencyUncertain.value || currencyRefreshFailed.value
+  const hadCapacity = capacityUncertain.value || capacityRefreshFailed.value
+  const hadCurrencyConflict = Boolean(currencyConflict.value)
+  const hadCapacityConflict = Boolean(capacityConflict.value)
+  const hadUncertain = currencyUncertain.value || capacityUncertain.value
+  try { await refreshStoreRecords() } catch {
+    error.value = 'Inventory could not be refreshed. Check the connection and try again.'
+    return null
+  }
+  currencyUncertain.value = false
+  currencyRefreshFailed.value = false
+  capacityUncertain.value = false
+  capacityRefreshFailed.value = false
+  if (hadCurrencyConflict) {
+    const store = currentStore()
+    currencyConflict.value = { current: store ? { ...store } : null }
+    currencyFeedback.value = ''
+  } else if (hadCurrency) {
+    editingCurrency.value = false
+    currencySnapshot.value = null
+    currencyDraft.value = {}
+    currencyConflict.value = null
+    coinTransferOpen.value = false
+    currencyFeedback.value = ''
+  }
+  if (hadCapacityConflict) {
+    capacityConflict.value = { current: inventory.value ? { ...inventory.value } : null }
+    capacityFeedback.value = ''
+  } else if (hadCapacity) {
+    editingCapacity.value = false
+    capacitySnapshot.value = null
+    capacityConflict.value = null
+    capacityFeedback.value = ''
+    capacityDraft.value = inventory.value?.capacity_known ? String(inventory.value.capacity) : ''
+  }
+  if (!hadCurrency && !hadCapacity) return ''
+  if (hadCurrencyConflict || hadCapacityConflict) return 'Inventory values refreshed. Your draft and guard were kept; choose Keep my draft or Discard draft to resolve the conflict.'
+  return hadUncertain
+    ? 'Inventory balances refreshed. If an uncertain change appears later, do not repeat it; a delayed write may still arrive.'
+    : 'Inventory balances refreshed after a confirmed write. Current values are now shown.'
 }
 async function reconcileItems() {
   error.value = ''
@@ -300,6 +401,12 @@ function currentItemSummary(item: InventoryItem | null): string {
   if (!item) return 'Current saved values could not be loaded.'
   const container = item.container ? items.value.find((entry) => entry.id === item.container)?.name ?? 'another container' : 'carried outside containers'
   return `Quantity ${item.quantity} · ${item.weight_known ? `${item.weight} ${weightUnit.value}` : 'Weight unknown'} · Inside ${container} · Notes: ${item.notes?.trim() || 'none'}`
+}
+function currentCurrencySummary(store: Inventory | Stash | null): string {
+  if (!store) return 'Current saved balances could not be loaded.'
+  const supported = nonZeroBalances(store.balances, denominations.value).map((entry) => `${entry.amount} ${entry.label}`)
+  const retained = unsupportedBalanceEntries(store.balances, denominations.value).map((entry) => `${entry.amount} ${entry.key}`)
+  return [...supported, ...retained].join(' · ') || 'No coins recorded'
 }
 function rebaseEditConflict(item: InventoryItem) {
   const conflict = editConflict.value
@@ -561,11 +668,45 @@ async function transferItem(item: InventoryItem) {
   }
 }
 async function transferCoins() {
-  if (!coinTransferTarget.value || !Number.isInteger(coinTransferAmount.value) || coinTransferAmount.value < 1) { error.value = 'Choose a destination and a positive whole coin amount.'; return }
+  if (!coinTransferOpen.value || storeLocked.value) return
+  if (!coinTransferTarget.value || !Number.isSafeInteger(coinTransferAmount.value) || coinTransferAmount.value < 1) {
+    currencyFeedback.value = 'Choose a destination and a positive whole coin amount.'
+    return
+  }
+  if (!coinTransferDenomination.value || !denominations.value.some((entry) => entry.key === coinTransferDenomination.value)) {
+    currencyFeedback.value = 'Choose a supported denomination.'
+    return
+  }
+  const source = currentEndpoint()
+  const sourceId = activeStash.value?.id ?? inventory.value?.id ?? ''
+  currencyFeedback.value = ''
+  coinTransferPending.value = true
   try {
-    await pb.send('/api/olea/transfers/coins', { method: 'POST', body: { source: currentEndpoint(), destination: await endpoint(coinTransferTarget.value), denomination: coinTransferDenomination.value, amount: coinTransferAmount.value } })
-    await load(); await refreshPartyTotal()
-  } catch (cause) { error.value = transferError(cause, 'Coins could not be transferred.') }
+    const destination = await endpoint(coinTransferTarget.value)
+    if ((activeStash.value?.id ?? inventory.value?.id ?? '') !== sourceId) {
+      currencyFeedback.value = 'The active store changed before the transfer started. Choose the destination again.'
+      return
+    }
+    await pb.send('/api/olea/transfers/coins', { method: 'POST', body: { source, destination, denomination: coinTransferDenomination.value, amount: coinTransferAmount.value } })
+    coinTransferOpen.value = false
+    coinTransferAmount.value = 1
+    try { await refreshStoreRecords(); await refreshPartyTotal() } catch {
+      currencyRefreshFailed.value = true
+      currencyFeedback.value = 'Coins were transferred, but the inventory could not refresh. Refresh before making another change.'
+      error.value = currencyFeedback.value
+    }
+  } catch (cause) {
+    if (!isDefiniteWriteRejection(cause)) {
+      currencyUncertain.value = true
+      currencyFeedback.value = 'Could not confirm whether the coins were transferred because the connection failed. Refresh before trying again; a delayed transfer may still arrive.'
+      error.value = currencyFeedback.value
+    } else {
+      currencyFeedback.value = transferError(cause, 'Coins could not be transferred.')
+      error.value = currencyFeedback.value
+    }
+  } finally {
+    coinTransferPending.value = false
+  }
 }
 function transferError(cause: unknown, fallback: string): string {
   if (cause && typeof cause === 'object' && 'response' in cause) {
@@ -599,33 +740,171 @@ function isDescendant(candidateId: string, ancestorId: string): boolean {
   }
   return false
 }
+function currentStore(): Inventory | Stash | null { return activeStash.value ?? inventory.value }
+function beginCapacityEdit() {
+  if (!inventory.value || storeLocked.value || editingCurrency.value || coinTransferOpen.value) return
+  capacitySnapshot.value = { ...inventory.value }
+  capacityDraft.value = inventory.value.capacity_known ? String(inventory.value.capacity) : ''
+  capacityConflict.value = null
+  editingCapacity.value = true
+  capacityFeedback.value = ''
+}
+function cancelCapacityEdit() {
+  if (storeLocked.value) return
+  editingCapacity.value = false
+  capacitySnapshot.value = null
+  capacityConflict.value = null
+  capacityDraft.value = inventory.value?.capacity_known ? String(inventory.value.capacity) : ''
+  capacityFeedback.value = ''
+}
 async function saveCapacity() {
-  if (!inventory.value) return
+  if (!inventory.value || storeLocked.value || !editingCapacity.value) return
   const capacityText = String(capacityDraft.value ?? '').trim()
   const value = capacityText ? Number(capacityText) : 0
-  if (!Number.isFinite(value) || value < 0) { error.value = 'Capacity must be zero or a positive number.'; return }
-  try { await guardedUpdate('inventories', inventory.value, { capacity: value, capacity_known: capacityText !== '' }); await load() }
-  catch (cause) { await load(); error.value = isConflict(cause) ? 'Inventory changed elsewhere. Current values were refreshed.' : 'Capacity could not be saved.' }
-}
-async function saveCoins(denomination: string) {
-  if (!inventory.value) return
-  if (!Number.isSafeInteger(coins.value[denomination]) || coins.value[denomination] < 0) { error.value = 'Coin balances must be nonnegative whole numbers.'; return }
+  if (!Number.isFinite(value) || value < 0) { capacityFeedback.value = 'Capacity must be zero or a positive number.'; return }
+  const snapshot = capacitySnapshot.value
+  if (!snapshot || snapshot.id !== inventory.value.id) { capacityFeedback.value = 'The active inventory changed. Refresh before saving capacity.'; return }
+  capacityPending.value = true
+  capacityFeedback.value = ''
   try {
-    const snapshot = coinSnapshot.value ?? activeStash.value ?? inventory.value
-    const update = { balances: { ...(snapshot.balances ?? {}), [denomination]: coins.value[denomination] } }
-    if (coinSnapshot.value && coinSnapshot.value.id !== (activeStash.value ?? inventory.value).id) throw new Error('The active store changed.')
-    if (activeStash.value) {
-      await guardedUpdate('stashes', coinSnapshot.value?.id === activeStash.value.id ? coinSnapshot.value : activeStash.value, update)
-      await load()
-      await refreshPartyTotal()
+    await guardedUpdate('inventories', snapshot, { capacity: value, capacity_known: capacityText !== '' })
+    editingCapacity.value = false
+    capacitySnapshot.value = null
+    capacityConflict.value = null
+    try { await refreshStoreRecords() } catch {
+      capacityRefreshFailed.value = true
+      capacityFeedback.value = 'Capacity was saved, but the inventory could not refresh. Refresh before editing it again.'
+      error.value = capacityFeedback.value
     }
-    else { await guardedUpdate('inventories', coinSnapshot.value?.id === inventory.value.id ? coinSnapshot.value : inventory.value, update); await load() }
-    if (!activeStash.value) await refreshPartyTotal()
+  } catch (cause) {
+    if (isConflict(cause)) {
+      try { await refreshStoreRecords() } catch {
+        capacityConflict.value = { current: null }
+        capacityRefreshFailed.value = true
+        capacityFeedback.value = ''
+        error.value = 'Capacity changed elsewhere and the current values could not be loaded. Your draft and guard are still here; use Refresh inventory before choosing Keep my draft or Discard draft.'
+        return
+      }
+      capacityConflict.value = { current: inventory.value ? { ...inventory.value } : null }
+      capacityFeedback.value = ''
+    } else if (!isDefiniteWriteRejection(cause)) {
+      capacityUncertain.value = true
+      capacityFeedback.value = 'Could not confirm whether capacity was saved because the connection failed. Your draft is still here; refresh before saving again because a delayed write may still arrive.'
+      error.value = capacityFeedback.value
+    } else {
+      capacityFeedback.value = 'Capacity could not be saved. Your draft is still here; adjust it and try again.'
+      error.value = capacityFeedback.value
+    }
+  } finally {
+    capacityPending.value = false
   }
-  catch (cause) { await load(); error.value = isConflict(cause) ? 'Coin balance changed elsewhere. Current balances were refreshed.' : 'Coin balances could not be saved.' }
-  finally { coinSnapshot.value = null }
 }
-function beginCoinEdit() { const store = activeStash.value ?? inventory.value; coinSnapshot.value = store ? { ...store } : null }
+function rebaseCapacityConflict() {
+  const current = capacityConflict.value?.current
+  if (!current) return
+  capacitySnapshot.value = { ...current }
+  capacityConflict.value = null
+  capacityFeedback.value = 'Your draft is still here and the guard now uses the latest saved capacity. Save again when ready.'
+}
+function discardCapacityConflict() {
+  capacityConflict.value = null
+  editingCapacity.value = false
+  capacitySnapshot.value = null
+  capacityDraft.value = inventory.value?.capacity_known ? String(inventory.value.capacity) : ''
+  capacityFeedback.value = ''
+}
+function beginCurrencyEdit() {
+  if (storeLocked.value || editingCapacity.value || coinTransferOpen.value || !denominations.value.length) return
+  const store = currentStore()
+  if (!store) return
+  currencySnapshot.value = { ...store }
+  currencyDraft.value = balanceDraft(store.balances, denominations.value)
+  currencyConflict.value = null
+  editingCurrency.value = true
+  coinTransferOpen.value = false
+  currencyFeedback.value = ''
+}
+function cancelCurrencyEdit() {
+  if (storeLocked.value) return
+  editingCurrency.value = false
+  currencySnapshot.value = null
+  currencyConflict.value = null
+  currencyDraft.value = {}
+  currencyFeedback.value = ''
+}
+async function saveCurrency() {
+  if (storeLocked.value || !editingCurrency.value) return
+  const snapshot = currencySnapshot.value
+  const store = currentStore()
+  if (!snapshot || !store || snapshot.id !== store.id) { currencyFeedback.value = 'The active store changed. Refresh before saving balances.'; return }
+  const parsed = parseBalanceDraft(currencyDraft.value, denominations.value)
+  if ('error' in parsed) { currencyFeedback.value = parsed.error; return }
+  currencyPending.value = true
+  currencyFeedback.value = ''
+  try {
+    const update = { balances: mergeBalances(snapshot.balances, parsed.values) }
+    if (activeStash.value) await guardedUpdate('stashes', snapshot, update)
+    else await guardedUpdate('inventories', snapshot, update)
+    editingCurrency.value = false
+    currencySnapshot.value = null
+    currencyConflict.value = null
+    currencyDraft.value = {}
+    try { await refreshStoreRecords() } catch {
+      currencyRefreshFailed.value = true
+      currencyFeedback.value = 'Balances were saved, but the inventory could not refresh. Refresh before editing again.'
+      error.value = currencyFeedback.value
+    }
+  } catch (cause) {
+    if (isConflict(cause)) {
+      try { await refreshStoreRecords() } catch {
+        currencyConflict.value = { current: null }
+        currencyRefreshFailed.value = true
+        currencyFeedback.value = ''
+        error.value = 'Balances changed elsewhere and the current values could not be loaded. Your draft and guard are still here; use Refresh inventory before choosing Keep my draft or Discard draft.'
+        return
+      }
+      const current = currentStore()
+      currencyConflict.value = { current: current ? { ...current } : null }
+      currencyFeedback.value = ''
+    } else if (!isDefiniteWriteRejection(cause)) {
+      currencyUncertain.value = true
+      currencyFeedback.value = 'Could not confirm whether the balances were saved because the connection failed. Your draft is still here; refresh before saving again because a delayed write may still arrive.'
+      error.value = currencyFeedback.value
+    } else {
+      currencyFeedback.value = 'Balances could not be saved. Your draft is still here; adjust it and try again.'
+      error.value = currencyFeedback.value
+    }
+  } finally {
+    currencyPending.value = false
+  }
+}
+function rebaseCurrencyConflict() {
+  const current = currencyConflict.value?.current
+  if (!current) return
+  currencySnapshot.value = { ...current }
+  currencyConflict.value = null
+  currencyFeedback.value = 'Your draft is still here and the guard now uses the latest saved balances. Save again when ready.'
+}
+function discardCurrencyConflict() {
+  currencyConflict.value = null
+  editingCurrency.value = false
+  currencySnapshot.value = null
+  currencyDraft.value = {}
+  currencyFeedback.value = ''
+  coins.value = storeBalances(currentStore())
+}
+function openCoinTransfer() {
+  if (storeLocked.value || editingCurrency.value || editingCapacity.value || !denominations.value.length || !transferTargets.value.length) return
+  coinTransferOpen.value = true
+  currencyFeedback.value = ''
+  if (!denominations.value.some((entry) => entry.key === coinTransferDenomination.value)) coinTransferDenomination.value = denominations.value[0]?.key ?? ''
+  if (!coinTransferTarget.value) coinTransferTarget.value = transferTargets.value[0]?.key ?? ''
+}
+function cancelCoinTransfer() {
+  if (storeLocked.value) return
+  coinTransferOpen.value = false
+  currencyFeedback.value = ''
+}
 function storeBalances(store: Inventory | Stash | null): Balances { return { ...(store?.balances ?? {}), ...Object.fromEntries(denominations.value.filter((entry) => store?.balances?.[entry.key] === undefined).map((entry) => [entry.key, 0])) } }
 function childCount(item: InventoryItem): number { return items.value.filter((entry) => entry.container === item.id).length }
 </script>
@@ -642,7 +921,7 @@ function childCount(item: InventoryItem): number { return items.value.filter((en
           <button class="secondary-button" type="button" @click="customOpen = !customOpen">Custom item</button>
         </template>
       </PageHeader>
-      <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="recoverInventory">{{ hasItemReconciliation ? 'Refresh inventory' : 'Retry' }}</button></p>
+      <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="recoverInventory">{{ needsReconciliation ? 'Refresh inventory' : 'Retry' }}</button></p>
       <p v-if="reconciliationMessage" class="muted-hint inventory-reconciliation" role="status">{{ reconciliationMessage }}</p>
 
       <section class="inventory-store-panel" aria-labelledby="inventory-store-title">
@@ -655,14 +934,14 @@ function childCount(item: InventoryItem): number { return items.value.filter((en
           <p v-if="activeStash?.notes" class="stash-notes">{{ activeStash.notes }}</p>
         </div>
         <div class="inventory-store-actions">
-          <label class="filter-field" for="inventory-store">View contents<select id="inventory-store" v-model="selectedStashId" class="select-input"><option value="">{{ character.name }}’s inventory</option><option v-for="stash in stashes" :key="stash.id" :value="stash.id">{{ stash.name }} ({{ stash.kind }})</option></select></label>
+          <label class="filter-field" for="inventory-store">View contents<select id="inventory-store" v-model="selectedStashId" class="select-input" :disabled="storeSwitchLocked"><option value="">{{ character.name }}’s inventory</option><option v-for="stash in stashes" :key="stash.id" :value="stash.id">{{ stash.name }} ({{ stash.kind }})</option></select></label>
           <details class="inventory-store-management">
             <summary>Manage stores</summary>
             <div class="inventory-store-management-body">
-              <button class="secondary-button" type="button" @click="stashKind = 'personal'; stashFormOpen = !stashFormOpen">＋ Personal stash</button>
-              <button class="secondary-button" type="button" @click="stashKind = 'location'; stashFormOpen = !stashFormOpen">＋ GM location stash</button>
-              <button v-if="activeStash && !editingStash" class="secondary-button" type="button" @click="beginEditStash">Edit stash</button>
-              <button v-if="activeStash && activeStash.kind !== 'party'" class="danger-button" type="button" @click="deleteStash">Delete stash</button>
+              <button class="secondary-button" type="button" :disabled="storeSwitchLocked" @click="stashKind = 'personal'; stashFormOpen = !stashFormOpen">＋ Personal stash</button>
+              <button class="secondary-button" type="button" :disabled="storeSwitchLocked" @click="stashKind = 'location'; stashFormOpen = !stashFormOpen">＋ GM location stash</button>
+              <button v-if="activeStash && !editingStash" class="secondary-button" type="button" :disabled="storeSwitchLocked" @click="beginEditStash">Edit stash</button>
+              <button v-if="activeStash && activeStash.kind !== 'party'" class="danger-button" type="button" :disabled="storeSwitchLocked" @click="deleteStash">Delete stash</button>
             </div>
           </details>
         </div>
@@ -735,12 +1014,79 @@ function childCount(item: InventoryItem): number { return items.value.filter((en
         </div>
       </section>
 
-      <section v-if="!activeStash" class="weight-summary" aria-label="Carried weight"><div><strong>Carried weight</strong><small>{{ carriedWeight === null ? 'Unknown — an item or coin weight is unknown' : `${carriedWeight.toFixed(2)} ${weightUnit}` }}</small></div><div v-if="inventory" class="capacity-editor"><label class="filter-field" for="carrying-capacity">Capacity ({{ weightUnit }})<input id="carrying-capacity" v-model="capacityDraft" class="text-input" type="number" min="0" step="any" placeholder="Not set" @change="saveCapacity" /></label><strong v-if="inventory.capacity_known && carriedWeight !== null" :class="carriedWeight > inventory.capacity ? 'over-capacity' : 'within-capacity'">{{ carriedWeight > inventory.capacity ? 'Over capacity' : 'Within capacity' }}</strong></div></section>
+      <section v-if="!activeStash" class="weight-summary" aria-labelledby="carrying-weight-title">
+        <div class="weight-summary-copy">
+          <p class="eyebrow">CARRYING</p>
+          <h2 id="carrying-weight-title">Carried weight</h2>
+          <p class="weight-value">{{ carriedWeight === null ? 'Unknown — an item or coin weight is unknown' : `${carriedWeight.toFixed(2)} ${weightUnit}` }}</p>
+          <p class="inventory-store-meta">Coins: {{ coinWeightSummary }}</p>
+          <p v-if="inventory?.capacity_known" class="inventory-store-meta">Capacity: {{ inventory.capacity }} {{ weightUnit }}<template v-if="carriedWeight !== null"> · <span :class="carriedWeight > inventory.capacity ? 'over-capacity' : 'within-capacity'">{{ carriedWeight > inventory.capacity ? 'Over capacity' : 'Within capacity' }}</span></template></p>
+          <p v-else class="inventory-store-meta">Capacity not set.</p>
+          <p v-if="capacityFeedback" class="inventory-row-error" :role="capacityUncertain || capacityRefreshFailed || capacityConflict ? 'alert' : 'status'">{{ capacityFeedback }}</p>
+        </div>
+        <div class="weight-summary-actions">
+          <button v-if="!editingCapacity" class="secondary-button" type="button" :disabled="capacityEditBlocked" @click="beginCapacityEdit">{{ inventory?.capacity_known ? 'Edit capacity' : 'Set capacity' }}</button>
+          <form v-else class="capacity-editor" @submit.prevent="saveCapacity">
+            <div v-if="capacityConflict" class="inventory-conflict" role="alert">
+              <strong>Capacity changed elsewhere</strong>
+              <p v-if="capacityConflict.current">Current saved capacity: {{ capacityConflict.current.capacity_known ? `${capacityConflict.current.capacity} ${weightUnit}` : 'Not set' }}</p>
+              <p v-else>Current saved capacity could not be loaded. Use Refresh inventory before choosing Keep my draft.</p>
+              <p>Your draft is still in the field. Keep it to rebase the guard onto the current record, or discard it.</p>
+              <div class="row-actions"><button class="secondary-button" type="button" :disabled="!capacityConflict.current" @click="rebaseCapacityConflict">Keep my draft</button><button class="secondary-button" type="button" @click="discardCapacityConflict">Discard draft</button></div>
+            </div>
+            <label class="filter-field" for="carrying-capacity">Capacity ({{ weightUnit }})<input id="carrying-capacity" v-model="capacityDraft" class="text-input" type="number" inputmode="decimal" min="0" step="any" placeholder="Not set" :disabled="capacityPending || capacityUncertain || capacityRefreshFailed" /></label>
+            <p class="muted-hint">Direct entry. Leave blank if the capacity is unknown.</p>
+            <div class="row-actions"><button class="primary-button" type="submit" :disabled="storeLocked">{{ capacityPending ? 'Saving…' : 'Save capacity' }}</button><button class="secondary-button" type="button" :disabled="storeLocked" @click="cancelCapacityEdit">Cancel</button></div>
+          </form>
+        </div>
+      </section>
       <p class="muted-hint">Carried weight includes container and contents once, plus coins. Container weights are per container; items with unknown weight make the total unknown.</p>
 
-      <section class="currency-panel"><div><h2>{{ activeStoreLabel }} · Currency</h2><p>Coin weight: {{ displayedCoinWeight === null ? 'Unknown; enter or track manually' : `${displayedCoinWeight.toFixed(2)} ${weightUnit}` }}</p><p v-if="!denominations.length">Currency rules are not configured for this system.</p><p v-if="!activeStash && Object.keys(partyTotal).length">Party total (characters + party stash): <span v-for="(amount, key) in partyTotal" :key="key">{{ amount }} {{ denominations.find((entry) => entry.key === key)?.label ?? key }} · </span></p><p v-if="unsupportedBalances.length">Retained unsupported balances: <span v-for="[key, amount] in unsupportedBalances" :key="key">{{ amount }} {{ key }} · </span></p></div><div class="coin-fields"><label v-for="denomination in denominations" :key="denomination.key" class="filter-field">{{ denomination.label }}<input v-model.number="coins[denomination.key]" class="text-input" type="number" min="0" step="1" @focus="beginCoinEdit" @change="saveCoins(denomination.key)" /></label></div><div v-if="transferTargets.length && denominations.length" class="coin-transfer"><label class="filter-field">Transfer denomination<select v-model="coinTransferDenomination" class="select-input"><option v-for="denomination in denominations" :key="denomination.key" :value="denomination.key">{{ denomination.label }}</option></select></label><label class="filter-field">Amount<input v-model.number="coinTransferAmount" class="text-input" type="number" min="1" step="1" /></label><label class="filter-field">To<select v-model="coinTransferTarget" class="select-input"><option value="">Choose a store</option><option v-for="target in transferTargets" :key="target.key" :value="target.key">{{ target.name }}</option></select></label><button class="secondary-button" type="button" @click="transferCoins">Transfer coins</button></div></section>
+      <section class="currency-panel" aria-labelledby="currency-title">
+        <div class="currency-summary">
+          <div class="currency-copy">
+            <p class="eyebrow">COINS</p>
+            <h2 id="currency-title">{{ activeStoreLabel }} · Currency</h2>
+            <p v-if="!denominations.length" class="inventory-store-meta">Currency rules are not configured for this system. Any retained balances are shown below and are never converted.</p>
+            <ul v-else class="coin-summary" aria-label="Current balances">
+              <li v-for="entry in currentBalances" :key="entry.key"><strong>{{ entry.amount }}</strong> {{ entry.label }}</li>
+              <li v-if="!currentBalances.length" class="coin-summary-empty">No coins recorded.</li>
+            </ul>
+            <p class="inventory-store-meta">Coin weight: {{ coinWeightSummary }}</p>
+            <p v-if="partyTotalBalances.length || partyTotalKeys.length" class="inventory-store-meta">Party total (characters + party stash): <span v-for="entry in partyTotalBalances" :key="entry.key">{{ entry.amount }} {{ entry.label }} · </span><span v-for="[key, amount] in partyTotalKeys" :key="key">{{ amount }} {{ key }} · </span></p>
+            <p v-if="unsupportedBalances.length" class="unsupported-balances">Retained unsupported balances: <span v-for="entry in unsupportedBalances" :key="entry.key">{{ entry.amount }} {{ entry.key }} · </span>These are preserved but not editable or converted.</p>
+            <p v-if="currencyFeedback" class="inventory-row-error" :role="currencyUncertain || currencyRefreshFailed || currencyConflict ? 'alert' : 'status'">{{ currencyFeedback }}</p>
+          </div>
+          <div class="currency-actions">
+            <button v-if="!editingCurrency && denominations.length" class="secondary-button" type="button" :disabled="currencyEditBlocked" @click="beginCurrencyEdit">Edit balances</button>
+            <button v-if="!editingCurrency && !coinTransferOpen && denominations.length && transferTargets.length" class="secondary-button" type="button" :disabled="transferOpenBlocked" @click="openCoinTransfer">Transfer coins</button>
+          </div>
+        </div>
+        <form v-if="editingCurrency" class="currency-edit" @submit.prevent="saveCurrency">
+          <h3>Edit balances</h3>
+          <div v-if="currencyConflict" class="inventory-conflict" role="alert">
+            <strong>Balances changed elsewhere</strong>
+            <p v-if="currencyConflict.current">Current saved balances: {{ currentCurrencySummary(currencyConflict.current) }}</p>
+            <p v-else>Current saved balances could not be loaded. Use Refresh inventory before choosing Keep my draft.</p>
+            <p>Your draft is still in the fields. Keep it to rebase the guard onto the current record, or discard it to use the current values.</p>
+            <div class="row-actions"><button class="secondary-button" type="button" :disabled="!currencyConflict.current" @click="rebaseCurrencyConflict">Keep my draft</button><button class="secondary-button" type="button" @click="discardCurrencyConflict">Discard draft</button></div>
+          </div>
+          <div class="coin-fields">
+            <label v-for="denomination in denominations" :key="denomination.key" class="filter-field" :for="`coin-${denomination.key}`">{{ denomination.label }}<input :id="`coin-${denomination.key}`" v-model="currencyDraft[denomination.key]" class="text-input" type="number" inputmode="numeric" min="0" step="1" :disabled="currencyPending || currencyUncertain || currencyRefreshFailed" /></label>
+          </div>
+          <p class="muted-hint">Direct entry. Only supported denominations are editable; retained unsupported balances stay unchanged.</p>
+          <div class="row-actions"><button class="primary-button" type="submit" :disabled="storeLocked">{{ currencyPending ? 'Saving…' : 'Save balances' }}</button><button class="secondary-button" type="button" :disabled="storeLocked" @click="cancelCurrencyEdit">Cancel</button></div>
+        </form>
+        <form v-if="coinTransferOpen" class="coin-transfer" @submit.prevent="transferCoins">
+          <h3>Transfer coins</h3>
+          <label class="filter-field" for="coin-transfer-denomination">Denomination<select id="coin-transfer-denomination" v-model="coinTransferDenomination" class="select-input" :disabled="coinTransferPending || currencyUncertain || currencyRefreshFailed"><option v-for="denomination in denominations" :key="denomination.key" :value="denomination.key">{{ denomination.label }}</option></select></label>
+          <label class="filter-field" for="coin-transfer-amount">Transfer amount<input id="coin-transfer-amount" v-model.number="coinTransferAmount" class="text-input" type="number" inputmode="numeric" min="1" step="1" :disabled="coinTransferPending || currencyUncertain || currencyRefreshFailed" /></label>
+          <label class="filter-field" for="coin-transfer-target">To<select id="coin-transfer-target" v-model="coinTransferTarget" class="select-input" :disabled="coinTransferPending || currencyUncertain || currencyRefreshFailed"><option value="">Choose a store</option><option v-for="target in transferTargets" :key="target.key" :value="target.key">{{ target.name }}</option></select></label>
+          <div class="row-actions"><button class="primary-button" type="submit" :disabled="storeLocked">{{ coinTransferPending ? 'Transferring…' : 'Transfer coins' }}</button><button class="secondary-button" type="button" :disabled="storeLocked" @click="cancelCoinTransfer">Cancel</button></div>
+        </form>
+      </section>
     </template>
-    <p v-else-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="recoverInventory">{{ hasItemReconciliation ? 'Refresh inventory' : 'Retry' }}</button></p>
+    <p v-else-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="recoverInventory">{{ needsReconciliation ? 'Refresh inventory' : 'Retry' }}</button></p>
     <CatalogPicker v-model:open="pickerOpen" :system-id="systemId" title="Choose an item" :pending="pickerPending" :feedback="pickerFeedback" @select="addCatalogItem" />
   </section>
 </template>

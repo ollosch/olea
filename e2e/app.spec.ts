@@ -22,9 +22,10 @@ test('reflects inventory changes in a second browser and after reconnect', async
     await primaryItem.getByRole('button', { name: 'Save' }).click()
     await expect(secondPage.locator('.inventory-row').filter({ hasText: 'E2E Potion' })).toContainText('× 8')
 
+    await secondPage.getByRole('button', { name: 'Edit balances' }).click()
     await secondPage.getByLabel('GP', { exact: true }).fill('27')
-    await secondPage.getByLabel('GP', { exact: true }).press('Tab')
-    await expect(page.getByLabel('GP', { exact: true })).toHaveValue('27')
+    await secondPage.getByRole('button', { name: 'Save balances' }).click()
+    await expect(page.locator('.coin-summary')).toContainText('27 GP')
 
     await page.context().setOffline(true)
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
@@ -79,16 +80,21 @@ test('rejects stale quantity, container, and coin edits and refreshes authoritat
     await expect(secondItem).toContainText('× 5')
     await expect(secondItem).toContainText('Inside E2E Satchel')
 
+    await page.getByRole('button', { name: 'Edit balances' }).click()
+    await secondPage.getByRole('button', { name: 'Edit balances' }).click()
     const firstCoin = page.getByLabel('GP', { exact: true })
     const staleCoin = secondPage.getByLabel('GP', { exact: true })
-    await staleCoin.focus()
     await staleCoin.fill('20')
     await firstCoin.fill('22')
-    await firstCoin.press('Tab')
+    await page.getByRole('button', { name: 'Save balances' }).click()
     await expect(staleCoin).toHaveValue('20')
-    await staleCoin.press('Tab')
-    await expect(secondPage.getByRole('alert')).toContainText('Coin balance changed elsewhere')
-    await expect(staleCoin).toHaveValue('22')
+    await expect(firstCoin).toHaveCount(0)
+    await secondPage.getByRole('button', { name: 'Save balances' }).click()
+    await expect(secondPage.getByRole('alert')).toContainText('Balances changed elsewhere')
+    await expect(staleCoin).toHaveValue('20')
+    await expect(secondPage.getByRole('alert')).toContainText('22 GP')
+    await secondPage.getByRole('button', { name: 'Discard draft' }).click()
+    await expect(secondPage.locator('.coin-summary')).toContainText('22 GP')
   } finally {
     await secondContext.close()
   }
@@ -130,15 +136,16 @@ test('transfers items and coins without losing or duplicating them', async ({ pa
   await item.getByRole('button', { name: 'Move item' }).click()
   await expect(item).toContainText('× 1')
 
-  await page.locator('.coin-transfer label').first().locator('select').selectOption('gp')
-  await page.locator('.coin-transfer label').nth(2).locator('select').selectOption({ label: 'E2E Party Stash (party)' })
-  await page.getByLabel('Amount', { exact: true }).fill('5')
   await page.getByRole('button', { name: 'Transfer coins' }).click()
-  await expect(page.getByLabel('GP', { exact: true })).toHaveValue('7')
+  await page.getByLabel('Denomination').selectOption('gp')
+  await page.locator('#coin-transfer-target').selectOption({ label: 'E2E Party Stash (party)' })
+  await page.getByLabel('Transfer amount').fill('5')
+  await page.getByRole('button', { name: 'Transfer coins' }).click()
+  await expect(page.locator('.coin-summary')).toContainText('7 GP')
 
   await page.getByLabel('View contents').selectOption({ label: 'E2E Party Stash (party)' })
   await expect(page.locator('.inventory-row').filter({ hasText: 'E2E Potion' })).toContainText('× 2')
-  await expect(page.getByLabel('GP', { exact: true })).toHaveValue('8')
+  await expect(page.locator('.coin-summary')).toContainText('8 GP')
 })
 
 test('touch viewport keeps controls within the screen and supports tap workflows', async ({ page, ids, isMobile }) => {
