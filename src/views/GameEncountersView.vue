@@ -1,22 +1,35 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import type { LocationQueryRaw, RouteLocationRaw } from 'vue-router'
 import CatalogPicker from '../components/CatalogPicker.vue'
+import EncounterLivePanel from '../components/encounters/EncounterLivePanel.vue'
+import EncounterPreparation from '../components/encounters/EncounterPreparation.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
 import { evaluateDice } from '../lib/dice'
 import { systemForGame } from '../lib/systems'
 import { activeParticipant, orderParticipants } from '../lib/encounterOrder'
 import { guardedUpdate, isConflict, isDefiniteWriteRejection } from '../lib/records'
-
-type Game = { id: string; updated: string; name: string; system: string; encounter_visible: boolean; encounter_show_initiative: boolean; encounter_show_enemy_names: boolean; encounter_show_hp: boolean; encounter_show_conditions: boolean; expand?: { system?: { key: string; name: string } } }
-type Encounter = { id: string; game: string; name: string }
-type Entry = { id: string; encounter: string; creature: string; name: string; quantity: number; notes: string; custom: boolean; expand?: { creature?: CatalogRecord } }
-type Character = { id: string; name: string; game: string }
-type Combat = { id: string; updated: string; encounter: string; active: boolean; round: number; turn: number; active_participant: string; tie_order: string; name: string; visible: boolean; show_initiative: boolean; show_enemy_names: boolean; show_hp: boolean; show_conditions: boolean }
-type Combatant = { id: string; updated: string; combat: string; character: string; prepared: string; name: string; enemy: boolean; current_hp: number; max_hp: number; hp_known: boolean; initiative: number; initiative_known: boolean; initiative_modifier: number; initiative_modifier_override: boolean; dexterity_modifier: number; dexterity_known: boolean; hp_formula: string; conditions: string; notes: string; sort_order: number; expand?: { character?: Character; prepared?: Entry } }
+import type {
+  Character,
+  Combat,
+  Combatant,
+  CombatDraft,
+  DisplaySettingField,
+  Encounter,
+  Entry,
+  EntryDraft,
+  Game,
+  HPPreview,
+  HPMode,
+  PickerFeedback,
+} from '../lib/encounterModel'
+import { prepareEncounterPrintReturn, rememberEncounterPrintReturn } from '../composables/useEncounterPrintReturn'
+import type { EncounterPrintRestore } from '../composables/useEncounterPrintReturn'
 
 const route = useRoute()
+const router = useRouter()
 const gameId = computed(() => String(route.params.gameId))
 const game = ref<Game | null>(null)
 const encounters = ref<Encounter[]>([])
@@ -24,49 +37,67 @@ const entries = ref<Entry[]>([])
 const selectedId = ref('')
 const selected = computed(() => encounters.value.find((entry) => entry.id === selectedId.value) ?? null)
 const loading = ref(true)
+const switching = ref(false)
 const error = ref('')
 const formOpen = ref(false)
 const editingId = ref('')
 const name = ref('')
 const pickerOpen = ref(false)
 const pickerPending = ref(false)
-const pickerFeedback = ref<{ tone: 'status' | 'error'; message: string } | null>(null)
+const pickerFeedback = ref<PickerFeedback | null>(null)
 const customOpen = ref(false)
 const customName = ref('')
 const customQuantity = ref(1)
 const customNotes = ref('')
-const entryDrafts = ref<Record<string, { quantity: number; notes: string }>>({})
+const entryDrafts = ref<Record<string, EntryDraft>>({})
 const combat = ref<Combat | null>(null)
 const combatants = ref<Combatant[]>([])
 const gameCharacters = ref<Character[]>([])
 const newParticipantName = ref('')
-const combatDrafts = ref<Record<string, { initiative: number | ''; current_hp: number | ''; max_hp: number | ''; conditions: string; notes: string }>>({})
-const hpPreview = ref<Record<string, { current: number; max: number }>>({})
+const combatDrafts = ref<Record<string, CombatDraft>>({})
+const hpPreview = ref<Record<string, HPPreview>>({})
 const initiativeModifiers = ref<Record<string, number | ''>>({})
 const combatSnapshots = ref<Record<string, Combatant>>({})
 const selectedForGroup = ref<string[]>([])
 const diceError = ref('')
-const rules = computed(() => systemForGame(game.value).encounter)
+const system = computed(() => systemForGame(game.value))
+const rules = computed(() => system.value.encounter)
 const orderedCombatants = computed(() => orderParticipants(combatants.value, combat.value?.tie_order ?? '', rules.value))
 const activeCombatant = computed(() => activeParticipant(orderedCombatants.value, combat.value?.active_participant ?? '', combat.value?.turn ?? 0))
+const printTarget = computed<RouteLocationRaw>(() => ({
+  name: 'print-monsters',
+  params: { gameId: gameId.value },
+  query: selectedId.value ? { encounter: selectedId.value, returnEncounter: selectedId.value } : {},
+}))
 let loadGeneration = 0
+let selectionGeneration = 0
+let printRestore: EncounterPrintRestore | null = null
 
 const unsubscribe = ref<Array<() => Promise<void>>>([])
 let realtimeGeneration = 0
 onMounted(async () => {
+  const returnEncounterId = String(route.query.encounter ?? '')
+  if (returnEncounterId) printRestore = prepareEncounterPrintReturn(gameId.value, returnEncounterId)
   await load()
   await subscribe()
+  await nextTick()
+  printRestore?.restore()
+  printRestore = null
   window.addEventListener('olea-reconnected', refreshAfterReconnect)
   window.addEventListener('focus', refreshAfterReconnect)
 })
 onUnmounted(() => {
+  printRestore?.cancel()
+  printRestore = null
   realtimeGeneration++
   window.removeEventListener('olea-reconnected', refreshAfterReconnect)
   window.removeEventListener('focus', refreshAfterReconnect)
   for (const stop of unsubscribe.value) void stop()
 })
+watch(() => String(route.query.encounter ?? ''), () => { void syncSelectedFromRoute() })
 
 async function subscribe() {
+  const selection = selectionGeneration
   const generation = ++realtimeGeneration
   for (const stop of unsubscribe.value) void stop()
   unsubscribe.value = []
@@ -74,83 +105,105 @@ async function subscribe() {
   const collections = ['games', 'encounters', 'encounter_creatures', 'combats', 'combatants']
   try {
     const stops = await Promise.all(collections.map((collection) => pb.collection(collection).subscribe('*', () => { void refreshLiveCombat() })))
-    if (generation !== realtimeGeneration) { for (const stop of stops) void stop(); return }
+    if (generation !== realtimeGeneration || selection !== selectionGeneration) { for (const stop of stops) void stop(); return }
     unsubscribe.value = stops
-  } catch { error.value = 'Live updates are unavailable. Refresh to see current data.' }
+  } catch {
+    if (generation === realtimeGeneration && selection === selectionGeneration) error.value = 'Live updates are unavailable. Refresh to see current data.'
+  }
 }
 async function refreshAfterReconnect() { await refreshLiveCombat(); await subscribe() }
 async function refreshLiveCombat() {
+  const generation = selectionGeneration
+  const encounterId = selectedId.value
   try {
-    const encounterId = selectedId.value
     const drafts = combatDrafts.value
     const modifiers = initiativeModifiers.value
     const snapshots = combatSnapshots.value
     const gameRecord = await pb.collection('games').getOne<Game>(gameId.value, { expand: 'system', requestKey: null })
     const encounterRecords = await pb.collection('encounters').getFullList<Encounter>({ filter: pb.filter('game = {:game}', { game: gameId.value }), sort: 'name', requestKey: null })
-    if (encounterId !== selectedId.value) return
+    if (generation !== selectionGeneration || encounterId !== selectedId.value) return
     game.value = gameRecord
     encounters.value = encounterRecords
-    await loadEntries()
-    await loadCombat()
-    if (encounterId !== selectedId.value) return
+    if (!await loadEntries(generation) || !await loadCombat(generation)) return
+    if (generation !== selectionGeneration || encounterId !== selectedId.value) return
     for (const participant of combatants.value) {
       if (drafts[participant.id]) combatDrafts.value[participant.id] = drafts[participant.id]
       if (modifiers[participant.id] !== undefined) initiativeModifiers.value[participant.id] = modifiers[participant.id]
       if (snapshots[participant.id]) combatSnapshots.value[participant.id] = snapshots[participant.id]
     }
-  } catch { error.value = 'Live encounter could not be refreshed. Check the connection.' }
+  } catch {
+    if (generation === selectionGeneration) error.value = 'Live encounter could not be refreshed. Check the connection.'
+  }
 }
 
 async function load() {
   const generation = ++loadGeneration
+  const selection = selectionGeneration
   loading.value = true
   error.value = ''
   try {
-    const [gameRecord, encounterRecords] = await Promise.all([
-      pb.collection('games').getOne<Game>(gameId.value, { expand: 'system' }),
-      pb.collection('encounters').getFullList<Encounter>({ filter: pb.filter('game = {:game}', { game: gameId.value }), sort: 'name', requestKey: null }),
-    ])
+    const gameRecord = await pb.collection('games').getOne<Game>(gameId.value, { expand: 'system' })
     if (generation !== loadGeneration) return
     game.value = gameRecord
+    const encounterRecords = await pb.collection('encounters').getFullList<Encounter>({ filter: pb.filter('game = {:game}', { game: gameId.value }), sort: 'name', requestKey: null })
+    if (generation !== loadGeneration) return
     encounters.value = encounterRecords
     if (!encounterRecords.some((entry) => entry.id === selectedId.value)) {
       const requested = String(route.query.encounter ?? '')
-      selectedId.value = encounterRecords.find((entry) => entry.id === requested)?.id ?? encounterRecords[0]?.id ?? ''
+      const requestedEntry = encounterRecords.find((entry) => entry.id === requested)
+      selectedId.value = requestedEntry?.id ?? encounterRecords[0]?.id ?? ''
+      if (requested && !requestedEntry) replaceEncounterQuery(selectedId.value)
     }
-    await loadEntries()
+    if (!await loadEntries(selection)) return
     if (generation !== loadGeneration) return
-    await loadCombat()
+    if (!await loadCombat(selection)) return
     pickerPending.value = false
     pickerFeedback.value = null
-  } catch { error.value = 'Encounters could not be loaded. Check the connection and try again.' }
-  finally { if (generation === loadGeneration) loading.value = false }
+  } catch {
+    if (generation === loadGeneration && selection === selectionGeneration) error.value = 'Encounters could not be loaded. Check the connection and try again.'
+  }
+  finally {
+    if (generation === loadGeneration) {
+      loading.value = false
+      void syncSelectedFromRoute()
+    }
+  }
 }
 
-async function loadEntries() {
-  if (!selectedId.value) { entries.value = []; return }
+async function loadEntries(generation = selectionGeneration) {
+  if (generation !== selectionGeneration) return false
+  if (!selectedId.value) { entries.value = []; entryDrafts.value = {}; return true }
   const encounterId = selectedId.value
   const result = await pb.collection('encounter_creatures').getFullList<Entry>({
     filter: pb.filter('encounter = {:encounter}', { encounter: encounterId }), sort: 'name', expand: 'creature', requestKey: null,
   })
-  if (encounterId !== selectedId.value) return
+  if (generation !== selectionGeneration || encounterId !== selectedId.value) return false
   entries.value = result
   entryDrafts.value = Object.fromEntries(entries.value.map((entry) => [entry.id, { quantity: entry.quantity, notes: entry.notes ?? '' }]))
+  return true
 }
 
-async function loadCombat() {
-  if (!selectedId.value) { combat.value = null; combatants.value = []; return }
+async function loadCombat(generation = selectionGeneration) {
+  if (generation !== selectionGeneration) return false
+  if (!selectedId.value) { combat.value = null; combatants.value = []; return true }
   const encounterId = selectedId.value
   const active = await pb.collection('combats').getList<Combat>(1, 1, { filter: pb.filter('encounter = {:encounter} && active = true', { encounter: encounterId }), sort: 'id', requestKey: null })
-  if (encounterId !== selectedId.value) return
-  combat.value = active.items[0] ?? null
-  if (combat.value) {
-    const combatId = combat.value.id
-    const result = await pb.collection('combatants').getFullList<Combatant>({ filter: pb.filter('combat = {:combat}', { combat: combatId }), sort: 'sort_order,name', expand: 'character,prepared', requestKey: null })
-    if (encounterId !== selectedId.value || combat.value?.id !== combatId) return
+  if (generation !== selectionGeneration || encounterId !== selectedId.value) return false
+  const activeCombat = active.items[0] ?? null
+  let result: Combatant[] = []
+  if (activeCombat) {
+    result = await pb.collection('combatants').getFullList<Combatant>({ filter: pb.filter('combat = {:combat}', { combat: activeCombat.id }), sort: 'sort_order,name', expand: 'character,prepared', requestKey: null })
+    if (generation !== selectionGeneration || encounterId !== selectedId.value) return false
+  }
+  const characters = game.value ? await pb.collection('characters').getFullList<Character>({ filter: pb.filter('game = {:game}', { game: game.value.id }), sort: 'name', requestKey: null }) : []
+  if (generation !== selectionGeneration || encounterId !== selectedId.value) return false
+  combat.value = activeCombat
+  if (activeCombat) {
     combatants.value = result
     syncCombatDrafts()
   } else combatants.value = []
-  gameCharacters.value = game.value ? await pb.collection('characters').getFullList<Character>({ filter: pb.filter('game = {:game}', { game: game.value.id }), sort: 'name', requestKey: null }) : []
+  gameCharacters.value = characters
+  return true
 }
 
 function syncCombatDrafts() {
@@ -159,14 +212,14 @@ function syncCombatDrafts() {
   initiativeModifiers.value = Object.fromEntries(combatants.value.map((entry) => [entry.id, entry.initiative_modifier_override ? entry.initiative_modifier : entry.dexterity_known ? entry.dexterity_modifier : '']))
 }
 
-function hpFromSource(participant: Combatant): { average: number | null; formula: string | null } {
+function hpFromSource(participant: Combatant) {
   if (!participant.enemy || !participant.prepared) return { average: null, formula: null }
   const prepared = entries.value.find((entry) => entry.id === participant.prepared)
   const source = prepared?.expand?.creature?.original_json
   return rules.value.creatureHP(source)
 }
 
-function previewHP(participant: Combatant, mode: 'average' | 'roll' | 'manual') {
+function previewHP(participant: Combatant, mode: HPMode) {
   diceError.value = ''
   if (mode === 'manual') {
     const draft = combatDrafts.value[participant.id]!
@@ -222,8 +275,9 @@ async function startCombat() {
   }
 }
 
-async function addCharacter(character: Character) {
-  if (!combat.value || combatants.value.some((entry) => entry.character === character.id)) return
+async function addCharacter(characterId: string) {
+  const character = gameCharacters.value.find((entry) => entry.id === characterId)
+  if (!combat.value || !character || combatants.value.some((entry) => entry.character === character.id)) return
   try {
     await pb.collection('combatants').create({ combat: combat.value.id, character: character.id, name: character.name, enemy: false, sort_order: combatants.value.length })
     await loadCombat()
@@ -305,7 +359,7 @@ async function updateCombat(fields: Partial<Combat>) {
   catch (cause) { error.value = isConflict(cause) ? 'Combat changed elsewhere. Current values have been refreshed.' : 'Combat tracker could not be updated.'; await loadCombat() }
 }
 
-async function saveDisplaySetting(field: 'encounter_visible' | 'encounter_show_initiative' | 'encounter_show_enemy_names' | 'encounter_show_hp' | 'encounter_show_conditions', value: boolean) {
+async function saveDisplaySetting(field: DisplaySettingField, value: boolean) {
   if (!game.value) return
   try { await guardedUpdate('games', game.value, { [field]: value }); game.value = await pb.collection('games').getOne<Game>(game.value.id, { expand: 'system' }) }
   catch (cause) { error.value = isConflict(cause) ? 'Game settings changed elsewhere. Current values were refreshed.' : 'The player display setting could not be saved.'; await load() }
@@ -342,9 +396,69 @@ async function setTieOrder(participant: Combatant, direction: number) {
   await updateCombat({ tie_order: JSON.stringify(tieOrder), active_participant: activeCombatant.value?.id ?? '' })
 }
 
-async function selectEncounter(id: string) {
+function replaceEncounterQuery(id: string) {
+  if (String(route.query.encounter ?? '') === id) return
+  const query: LocationQueryRaw = { ...route.query }
+  if (id) query.encounter = id
+  else delete query.encounter
+  void router.replace({ query })
+}
+
+function clearSelectionData() {
+  entries.value = []
+  entryDrafts.value = {}
+  combat.value = null
+  combatants.value = []
+  combatDrafts.value = {}
+  combatSnapshots.value = {}
+  hpPreview.value = {}
+  initiativeModifiers.value = {}
+  selectedForGroup.value = []
+  diceError.value = ''
+}
+
+async function applyEncounterSelection(id: string) {
+  const generation = ++selectionGeneration
   selectedId.value = id
-  try { await loadEntries(); await loadCombat(); await subscribe() } catch { error.value = 'Encounter entries could not be loaded.' }
+  switching.value = true
+  if (!pickerPending.value) error.value = ''
+  clearSelectionData()
+  try {
+    if (!await loadEntries(generation)) return
+    if (!await loadCombat(generation)) return
+    if (generation !== selectionGeneration) return
+    await subscribe()
+  } catch {
+    if (generation === selectionGeneration) error.value = 'Encounter entries could not be loaded.'
+  } finally {
+    if (generation === selectionGeneration) switching.value = false
+  }
+}
+
+async function syncSelectedFromRoute() {
+  if (!game.value || loading.value) return
+  const requested = String(route.query.encounter ?? '')
+  if (!encounters.value.length) {
+    if (requested) replaceEncounterQuery('')
+    if (selectedId.value) {
+      selectedId.value = ''
+      entries.value = []
+      entryDrafts.value = {}
+      combat.value = null
+      combatants.value = []
+    }
+    return
+  }
+  const requestedEntry = encounters.value.find((entry) => entry.id === requested)
+  const next = requestedEntry?.id ?? encounters.value[0]?.id ?? ''
+  if (requested && !requestedEntry) replaceEncounterQuery(next)
+  if (!next || next === selectedId.value) return
+  await applyEncounterSelection(next)
+}
+
+async function selectEncounter(id: string) {
+  replaceEncounterQuery(id)
+  await applyEncounterSelection(id)
 }
 
 function beginCreate() { editingId.value = ''; name.value = ''; formOpen.value = true }
@@ -357,6 +471,7 @@ async function saveEncounter() {
     else {
       const created = await pb.collection('encounters').create<Encounter>({ game: gameId.value, name: name.value.trim() })
       selectedId.value = created.id
+      replaceEncounterQuery(created.id)
     }
     formOpen.value = false
     await load()
@@ -371,13 +486,21 @@ async function duplicateEncounter(encounter: Encounter) {
       await pb.collection('encounter_creatures').create({ encounter: copy.id, creature: entry.creature || '', name: entry.name, quantity: entry.quantity, notes: entry.notes ?? '', custom: entry.custom })
     }
     selectedId.value = copy.id
+    replaceEncounterQuery(copy.id)
     await load()
   } catch { error.value = 'The encounter could not be duplicated.' }
 }
 
 async function deleteEncounter(encounter: Encounter) {
   if (!window.confirm(`Delete “${encounter.name}” and its prepared creatures? This cannot be undone.`)) return
-  try { await pb.collection('encounters').delete(encounter.id); selectedId.value = ''; await load() }
+  try {
+    await pb.collection('encounters').delete(encounter.id)
+    if (selectedId.value === encounter.id) {
+      selectedId.value = ''
+      replaceEncounterQuery('')
+    }
+    await load()
+  }
   catch { error.value = 'The encounter could not be deleted.' }
 }
 
@@ -436,6 +559,10 @@ async function removeEntry(entry: Entry) {
   try { await pb.collection('encounter_creatures').delete(entry.id); await loadEntries() }
   catch { error.value = 'The creature entry could not be removed.' }
 }
+
+function rememberPrintPosition() {
+  if (selectedId.value) rememberEncounterPrintReturn(gameId.value, selectedId.value)
+}
 </script>
 
 <template>
@@ -443,29 +570,70 @@ async function removeEntry(entry: Entry) {
     <div v-if="loading" class="loading-state" role="status">Loading encounters…</div>
     <template v-else-if="game">
       <RouterLink class="text-link" :to="{ name: 'game-characters', params: { gameId: game.id } }">← {{ game.name }}</RouterLink>
-      <div class="screen-heading"><div><p class="eyebrow"><span class="eyebrow-line" /> {{ game.expand?.system?.name ?? 'GAME' }}</p><h1 id="page-title">Encounters</h1><p class="screen-description">Prepare reusable creature groupings for {{ game.name }}. Preparation stays separate from live combat.</p></div><div class="row-actions"><RouterLink v-if="encounters.length" class="secondary-link" :to="{ name: 'print-monsters', params: { gameId: game.id }, query: selectedId ? { encounter: selectedId } : {} }">Print monster cards</RouterLink><button class="primary-button" type="button" @click="beginCreate">＋ New encounter</button></div></div>
+      <div class="screen-heading"><div><p class="eyebrow"><span class="eyebrow-line" /> {{ game.expand?.system?.name ?? 'GAME' }}</p><h1 id="page-title">Encounters</h1><p class="screen-description">Prepare reusable creature groupings for {{ game.name }}. Preparation stays separate from live combat.</p></div><div class="row-actions"><button class="primary-button" type="button" @click="beginCreate">＋ New encounter</button></div></div>
       <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Refresh</button></p>
       <form v-if="formOpen" class="editor-panel" @submit.prevent="saveEncounter"><h2>{{ editingId ? 'Rename encounter' : 'New encounter' }}</h2><label class="field-label" for="encounter-name">Name</label><input id="encounter-name" v-model="name" class="text-input" maxlength="160" required /><div class="form-actions"><button class="secondary-button" type="button" @click="formOpen = false">Cancel</button><button class="primary-button" type="submit">Save encounter</button></div></form>
       <div v-if="encounters.length" class="encounter-layout">
         <aside class="encounter-sidebar" aria-label="Prepared encounters"><button v-for="encounter in encounters" :key="encounter.id" class="spellbook-tab" :class="{ selected: encounter.id === selectedId }" type="button" @click="selectEncounter(encounter.id)">{{ encounter.name }}<small>{{ encounter.id === selectedId ? entries.length + ' creature types' : '' }}</small></button></aside>
         <section v-if="selected" class="encounter-content">
-          <div class="spellbook-heading"><div><p class="eyebrow">PREPARATION</p><h2>{{ selected.name }}</h2></div><div class="row-actions"><button class="secondary-button" type="button" @click="beginRename(selected)">Rename</button><button class="secondary-button" type="button" @click="duplicateEncounter(selected)">Duplicate</button><button class="danger-button" type="button" @click="deleteEncounter(selected)">Delete</button></div></div>
-          <div class="heading-actions"><button class="primary-button" type="button" @click="openPicker">＋ Add catalog creature</button><button class="secondary-button" type="button" @click="customOpen = !customOpen">＋ Add custom participant</button></div>
-      <section class="combat-panel">
-            <div class="spellbook-heading"><div><p class="eyebrow">LIVE PLAY</p><h2>{{ combat?.active ? 'Combat in progress' : 'Manual tracker' }}</h2></div><div class="row-actions"><RouterLink v-if="combat?.active && game.encounter_visible" class="secondary-link" :to="{ name: 'player-encounter', params: { gameId: game.id } }">Player view</RouterLink><button v-if="!combat?.active" class="primary-button" type="button" :disabled="!entries.length" @click="startCombat">Start combat</button><template v-else><span class="round-pill">Round {{ combat.round }}</span><button class="secondary-button" type="button" @click="resetCombat">Reset</button><button class="danger-button" type="button" @click="endCombat">End combat</button></template></div></div>
-            <template v-if="combat?.active">
-              <details class="player-display-settings"><summary>Player display settings</summary><p>These settings hide details in the player-facing UI only; they are not access controls on this trusted LAN.</p><label class="check-field"><input type="checkbox" :checked="game.encounter_visible" @change="saveDisplaySetting('encounter_visible', ($event.target as HTMLInputElement).checked)" /> Show active encounter</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_initiative" @change="saveDisplaySetting('encounter_show_initiative', ($event.target as HTMLInputElement).checked)" /> Show initiative</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_enemy_names" @change="saveDisplaySetting('encounter_show_enemy_names', ($event.target as HTMLInputElement).checked)" /> Show enemy names</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_hp" @change="saveDisplaySetting('encounter_show_hp', ($event.target as HTMLInputElement).checked)" /> Show enemy HP</label><label class="check-field"><input type="checkbox" :checked="game.encounter_show_conditions" @change="saveDisplaySetting('encounter_show_conditions', ($event.target as HTMLInputElement).checked)" /> Show conditions</label></details>
-              <p v-if="diceError" class="field-error" role="alert">{{ diceError }}</p>
-              <div class="turn-controls"><button class="secondary-button" type="button" :disabled="!orderedCombatants.length" @click="moveTurn(-1)">← Previous</button><p v-if="activeCombatant"><strong>Active:</strong> {{ activeCombatant.name }}</p><p v-else>No participants yet</p><button class="secondary-button" type="button" :disabled="!orderedCombatants.length" @click="moveTurn(1)">Next →</button></div>
-              <div v-if="rules.initiative" class="group-roll"><span>{{ rules.initiative.groupLabel }}</span><button class="secondary-button" type="button" :disabled="!selectedForGroup.length" @click="rollGroupInitiative">Roll group</button></div><p v-else class="muted-hint">Initiative and turn order are manual. Use the arrows to arrange participants.</p>
-              <div class="participant-add"><label class="filter-field">Add character<select class="select-input" :disabled="gameCharacters.every((character) => combatants.some((entry) => entry.character === character.id))" @change="addCharacter(gameCharacters.find((character) => character.id === ($event.target as HTMLSelectElement).value)!); ($event.target as HTMLSelectElement).value = ''"><option value="">Choose a character</option><option v-for="character in gameCharacters.filter((entry) => !combatants.some((participant) => participant.character === entry.id))" :key="character.id" :value="character.id">{{ character.name }}</option></select></label><form class="custom-participant-form" @submit.prevent="addCustomCombatant"><label class="filter-field">Add custom participant<input v-model="newParticipantName" class="text-input" maxlength="255" placeholder="Name" /></label><button class="secondary-button" type="submit">Add</button></form></div>
-              <div v-if="orderedCombatants.length" class="combatant-list"><article v-for="participant in orderedCombatants" :key="participant.id" class="combatant-card" :class="{ active: activeCombatant?.id === participant.id }"><div class="combatant-title"><div><strong>{{ participant.name }}</strong><small>{{ participant.enemy ? 'Enemy' : participant.character ? 'Character' : 'Participant' }}<template v-if="participant.prepared && participant.expand?.prepared?.expand?.creature"> · {{ participant.expand.prepared.expand.creature.source }}</template></small></div><div class="row-actions"><label v-if="rules.initiative" class="select-combatant"><input v-model="selectedForGroup" type="checkbox" :value="participant.id" /> Select</label><span class="initiative-pill">{{ participant.initiative_known ? `Init ${participant.initiative}` : 'No initiative' }}</span><button class="icon-button tie-button" type="button" aria-label="Move participant up" title="Move up" @click="setTieOrder(participant, -1)">↑</button><button class="icon-button tie-button" type="button" aria-label="Move participant down" title="Move down" @click="setTieOrder(participant, 1)">↓</button><button v-if="rules.initiative" class="secondary-button" type="button" @click="rollOneInitiative(participant)">Roll</button><button class="danger-button" type="button" @click="removeCombatant(participant)">Remove</button></div></div><div class="combatant-fields"><label class="filter-field">Initiative<input v-model.number="combatDrafts[participant.id]!.initiative" class="text-input" type="number" step="any" placeholder="—" /></label><label v-if="rules.initiative" class="filter-field">Initiative modifier<input v-model.number="initiativeModifiers[participant.id]" class="text-input" type="number" min="-20" max="20" step="1" :placeholder="participant.dexterity_known ? String(participant.dexterity_modifier) : 'Manual or unset'" /></label><label class="filter-field">Current HP<input v-model.number="combatDrafts[participant.id]!.current_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Max HP<input v-model.number="combatDrafts[participant.id]!.max_hp" class="text-input" type="number" min="0" step="any" placeholder="—" /></label><label class="filter-field">Conditions<input v-model="combatDrafts[participant.id]!.conditions" class="text-input" placeholder="e.g. prone" /></label><label class="filter-field">Notes<input v-model="combatDrafts[participant.id]!.notes" class="text-input" placeholder="Notes" /></label><button class="secondary-button" type="button" @click="saveCombatant(participant)">Save</button></div><div v-if="participant.enemy" class="hp-roll-controls"><span>HP {{ participant.hp_known ? `${participant.current_hp}/${participant.max_hp}` : 'not set' }}</span><button v-if="hpFromSource(participant).average !== null" class="inline-button" type="button" @click="previewHP(participant, 'average')">Use average</button><button v-if="hpFromSource(participant).formula" class="inline-button" type="button" @click="previewHP(participant, 'roll')">Roll HP</button><button class="inline-button" type="button" @click="previewHP(participant, 'manual')">Preview manual</button><span v-if="hpPreview[participant.id]" class="preview-confirm">Preview: {{ hpPreview[participant.id]!.current }}/{{ hpPreview[participant.id]!.max }} <button class="secondary-button" type="button" @click="confirmHP(participant)">Confirm HP</button></span></div></article></div>
-              <p v-else class="muted-hint">No live participants. Add game characters or custom participants.</p>
-            </template>
-          </section>
-          <form v-if="customOpen" class="editor-panel" @submit.prevent="addCustom"><h2>Custom participant</h2><label class="field-label" for="custom-creature-name">Name</label><input id="custom-creature-name" v-model="customName" class="text-input" maxlength="255" required /><label class="field-label" for="custom-creature-quantity">Quantity</label><input id="custom-creature-quantity" v-model.number="customQuantity" class="text-input" type="number" min="1" max="100" step="1" required /><label class="field-label" for="custom-creature-notes">Notes</label><textarea id="custom-creature-notes" v-model="customNotes" class="text-area" /><div class="form-actions"><button class="secondary-button" type="button" @click="customOpen = false">Cancel</button><button class="primary-button" type="submit">Add participant</button></div></form>
-          <div v-if="entries.length" class="encounter-entry-list"><article v-for="entry in entries" :key="entry.id" class="inventory-row"><div class="inventory-item-copy"><strong>{{ entry.name }}</strong><small>{{ entry.custom ? 'Custom participant' : entry.expand?.creature ? systemForGame(game).catalog.resultLabel(entry.expand.creature) : 'Catalog' }}</small></div><div class="encounter-entry-edit"><label class="filter-field">Quantity<input v-model.number="entryDrafts[entry.id]!.quantity" class="text-input" type="number" min="1" max="100" step="1" /></label><label class="filter-field">Notes<input v-model="entryDrafts[entry.id]!.notes" class="text-input" maxlength="100000" /></label></div><div class="row-actions"><button class="secondary-button" type="button" @click="saveEntry(entry)">Save</button><button class="danger-button" type="button" @click="removeEntry(entry)">Remove</button></div></article></div>
-          <div v-else class="empty-state compact-empty"><div class="empty-state-icon" aria-hidden="true">⚔</div><h2>No creatures prepared</h2><p>Add catalog creatures or custom participants. This grouping can be kept for reuse or deleted after printing.</p><button class="primary-button empty-action" type="button" @click="openPicker">＋ Add catalog creature</button></div>
+          <div v-if="switching" class="encounter-switching" role="status" aria-live="polite">
+            <p class="eyebrow">PREPARATION · REUSABLE</p>
+            <h2>{{ selected.name }}</h2>
+            <p class="muted-hint">Loading this encounter’s preparation and live state…</p>
+          </div>
+          <template v-else>
+          <EncounterPreparation
+            v-model:drafts="entryDrafts"
+            v-model:custom-open="customOpen"
+            v-model:custom-name="customName"
+            v-model:custom-quantity="customQuantity"
+            v-model:custom-notes="customNotes"
+            :encounter="selected"
+            :entries="entries"
+            :system="system"
+            :print-target="printTarget"
+            :combat-active="Boolean(combat?.active)"
+            @add-catalog="openPicker"
+            @add-custom="addCustom"
+            @save-entry="saveEntry"
+            @remove-entry="removeEntry"
+            @rename="beginRename(selected)"
+            @duplicate="duplicateEncounter(selected)"
+            @delete="deleteEncounter(selected)"
+            @print="rememberPrintPosition"
+          />
+          <EncounterLivePanel
+            v-model:drafts="combatDrafts"
+            v-model:selected-for-group="selectedForGroup"
+            v-model:initiative-modifiers="initiativeModifiers"
+            v-model:custom-participant-name="newParticipantName"
+            :game="game"
+            :combat="combat"
+            :rules="rules"
+            :game-characters="gameCharacters"
+            :combatants="orderedCombatants"
+            :active-combatant="activeCombatant"
+            :hp-preview="hpPreview"
+            :dice-error="diceError"
+            :can-start="entries.length > 0"
+            :hp-source-for="hpFromSource"
+            @start="startCombat"
+            @reset="resetCombat"
+            @end="endCombat"
+            @previous="moveTurn(-1)"
+            @next="moveTurn(1)"
+            @roll-group="rollGroupInitiative"
+            @add-character="addCharacter"
+            @add-custom="addCustomCombatant"
+            @save-combatant="saveCombatant"
+            @preview-hp="previewHP"
+            @confirm-hp="confirmHP"
+            @remove-combatant="removeCombatant"
+            @roll-one="rollOneInitiative"
+            @set-tie-order="setTieOrder"
+            @save-display-setting="saveDisplaySetting"
+          />
+          </template>
         </section>
       </div>
       <div v-else-if="!formOpen" class="empty-state"><div class="empty-state-icon" aria-hidden="true">⚔</div><h2>No encounters yet</h2><p>Create an encounter as a reusable preparation or print grouping.</p><button class="primary-button empty-action" type="button" @click="beginCreate">＋ Create encounter</button></div>

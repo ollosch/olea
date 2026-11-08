@@ -512,12 +512,19 @@ select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .encounter-sidebar, .encounter-content { min-width: 0; padding: 14px; border: 1px solid #ffffff16; border-radius: 14px; background: #1b251c77; }
 .encounter-sidebar { align-self: start; display: grid; gap: 8px; }
 .encounter-content { min-height: 260px; }
-.encounter-content > .heading-actions { margin-top: 14px; }
+.encounter-switching { min-height: 220px; display: grid; align-content: start; gap: 8px; }
+.encounter-switching h2 { margin: 0; font-family: inherit; font-size: 19px; font-weight: 700; }
+.encounter-preparation > .heading-actions, .encounter-content > .heading-actions { margin-top: 14px; }
+.encounter-section-note { margin-top: 7px; max-width: 78ch; color: #97a597; font-size: 11px; line-height: 1.65; }
+.preparation-active-note { margin-top: 13px; padding: 10px 12px; color: #ffe0a6; border: 1px solid #d6a95755; border-radius: 10px; background: #d6a95712; font-size: 11px; line-height: 1.6; }
 .spellbook-tab small { display: block; margin-top: 4px; color: #97a597; font-size: 9px; }
 .encounter-entry-list { margin-top: 18px; display: grid; gap: 10px; }
 .encounter-entry-edit { min-width: 0; display: grid; grid-template-columns: 90px minmax(150px, 1fr); gap: 9px; }
 .encounter-entry-edit .text-input { margin-top: 5px; }
 @media (max-width: 760px) { .encounter-layout { grid-template-columns: 1fr; }.encounter-sidebar { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }.encounter-entry-edit { flex: 1 1 100%; } }
+.encounter-live { margin-top: 20px; }
+.encounter-live .combat-panel { margin-top: 0; border-color: #ffffff20; background: #0d130f99; }
+.encounter-live.is-active .combat-panel { border-color: color-mix(in srgb, var(--accent) 32%, transparent); box-shadow: inset 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }
 .combat-panel { margin-top: 20px; padding: 16px; border: 1px solid #ffffff16; border-radius: 13px; background: #10161166; }
 .combat-panel .spellbook-heading { align-items: flex-start; }
 .combat-panel .spellbook-heading h2 { margin-top: 7px; }

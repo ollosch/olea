@@ -77,6 +77,15 @@ Test new row patterns at 320px, 390px, 640px, 768px, 1280px and a large desktop,
 
 `GamesView.vue` is the representative screen: it uses `PageHeader`, `FeedbackRegion`, `ActionMenu` and the existing button/field classes. `e2e/ui-primitives.spec.ts` covers the menu's keyboard focus/return, the labelled appearance dialog and its focus return, reserved loading/error geometry, reduced motion, and long-name wrapping without horizontal overflow on desktop and phone emulation. This is browser emulation, not physical-device, screen-reader or printer validation.
 
+## Encounter preparation and live play
+
+`GameEncountersView.vue` keeps encounter loading, realtime refresh, guarded persistence, combat start/end and print navigation. Presentation is split so the two kinds of change stay visually and semantically distinct:
+
+- `src/components/encounters/EncounterPreparation.vue` is the reusable preparation: catalog/custom adds, quantity and notes rows, print, and a labelled `ActionMenu` for rename/duplicate/delete. It tells the GM when an active combat exists and that preparation edits do not change that combat.
+- `src/components/encounters/EncounterLivePanel.vue` is live play: all turn, participant, initiative, HP, condition, notes, player-display and reset/end controls. Its copy says live changes affect only the combat, and that starting combat copies the prepared quantities into a separate tracker.
+
+Keep the parent authoritative for PocketBase calls and the existing request/conflict guards; do not move persistence into these presentational components. Encounter switching writes `?encounter=` with a replace navigation, and a route-query watcher applies same-mounted Back/Forward and external same-path query changes. Switching is atomic from the UI's perspective: the previous entries and combat are cleared, a scoped loading region replaces the preparation/live controls, and a monotonic selection generation rejects obsolete entry, combat, refresh, subscription and error results (including an A→B→A response that only matches the final id). An invalid query is canonicalized once rather than causing a replace loop. Print links carry the originating preparation separately from the initial print selection (`returnEncounter`), so changing the print screen's multi-selection does not change where the return link goes; direct print links fall back to their `encounter` query and then the first selection. `useEncounterPrintReturn` restores the saved preparation scroll for explicit-link and browser-back returns, but cancels that restoration on wheel, touch, keyboard, pointer or input interaction while a delayed return is still loading.
+
 ## CatalogPicker
 
 `src/components/CatalogPicker.vue` is the shared contextual catalog picker used by inventory items, spellbooks, encounter creatures and table references. It is a controlled Reka UI dialog: the caller owns `open`, decides whether a `select` handler closes it, and can pass authoritative async feedback.

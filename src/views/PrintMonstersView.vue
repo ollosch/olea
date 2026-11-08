@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import type { RouteLocationNamedRaw } from 'vue-router'
 import CardPrintPreview, { type PrintCard } from '../components/CardPrintPreview.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
@@ -19,9 +20,27 @@ const encounters = ref<Encounter[]>([])
 const entries = ref<EncounterEntry[]>([])
 const selectedEncounters = ref<string[]>([])
 const selectedCards = ref<string[]>([])
+const originEncounterId = ref('')
 const loading = ref(true)
 const error = ref('')
 const system = computed(() => systemForGame(game.value))
+const returnTarget = computed<RouteLocationNamedRaw>(() => {
+  const encounterId = returnEncounterId()
+  return {
+    name: 'game-encounters',
+    params: { gameId: game.value?.id ?? '' },
+    query: encounterId ? { encounter: encounterId } : {},
+    ...(encounterId ? { state: { oleaEncounterReturn: true } } : {}),
+  }
+})
+
+function returnEncounterId() {
+  const valid = (id: string) => Boolean(id) && encounters.value.some((encounter) => encounter.id === id)
+  if (valid(originEncounterId.value)) return originEncounterId.value
+  const requested = String(route.query.encounter ?? '')
+  if (valid(requested)) return requested
+  return selectedEncounters.value[0] ?? encounters.value[0]?.id ?? ''
+}
 const choiceMap = computed(() => {
   const encounterNames = new Map(encounters.value.map((encounter) => [encounter.id, encounter.name]))
   const grouped = new Map<string, SourceCard>()
@@ -70,7 +89,10 @@ async function load() {
       pb.collection('catalog').getFullList<CatalogRecord>({ filter: pb.filter('system = {:system} && type = {:type}', { system: game.value.system, type: 'creature' }), expand: 'system', requestKey: null }),
     ])
     encounters.value = encounterRows
-    selectedEncounters.value = encounterRows.some((encounter) => encounter.id === String(route.query.encounter ?? '')) ? [String(route.query.encounter)] : encounterRows[0] ? [encounterRows[0].id] : []
+    const requested = String(route.query.encounter ?? '')
+    const origin = String(route.query.returnEncounter ?? '')
+    selectedEncounters.value = encounterRows.some((encounter) => encounter.id === requested) ? [requested] : encounterRows[0] ? [encounterRows[0].id] : []
+    originEncounterId.value = encounterRows.some((encounter) => encounter.id === origin) ? origin : ''
     const rows = await pb.collection('encounter_creatures').getFullList<EncounterEntry>({ filter: pb.filter('encounter.game = {:game}', { game: game.value.id }), sort: 'name', requestKey: null })
     const catalogById = new Map(catalogRows.map((record) => [record.id, record]))
     entries.value = rows.map((entry) => ({ ...entry, expand: { creature: catalogById.get(entry.creature) } }))
@@ -96,7 +118,7 @@ function selectAll() { selectedCards.value = choiceMap.value.map((choice) => cho
   <section class="screen" aria-labelledby="page-title">
     <div v-if="loading" class="loading-state" role="status">Loading monster cards…</div>
     <template v-else-if="game">
-      <RouterLink class="text-link screen-only" :to="{ name: 'game-encounters', params: { gameId: game.id } }">← {{ game.name }} encounters</RouterLink>
+      <RouterLink class="text-link screen-only" :to="returnTarget">← {{ game.name }} encounters</RouterLink>
       <div class="card-selection screen-only">
         <div><p class="eyebrow">{{ game.expand?.system?.name ?? 'GAME' }}</p><h2>Choose encounters and creatures</h2><p>Select one encounter or several from this game. Catalog creature types are deduplicated by catalog record; custom participants remain separate.</p></div>
         <label class="filter-field">Encounters (select multiple)<select class="select-input" multiple size="5" :value="selectedEncounters" @change="updateEncounterSelection"><option v-for="encounter in encounters" :key="encounter.id" :value="encounter.id">{{ encounter.name }}</option></select></label>
