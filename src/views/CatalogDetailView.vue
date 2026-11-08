@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import EntryContent from '../components/EntryContent.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
 import { systemByKey } from '../lib/systems'
+import { queryString } from '../lib/catalogRoute'
 
 const route = useRoute()
+const router = useRouter()
 const record = ref<CatalogRecord | null>(null)
 const system = computed(() => systemByKey(record.value?.expand?.system?.key))
 const loading = ref(true)
@@ -17,8 +19,21 @@ const editingDescription = ref(false)
 const editingNotes = ref(false)
 const alternateDraft = ref('')
 const notesDraft = ref('')
+const canReturnToHistory = ref(false)
+const returnTarget = computed<RouteLocationRaw>(() => {
+  const from = queryString(route.query.from)
+  if (/^\/catalog(?:[?#]|$)/.test(from)) return from
+  const query: Record<string, string> = {}
+  if (record.value?.expand?.system?.key) query.system = record.value.expand.system.key
+  if (record.value?.type) query.type = record.value.type
+  return { name: 'catalog', query }
+})
+const returnHref = computed(() => router.resolve(returnTarget.value).href)
 
-onMounted(load)
+onMounted(() => {
+  canReturnToHistory.value = window.history.state?.catalogReturn === true
+  void load()
+})
 
 async function load() {
   loading.value = true
@@ -76,11 +91,22 @@ function cancelNotes() {
   editingNotes.value = false
 }
 
+function returnToCatalog() {
+  if (canReturnToHistory.value) router.back()
+  else void router.push(returnTarget.value)
+}
+
+function handleReturnClick(event: MouseEvent) {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  event.preventDefault()
+  returnToCatalog()
+}
+
 </script>
 
 <template>
   <section class="screen" aria-labelledby="page-title">
-    <RouterLink class="text-link" to="/catalog">← Back to catalog</RouterLink>
+    <a class="text-link" :href="returnHref" @click="handleReturnClick">← Back to catalog</a>
     <div v-if="loading" class="loading-state" role="status">Loading catalog entry…</div>
     <p v-else-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Try again</button></p>
     <template v-else-if="record">

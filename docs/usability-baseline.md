@@ -23,6 +23,10 @@ Measurements below are one successful headless Chromium run at 1920×1080 deskto
 - **Inferred from code, not independently isolated:** catalog results live in component state and are cleared during loading; `App.vue` keys the route view by path, and the detail link points to `/catalog`. Shorter documents can clamp browser scroll. `PlayerEncounterView.vue` sets its full loading state on realtime events; GM refresh rebuilds drafts but attempts to restore them. Initial loading, browser restoration timing, inline panels, focus/auto-scroll and unrelated live events are separate candidate causes. Do not attribute the owner's report to any one without their sequence.
 - **Next steps:** use these journeys for step 4 search/history and step 6 picker regression checks; retest player updates/drafts in two real browser contexts for step 11. Check more viewport sizes, zoom, touch keyboard and actual devices in later steps. No performance conclusions follow from these small synthetic fixtures.
 
+## Step 4 update (2026-11-08)
+
+Step 4 made the catalog's system, type, query, filters and page recoverable from the URL, and added per-history-entry scroll/focus restoration after asynchronous loads. The baseline's catalog assertions above now expect search/filter/page context to return instead of resetting; they remain measurements, not layout promises. Browser restoration is asynchronous, so an immediate scroll sample after Back can still precede the final restored position. The player-loading observations were not changed and remain baseline material for step 11.
+
 ## Owner questions
 
 Which screen and exact actions cause your search jump (typing, filter, scrolling, selecting, Back, loading, or another client updating)? What device/browser and approximate screen size? Which catalog, picker, combat, inventory and spellbook actions do you use most often at the table?
