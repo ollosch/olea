@@ -11,6 +11,7 @@ import type { CatalogRecord } from '../lib/catalog'
 import { evaluateDice } from '../lib/dice'
 import { systemForGame } from '../lib/systems'
 import { activeParticipant, orderParticipants } from '../lib/encounterOrder'
+import { applyLiveHPAdjustment, liveDraftDiffers, validateLiveHPInput } from '../lib/liveCombat'
 import { guardedUpdate, isConflict, isDefiniteWriteRejection } from '../lib/records'
 import type {
   Character,
@@ -73,7 +74,55 @@ const uncertainReconciled = ref(false)
 let setupCustomSequence = 0
 let startInFlight = false
 let pendingRouteSync = false
+let combatMutationGeneration = 0
+const combatMutationByParticipant = new Map<string, number>()
 const diceError = ref('')
+const combatWritePending = ref<Record<string, boolean>>({})
+const combatWriteUncertain = ref<Record<string, boolean>>({})
+const participantErrors = ref<Record<string, string>>({})
+const participantConflicts = ref<Record<string, Combatant | null>>({})
+const liveRefreshRequired = ref(false)
+const combatTrackerPending = ref(false)
+const combatTrackerUncertain = ref(false)
+const combatTrackerError = ref('')
+const groupRollError = ref('')
+const addParticipantPending = ref(false)
+const addParticipantUncertain = ref(false)
+const addParticipantError = ref('')
+type LiveDraftField = 'initiative' | 'current_hp' | 'max_hp' | 'conditions' | 'notes' | 'initiative_modifier'
+type LiveWriteOutcome = 'ok' | 'conflict' | 'rejected' | 'uncertain' | 'refresh-failed' | 'blocked'
+type LoadCombatOptions = { preserveDirtyDrafts?: boolean; rebaseIds?: ReadonlySet<string>; shouldSkip?: (id: string) => boolean }
+function markCombatantMutation(id: string) {
+  combatMutationByParticipant.set(id, ++combatMutationGeneration)
+}
+function setParticipantError(id: string, message: string) {
+  participantErrors.value = { ...participantErrors.value, [id]: message }
+}
+function clearParticipantError(id: string) {
+  if (!participantErrors.value[id]) return
+  const next = { ...participantErrors.value }
+  delete next[id]
+  participantErrors.value = next
+}
+function hasParticipantConflict(id: string) {
+  return Object.prototype.hasOwnProperty.call(participantConflicts.value, id)
+}
+
+function conflictSummary(record: Combatant) {
+  const initiative = record.initiative_known ? `Init ${record.initiative}` : 'Initiative unknown'
+  const hp = record.hp_known ? `HP ${record.current_hp}/${record.max_hp}` : 'HP unknown'
+  return `${initiative} · ${hp}${record.conditions ? ` · ${record.conditions}` : ''}`
+}
+
+function conflictMessage(record: Combatant | null) {
+  return record
+    ? `Draft conflicts with another change. Server now: ${conflictSummary(record)}. Keep your draft only after reviewing it, or discard it and use the server values.`
+    : 'Draft conflicts with another change, but the latest values could not be refreshed. Refresh live state, then review before retrying.'
+}
+
+function participantWriteBlocked(id: string) {
+  return Boolean(combatWritePending.value[id] || combatWriteUncertain.value[id] || liveRefreshRequired.value || hasParticipantConflict(id))
+}
 const system = computed(() => systemForGame(game.value))
 const rules = computed(() => system.value.encounter)
 const orderedCombatants = computed(() => orderParticipants(combatants.value, combat.value?.tie_order ?? '', rules.value))
@@ -157,21 +206,15 @@ async function refreshLiveCombat() {
   const generation = selectionGeneration
   const encounterId = selectedId.value
   try {
-    const drafts = combatDrafts.value
-    const modifiers = initiativeModifiers.value
-    const snapshots = combatSnapshots.value
+    const mutations = new Map(combatMutationByParticipant)
+    const pendingAtStart = { ...combatWritePending.value }
     const gameRecord = await pb.collection('games').getOne<Game>(gameId.value, { expand: 'system', requestKey: null })
     const encounterRecords = await pb.collection('encounters').getFullList<Encounter>({ filter: pb.filter('game = {:game}', { game: gameId.value }), sort: 'name', requestKey: null })
     if (generation !== selectionGeneration || encounterId !== selectedId.value) return
     game.value = gameRecord
     encounters.value = encounterRecords
-    if (!await loadEntries(generation) || !await loadCombat(generation)) return
-    if (generation !== selectionGeneration || encounterId !== selectedId.value) return
-    for (const participant of combatants.value) {
-      if (drafts[participant.id]) combatDrafts.value[participant.id] = drafts[participant.id]
-      if (modifiers[participant.id] !== undefined) initiativeModifiers.value[participant.id] = modifiers[participant.id]
-      if (snapshots[participant.id]) combatSnapshots.value[participant.id] = snapshots[participant.id]
-    }
+    const shouldSkip = (id: string) => Boolean(pendingAtStart[id]) || (combatMutationByParticipant.get(id) ?? 0) !== (mutations.get(id) ?? 0)
+    if (!await loadEntries(generation) || !await loadCombat(generation, { preserveDirtyDrafts: true, shouldSkip })) return
   } catch {
     if (generation === selectionGeneration) error.value = 'Live encounter could not be refreshed. Check the connection.'
   }
@@ -198,7 +241,7 @@ async function load() {
     }
     if (!await loadEntries(selection)) return
     if (generation !== loadGeneration) return
-    if (!await loadCombat(selection)) return
+    if (!await loadCombat(selection, { preserveDirtyDrafts: true })) return
     if (startUncertain.value) {
       uncertainReconciled.value = true
       startRecoveryRequired.value = true
@@ -219,6 +262,44 @@ async function load() {
   }
 }
 
+async function refreshAll() {
+  await load()
+  if (loading.value || error.value) return
+  combatWriteUncertain.value = {}
+  liveRefreshRequired.value = false
+  combatTrackerUncertain.value = false
+  addParticipantUncertain.value = false
+  const nextConflicts: Record<string, Combatant | null> = {}
+  const nextErrors: Record<string, string> = {}
+  for (const id of Object.keys(participantConflicts.value)) {
+    const latest = combatants.value.find((entry) => entry.id === id)
+    if (!latest) continue
+    nextConflicts[id] = { ...latest }
+    nextErrors[id] = conflictMessage(latest)
+  }
+  participantConflicts.value = nextConflicts
+  participantErrors.value = nextErrors
+  combatTrackerError.value = ''
+  groupRollError.value = ''
+  addParticipantError.value = ''
+}
+
+function resolveParticipantConflict(participant: Combatant, mode: 'keep' | 'discard') {
+  const id = participant.id
+  if (!hasParticipantConflict(id)) return
+  const latest = participantConflicts.value[id]
+  if (!latest) return
+  combatSnapshots.value = { ...combatSnapshots.value, [id]: { ...latest } }
+  if (mode === 'discard') {
+    combatDrafts.value[id] = draftFromParticipant(latest)
+    initiativeModifiers.value[id] = modifierFromParticipant(latest)
+  }
+  const conflicts = { ...participantConflicts.value }
+  delete conflicts[id]
+  participantConflicts.value = conflicts
+  clearParticipantError(id)
+}
+
 async function loadEntries(generation = selectionGeneration) {
   if (generation !== selectionGeneration) return false
   if (!selectedId.value) { entries.value = []; entryDrafts.value = {}; return true }
@@ -232,7 +313,7 @@ async function loadEntries(generation = selectionGeneration) {
   return true
 }
 
-async function loadCombat(generation = selectionGeneration) {
+async function loadCombat(generation = selectionGeneration, options: LoadCombatOptions = {}) {
   if (generation !== selectionGeneration) return false
   if (!selectedId.value) { combat.value = null; combatants.value = []; return true }
   const encounterId = selectedId.value
@@ -249,7 +330,7 @@ async function loadCombat(generation = selectionGeneration) {
   combat.value = activeCombat
   if (activeCombat) {
     combatants.value = result
-    syncCombatDrafts()
+    syncCombatDrafts(options)
     if (!startInFlight) {
       setupCharacters.value = []
       setupCustoms.value = []
@@ -266,10 +347,199 @@ async function loadCombat(generation = selectionGeneration) {
   return true
 }
 
-function syncCombatDrafts() {
-  combatDrafts.value = Object.fromEntries(combatants.value.map((entry) => [entry.id, { initiative: entry.initiative_known ? entry.initiative : '', current_hp: entry.hp_known ? entry.current_hp : '', max_hp: entry.hp_known ? entry.max_hp : '', conditions: entry.conditions ?? '', notes: entry.notes ?? '' }]))
-  combatSnapshots.value = Object.fromEntries(combatants.value.map((entry) => [entry.id, { ...entry }]))
-  initiativeModifiers.value = Object.fromEntries(combatants.value.map((entry) => [entry.id, entry.initiative_modifier_override ? entry.initiative_modifier : entry.dexterity_known ? entry.dexterity_modifier : '']))
+function draftFromParticipant(entry: Combatant): CombatDraft {
+  return { initiative: entry.initiative_known ? entry.initiative : '', current_hp: entry.hp_known ? entry.current_hp : '', max_hp: entry.hp_known ? entry.max_hp : '', conditions: entry.conditions ?? '', notes: entry.notes ?? '' }
+}
+
+function modifierFromParticipant(entry: Combatant): number | '' {
+  return entry.initiative_modifier_override ? entry.initiative_modifier : entry.dexterity_known ? entry.dexterity_modifier : ''
+}
+
+function draftDiffersFromBaseline(id: string) {
+  const baseline = combatSnapshots.value[id]
+  const draft = combatDrafts.value[id]
+  if (!baseline || !draft) return false
+  const modifier = initiativeModifiers.value[id]
+  return liveDraftDiffers(draftFromParticipant(baseline), draft, modifierFromParticipant(baseline), modifier === undefined ? modifierFromParticipant(baseline) : modifier)
+}
+
+function syncCombatDrafts(options: LoadCombatOptions = {}) {
+  const previousDrafts = combatDrafts.value
+  const previousSnapshots = combatSnapshots.value
+  const previousModifiers = initiativeModifiers.value
+  const nextDrafts: Record<string, CombatDraft> = {}
+  const nextSnapshots: Record<string, Combatant> = {}
+  const nextModifiers: Record<string, number | ''> = {}
+  for (const entry of combatants.value) {
+    const id = entry.id
+    const draft = previousDrafts[id]
+    const baseline = previousSnapshots[id]
+    const modifier = previousModifiers[id]
+    if (options.shouldSkip?.(id) && draft && baseline) {
+      nextDrafts[id] = draft
+      nextSnapshots[id] = baseline
+      nextModifiers[id] = modifier === undefined ? modifierFromParticipant(baseline) : modifier
+      continue
+    }
+    if (options.rebaseIds?.has(id)) {
+      nextSnapshots[id] = { ...entry }
+      nextDrafts[id] = draft ?? draftFromParticipant(entry)
+      nextModifiers[id] = modifier === undefined ? modifierFromParticipant(entry) : modifier
+      continue
+    }
+    if (options.preserveDirtyDrafts && draft && baseline && draftDiffersFromBaseline(id)) {
+      nextSnapshots[id] = baseline
+      nextDrafts[id] = draft
+      nextModifiers[id] = modifier === undefined ? modifierFromParticipant(baseline) : modifier
+      continue
+    }
+    nextSnapshots[id] = { ...entry }
+    nextDrafts[id] = draftFromParticipant(entry)
+    nextModifiers[id] = modifierFromParticipant(entry)
+  }
+  combatDrafts.value = nextDrafts
+  combatSnapshots.value = nextSnapshots
+  initiativeModifiers.value = nextModifiers
+}
+
+function syncDraftFieldsFromRecord(record: Combatant, fields: readonly LiveDraftField[]) {
+  const draft = combatDrafts.value[record.id]
+  if (!draft) return
+  if (fields.includes('initiative')) draft.initiative = record.initiative_known ? record.initiative : ''
+  if (fields.includes('current_hp')) draft.current_hp = record.hp_known ? record.current_hp : ''
+  if (fields.includes('max_hp')) draft.max_hp = record.hp_known ? record.max_hp : ''
+  if (fields.includes('conditions')) draft.conditions = record.conditions ?? ''
+  if (fields.includes('notes')) draft.notes = record.notes ?? ''
+  if (fields.includes('initiative_modifier')) initiativeModifiers.value[record.id] = modifierFromParticipant(record)
+}
+
+function syncDraftFields(id: string, fields: readonly LiveDraftField[]) {
+  const record = combatants.value.find((entry) => entry.id === id)
+  if (record) syncDraftFieldsFromRecord(record, fields)
+}
+
+async function refreshCombatPreservingDrafts() {
+  try {
+    return await loadCombat(selectionGeneration, { preserveDirtyDrafts: true, shouldSkip: (id) => Boolean(combatWritePending.value[id]) })
+  } catch {
+    liveRefreshRequired.value = true
+    combatTrackerError.value = 'Live values could not be refreshed. Use Refresh live state before another change.'
+    return false
+  }
+}
+
+async function writeCombatant(participant: Combatant, fields: Record<string, unknown>, draftFields: readonly LiveDraftField[], actionLabel: string): Promise<LiveWriteOutcome> {
+  const id = participant.id
+  if (participantWriteBlocked(id)) return 'blocked'
+  clearParticipantError(id)
+  const snapshot = combatSnapshots.value[id] ?? participant
+  combatWritePending.value = { ...combatWritePending.value, [id]: true }
+  try {
+    try {
+      await guardedUpdate('combatants', snapshot, fields)
+    } catch (cause) {
+      if (isConflict(cause)) {
+        const refreshed = await refreshCombatPreservingDrafts()
+        const latest = refreshed ? combatants.value.find((entry) => entry.id === id) ?? null : null
+        participantConflicts.value = { ...participantConflicts.value, [id]: latest ? { ...latest } : null }
+        setParticipantError(id, conflictMessage(latest))
+        return 'conflict'
+      }
+      if (isDefiniteWriteRejection(cause)) {
+        setParticipantError(id, `${actionLabel} was not saved. Your values are kept; check the connection and try again.`)
+        await refreshCombatPreservingDrafts()
+        return 'rejected'
+      }
+      combatWriteUncertain.value = { ...combatWriteUncertain.value, [id]: true }
+      setParticipantError(id, `${actionLabel} could not be confirmed. Refresh live state before trying again so a delayed write is not repeated.`)
+      return 'uncertain'
+    }
+    const mergedSnapshot = { ...snapshot, ...fields } as Combatant
+    combatSnapshots.value = { ...combatSnapshots.value, [id]: mergedSnapshot }
+    syncDraftFieldsFromRecord(mergedSnapshot, draftFields)
+    markCombatantMutation(id)
+    try {
+      const refreshed = await loadCombat(selectionGeneration, { preserveDirtyDrafts: true, rebaseIds: new Set([id]), shouldSkip: (otherId) => otherId !== id && Boolean(combatWritePending.value[otherId]) })
+      if (refreshed) syncDraftFields(id, draftFields)
+      return 'ok'
+    } catch {
+      liveRefreshRequired.value = true
+      setParticipantError(id, `${actionLabel} was saved, but the live tracker could not refresh. Refresh live state before another change.`)
+      return 'refresh-failed'
+    }
+  } finally {
+    const pending = { ...combatWritePending.value }
+    delete pending[id]
+    combatWritePending.value = pending
+  }
+}
+
+async function writeCombatTracker(fields: Partial<Combat>, actionLabel: string): Promise<LiveWriteOutcome> {
+  if (!combat.value || combatTrackerPending.value || combatTrackerUncertain.value || liveRefreshRequired.value) return 'blocked'
+  combatTrackerError.value = ''
+  const snapshot = combat.value
+  combatTrackerPending.value = true
+  try {
+    try {
+      await guardedUpdate('combats', snapshot, fields)
+    } catch (cause) {
+      if (isConflict(cause)) {
+        combatTrackerError.value = `${actionLabel} was not saved because the combat changed elsewhere. Current values were refreshed; review and try again.`
+        await refreshCombatPreservingDrafts()
+        return 'conflict'
+      }
+      if (isDefiniteWriteRejection(cause)) {
+        combatTrackerError.value = `${actionLabel} was not saved. Check the connection and try again.`
+        await refreshCombatPreservingDrafts()
+        return 'rejected'
+      }
+      combatTrackerUncertain.value = true
+      combatTrackerError.value = `${actionLabel} could not be confirmed. Refresh live state before another turn or reset so a delayed write is not repeated.`
+      return 'uncertain'
+    }
+    try {
+      const refreshed = await loadCombat(selectionGeneration, { preserveDirtyDrafts: true })
+      return refreshed ? 'ok' : 'blocked'
+    } catch {
+      liveRefreshRequired.value = true
+      combatTrackerError.value = `${actionLabel} was saved, but the live tracker could not refresh. Refresh live state before continuing.`
+      return 'refresh-failed'
+    }
+  } finally {
+    combatTrackerPending.value = false
+  }
+}
+
+async function addLiveParticipant(create: () => Promise<unknown>, label: string, onAdded?: () => void) {
+  if (addParticipantPending.value || addParticipantUncertain.value || liveRefreshRequired.value) return false
+  addParticipantError.value = ''
+  addParticipantPending.value = true
+  try {
+    try {
+      await create()
+    } catch (cause) {
+      if (isDefiniteWriteRejection(cause)) {
+        addParticipantError.value = `${label} was not added. Check the connection and try again.`
+      } else {
+        addParticipantUncertain.value = true
+        addParticipantError.value = `${label} could not be confirmed. Refresh live state before adding again so a delayed write is not repeated.`
+      }
+      return false
+    }
+    onAdded?.()
+    try {
+      const refreshed = await loadCombat(selectionGeneration, { preserveDirtyDrafts: true })
+      if (!refreshed) return true
+    } catch {
+      liveRefreshRequired.value = true
+      addParticipantError.value = `${label} was added, but the live tracker could not refresh. Refresh live state before adding another.`
+      return true
+    }
+    if (combat.value && !combat.value.active_participant && activeCombatant.value) await writeCombatTracker({ active_participant: activeCombatant.value.id }, 'Set active participant')
+    return true
+  } finally {
+    addParticipantPending.value = false
+  }
 }
 
 function hpFromSource(participant: Combatant) {
@@ -342,11 +612,8 @@ function previewHP(participant: Combatant, mode: HPMode) {
 async function confirmHP(participant: Combatant) {
   const preview = hpPreview.value[participant.id]
   if (!preview) return
-  try {
-    await guardedUpdate('combatants', participant, { current_hp: preview.current, max_hp: preview.max, hp_known: true })
-    delete hpPreview.value[participant.id]
-    await loadCombat()
-  } catch (cause) { diceError.value = isConflict(cause) ? 'Combatant changed elsewhere; current values were refreshed.' : 'HP could not be saved.'; await loadCombat() }
+  const outcome = await writeCombatant(participant, { current_hp: preview.current, max_hp: preview.max, hp_known: true }, ['current_hp', 'max_hp'], 'Confirm HP')
+  if (outcome === 'ok' || outcome === 'refresh-failed') delete hpPreview.value[participant.id]
 }
 
 async function activeCombatExists(encounterId: string) {
@@ -547,6 +814,8 @@ async function startCombat() {
   setupCustoms.value = []
   setupSelectedForGroup.value = []
   setupDrafts.value = {}
+  combatWritePending.value = {}
+  combatWriteUncertain.value = {}
   startUncertain.value = false
   uncertainReconciled.value = false
   if (activeUpdateFailed) {
@@ -592,88 +861,114 @@ function removeSetupParticipant(participant: PlannedCombatant) {
 async function addCharacter(characterId: string) {
   const character = gameCharacters.value.find((entry) => entry.id === characterId)
   if (!combat.value || !character || combatants.value.some((entry) => entry.character === character.id)) return
-  try {
-    await pb.collection('combatants').create({ combat: combat.value.id, character: character.id, name: character.name, enemy: false, sort_order: combatants.value.length })
-    await loadCombat()
-    if (combat.value && !combat.value.active_participant && activeCombatant.value) await updateCombat({ active_participant: activeCombatant.value.id })
-  } catch { error.value = 'The character could not be added to combat.' }
+  await addLiveParticipant(() => pb.collection('combatants').create({ combat: combat.value!.id, character: character.id, name: character.name, enemy: false, sort_order: combatants.value.length }), 'Character')
 }
 
 async function addCustomCombatant() {
   if (!combat.value || !newParticipantName.value.trim()) return
-  try {
-    await pb.collection('combatants').create({ combat: combat.value.id, name: newParticipantName.value.trim(), enemy: false, sort_order: combatants.value.length })
-    newParticipantName.value = ''; await loadCombat()
-    if (combat.value && !combat.value.active_participant && activeCombatant.value) await updateCombat({ active_participant: activeCombatant.value.id })
-  } catch { error.value = 'The participant could not be added.' }
+  await addLiveParticipant(() => pb.collection('combatants').create({ combat: combat.value!.id, name: newParticipantName.value.trim(), enemy: false, sort_order: combatants.value.length }), 'Participant', () => { newParticipantName.value = '' })
 }
 
 async function saveCombatant(participant: Combatant) {
-  const draft = combatDrafts.value[participant.id]
+  const id = participant.id
+  const draft = combatDrafts.value[id]
   if (!draft) return
-  if (draft.initiative !== '' && !Number.isFinite(Number(draft.initiative))) { error.value = 'Initiative must be a number.'; return }
-  const currentBlank = draft.current_hp === ''
-  const maxBlank = draft.max_hp === ''
-  if (currentBlank !== maxBlank) { error.value = 'Enter both current and max HP, or leave both unset.'; return }
-  const hpKnown = !currentBlank
-  const currentHP = currentBlank ? 0 : Number(draft.current_hp)
-  const maxHP = maxBlank ? 0 : Number(draft.max_hp)
-  if (hpKnown && (!Number.isFinite(currentHP) || !Number.isFinite(maxHP) || currentHP < 0 || maxHP < 0)) { error.value = 'HP values must be nonnegative numbers.'; return }
-  const rawModifier = rules.value.initiative ? initiativeModifiers.value[participant.id] : undefined
+  if (draft.initiative !== '' && !Number.isFinite(Number(draft.initiative))) { setParticipantError(id, 'Initiative must be a number.'); return }
+  const hp = validateLiveHPInput(draft.current_hp, draft.max_hp)
+  if (!hp.valid) { setParticipantError(id, hp.error); return }
+  const rawModifier = rules.value.initiative ? initiativeModifiers.value[id] : undefined
   const modifierOverride = rawModifier !== '' && rawModifier !== undefined && rawModifier !== (participant.dexterity_known ? participant.dexterity_modifier : '')
-  if (rules.value.initiative && rawModifier !== '' && rawModifier !== undefined && (!Number.isInteger(rawModifier) || rawModifier < rules.value.initiative.modifierMin || rawModifier > rules.value.initiative.modifierMax)) { error.value = `Initiative modifier must be a whole number from ${rules.value.initiative.modifierMin} to ${rules.value.initiative.modifierMax}.`; return }
-  try {
-    await guardedUpdate('combatants', combatSnapshots.value[participant.id] ?? participant, { initiative: draft.initiative === '' ? 0 : Number(draft.initiative), initiative_known: draft.initiative !== '', ...(rules.value.initiative ? { initiative_modifier: rawModifier === '' || rawModifier === undefined ? 0 : Number(rawModifier), initiative_modifier_override: modifierOverride } : {}), current_hp: currentHP, max_hp: maxHP, hp_known: hpKnown, conditions: draft.conditions, notes: draft.notes })
-    await loadCombat()
-  } catch (cause) { error.value = isConflict(cause) ? 'This combatant changed elsewhere. Current values have been refreshed; review before saving again.' : 'The combatant could not be saved.'; await loadCombat() }
+  if (rules.value.initiative && rawModifier !== '' && rawModifier !== undefined && (!Number.isInteger(rawModifier) || rawModifier < rules.value.initiative.modifierMin || rawModifier > rules.value.initiative.modifierMax)) { setParticipantError(id, `Initiative modifier must be a whole number from ${rules.value.initiative.modifierMin} to ${rules.value.initiative.modifierMax}.`); return }
+  const fields = { initiative: draft.initiative === '' ? 0 : Number(draft.initiative), initiative_known: draft.initiative !== '', ...(rules.value.initiative ? { initiative_modifier: rawModifier === '' || rawModifier === undefined ? 0 : Number(rawModifier), initiative_modifier_override: modifierOverride } : {}), current_hp: hp.current, max_hp: hp.max, hp_known: hp.known, conditions: draft.conditions, notes: draft.notes }
+  await writeCombatant(participant, fields, ['initiative', 'current_hp', 'max_hp', 'conditions', 'notes', 'initiative_modifier'], 'Participant change')
+}
+
+async function adjustCombatantHP(participant: Combatant, amount: number) {
+  const id = participant.id
+  if (!combat.value) return
+  const snapshot = combatSnapshots.value[id] ?? participant
+  const result = applyLiveHPAdjustment({ current: snapshot.current_hp, max: snapshot.max_hp, known: snapshot.hp_known }, amount)
+  if (result.next === null) { setParticipantError(id, result.error); return }
+  await writeCombatant(participant, { current_hp: result.next }, ['current_hp'], 'HP change')
 }
 
 async function rollOneInitiative(participant: Combatant) {
   if (!rules.value.initiative) return
-  try {
-    const raw = initiativeModifiers.value[participant.id]
-    const modifier = raw === '' || raw === undefined ? participant.dexterity_known ? participant.dexterity_modifier : 0 : Number(raw)
-    const result = rules.value.initiative.roll(modifier)
-    await guardedUpdate('combatants', participant, { initiative: result, initiative_known: true, initiative_modifier: modifier, initiative_modifier_override: raw !== '' && raw !== undefined && (!participant.dexterity_known || modifier !== participant.dexterity_modifier) })
-    await loadCombat()
-  } catch (cause) { diceError.value = isConflict(cause) ? 'Combatant changed elsewhere. Current values have been refreshed.' : cause instanceof Error ? cause.message : 'Initiative could not be rolled.'; await loadCombat() }
+  const raw = initiativeModifiers.value[participant.id]
+  const modifier = raw === '' || raw === undefined ? participant.dexterity_known ? participant.dexterity_modifier : 0 : Number(raw)
+  let result: number
+  try { result = rules.value.initiative.roll(modifier) }
+  catch (cause) { setParticipantError(participant.id, cause instanceof Error ? cause.message : 'Initiative could not be rolled.'); return }
+  await writeCombatant(participant, { initiative: result, initiative_known: true, initiative_modifier: modifier, initiative_modifier_override: raw !== '' && raw !== undefined && (!participant.dexterity_known || modifier !== participant.dexterity_modifier) }, ['initiative', 'initiative_modifier'], 'Initiative roll')
 }
 
 async function rollGroupInitiative() {
   if (!rules.value.initiative) return
   const targets = orderedCombatants.value.filter((participant) => selectedForGroup.value.includes(participant.id))
-  if (!targets.length) { diceError.value = 'Select one or more participants to roll.'; return }
-  diceError.value = ''
-  try {
-    const modifiers = targets.map((participant) => {
-      const raw = initiativeModifiers.value[participant.id]
-      return raw === '' || raw === undefined ? participant.dexterity_known ? participant.dexterity_modifier : 0 : Number(raw)
-    })
-    const results = rules.value.initiative.rollGroup(modifiers)
-    for (const [index, participant] of targets.entries()) {
-      const modifier = modifiers[index]
-      await guardedUpdate('combatants', participant, { initiative: results[index], initiative_known: true, initiative_modifier: modifier, initiative_modifier_override: !participant.dexterity_known || modifier !== participant.dexterity_modifier })
-    }
-    await loadCombat()
-    selectedForGroup.value = []
-  } catch (cause) { diceError.value = isConflict(cause) ? 'A selected combatant changed elsewhere. Current values were refreshed.' : 'Selected initiative rolls could not be saved.'; await loadCombat() }
+  if (!targets.length) { groupRollError.value = 'Select one or more participants to roll.'; return }
+  groupRollError.value = ''
+  let results: number[]
+  const modifiers = targets.map((participant) => {
+    const raw = initiativeModifiers.value[participant.id]
+    return raw === '' || raw === undefined ? participant.dexterity_known ? participant.dexterity_modifier : 0 : Number(raw)
+  })
+  try { results = rules.value.initiative.rollGroup(modifiers) }
+  catch (cause) { groupRollError.value = cause instanceof Error ? cause.message : 'Selected initiative rolls could not be completed.'; return }
+  const failed: string[] = []
+  const successful: string[] = []
+  for (const [index, participant] of targets.entries()) {
+    const modifier = modifiers[index]
+    const outcome = await writeCombatant(participant, { initiative: results[index], initiative_known: true, initiative_modifier: modifier, initiative_modifier_override: !participant.dexterity_known || modifier !== participant.dexterity_modifier }, ['initiative', 'initiative_modifier'], 'Initiative roll')
+    if (outcome === 'ok') successful.push(participant.id)
+    else failed.push(participant.name)
+  }
+  if (successful.length) selectedForGroup.value = selectedForGroup.value.filter((id) => !successful.includes(id))
+  if (failed.length) groupRollError.value = `${failed.length} of ${targets.length} initiative rolls were not confirmed (${failed.join(', ')}). Review the highlighted participants and refresh live state if needed.`
 }
 
 async function removeCombatant(participant: Combatant) {
+  const id = participant.id
+  if (participantWriteBlocked(id)) return
+  clearParticipantError(id)
+  combatWritePending.value = { ...combatWritePending.value, [id]: true }
   try {
-    const remaining = orderedCombatants.value.filter((entry) => entry.id !== participant.id)
+    const remaining = orderedCombatants.value.filter((entry) => entry.id !== id)
     const active = activeCombatant.value
-    const replacement = active?.id === participant.id ? remaining[Math.min(orderedCombatants.value.indexOf(participant), remaining.length - 1)] : active
-    if (combat.value && replacement) await guardedUpdate('combats', combat.value, { active_participant: replacement.id })
-    await pb.collection('combatants').delete(participant.id); await loadCombat()
+    const replacement = active?.id === id ? remaining[Math.min(orderedCombatants.value.indexOf(participant), remaining.length - 1)] : active
+    if (combat.value && replacement) {
+      const activeOutcome = await writeCombatTracker({ active_participant: replacement.id }, 'Replace active participant')
+      if (activeOutcome !== 'ok') {
+        setParticipantError(id, 'Removal was not completed because the active participant could not be updated. Refresh live state and try again.')
+        return
+      }
+    }
+    try {
+      await pb.collection('combatants').delete(id)
+    } catch (cause) {
+      if (isDefiniteWriteRejection(cause)) {
+        setParticipantError(id, 'The participant could not be removed. Refresh live state and try again.')
+        await refreshCombatPreservingDrafts()
+      } else {
+        combatWriteUncertain.value = { ...combatWriteUncertain.value, [id]: true }
+        setParticipantError(id, 'Removal could not be confirmed. Refresh live state before removing again so a delayed write is not repeated.')
+      }
+      return
+    }
+    try {
+      await loadCombat(selectionGeneration, { preserveDirtyDrafts: true })
+    } catch {
+      liveRefreshRequired.value = true
+      combatTrackerError.value = 'The participant was removed, but the live tracker could not refresh. Refresh live state before continuing.'
+    }
+  } finally {
+    const pending = { ...combatWritePending.value }
+    delete pending[id]
+    combatWritePending.value = pending
   }
-  catch { error.value = 'The combatant could not be removed.' }
 }
 
 async function updateCombat(fields: Partial<Combat>) {
-  if (!combat.value) return
-  try { await guardedUpdate('combats', combat.value, fields); await loadCombat() }
-  catch (cause) { error.value = isConflict(cause) ? 'Combat changed elsewhere. Current values have been refreshed.' : 'Combat tracker could not be updated.'; await loadCombat() }
+  await writeCombatTracker(fields, 'Combat tracker update')
 }
 
 async function saveDisplaySetting(field: DisplaySettingField, value: boolean) {
@@ -692,12 +987,51 @@ async function moveTurn(direction: number) {
 }
 
 async function resetCombat() {
-  if (!combat.value) return
+  if (!combat.value || combatTrackerPending.value || combatTrackerUncertain.value || liveRefreshRequired.value) return
+  combatTrackerError.value = ''
+  combatTrackerPending.value = true
+  const combatSnapshot = combat.value
+  const firstAfterReset = orderParticipants(combatants.value.map((participant) => ({ ...participant, initiative: 0, initiative_known: false })), '[]', rules.value)[0]
   try {
-    for (const participant of combatants.value) await guardedUpdate('combatants', participant, { initiative: 0, initiative_known: false, current_hp: 0, max_hp: 0, hp_known: false, conditions: '' })
-    await updateCombat({ active: true, round: 1, turn: 0, active_participant: '', tie_order: '[]' })
-    if (combat.value && activeCombatant.value) await updateCombat({ active_participant: activeCombatant.value.id })
-  } catch { error.value = 'Combat could not be reset.' }
+    for (const participant of combatants.value) {
+      try {
+        await guardedUpdate('combatants', combatSnapshots.value[participant.id] ?? participant, { initiative: 0, initiative_known: false, current_hp: 0, max_hp: 0, hp_known: false, conditions: '' })
+      } catch (cause) {
+        if (isConflict(cause) || isDefiniteWriteRejection(cause)) {
+          combatTrackerError.value = 'Reset stopped because a participant changed elsewhere. Current values were refreshed; review and try again.'
+          await refreshCombatPreservingDrafts()
+          return
+        }
+        combatTrackerUncertain.value = true
+        combatTrackerError.value = 'Reset could not be confirmed for every participant. Refresh live state before another turn or reset so a delayed write is not repeated.'
+        return
+      }
+      markCombatantMutation(participant.id)
+    }
+    try {
+      await guardedUpdate('combats', combatSnapshot, { active: true, round: 1, turn: 0, active_participant: firstAfterReset?.id ?? '', tie_order: '[]' })
+    } catch (cause) {
+      if (isConflict(cause) || isDefiniteWriteRejection(cause)) {
+        combatTrackerError.value = 'Reset stopped because the combat changed elsewhere. Current values were refreshed; review and try again.'
+        await refreshCombatPreservingDrafts()
+        return
+      }
+      combatTrackerUncertain.value = true
+      combatTrackerError.value = 'Reset could not be confirmed. Refresh live state before another turn or reset so a delayed write is not repeated.'
+      return
+    }
+    try {
+      const refreshed = await loadCombat(selectionGeneration, { preserveDirtyDrafts: true, rebaseIds: new Set(combatants.value.map((participant) => participant.id)) })
+      if (refreshed) {
+        for (const participant of combatants.value) syncDraftFields(participant.id, ['initiative', 'current_hp', 'max_hp', 'conditions'])
+      }
+    } catch {
+      liveRefreshRequired.value = true
+      combatTrackerError.value = 'Reset was saved, but the live tracker could not refresh. Refresh live state before continuing.'
+    }
+  } finally {
+    combatTrackerPending.value = false
+  }
 }
 
 async function endCombat() { if (combat.value) await updateCombat({ active: false }) }
@@ -736,6 +1070,19 @@ function clearSelectionData() {
   setupCharacters.value = []
   setupCustoms.value = []
   diceError.value = ''
+  combatWritePending.value = {}
+  combatWriteUncertain.value = {}
+  participantErrors.value = {}
+  participantConflicts.value = {}
+  liveRefreshRequired.value = false
+  combatTrackerPending.value = false
+  combatTrackerUncertain.value = false
+  combatTrackerError.value = ''
+  groupRollError.value = ''
+  addParticipantPending.value = false
+  addParticipantUncertain.value = false
+  addParticipantError.value = ''
+  combatMutationByParticipant.clear()
 }
 
 async function applyEncounterSelection(id: string) {
@@ -909,7 +1256,7 @@ function rememberPrintPosition() {
     <template v-else-if="game">
       <RouterLink class="text-link" :to="{ name: 'game-characters', params: { gameId: game.id } }">← {{ game.name }}</RouterLink>
       <div class="screen-heading"><div><p class="eyebrow"><span class="eyebrow-line" /> {{ game.expand?.system?.name ?? 'GAME' }}</p><h1 id="page-title">Encounters</h1><p class="screen-description">Prepare reusable creature groupings for {{ game.name }}. Preparation stays separate from live combat.</p></div><div class="row-actions"><button class="primary-button" type="button" :disabled="setupStarting" @click="beginCreate">＋ New encounter</button></div></div>
-      <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" :disabled="setupStarting" @click="load">Refresh</button> <button v-if="startUncertain && uncertainReconciled" class="inline-button" type="button" @click="confirmNoActiveCombat">Confirm no combat was created</button></p>
+      <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" :disabled="setupStarting" @click="refreshAll">Refresh</button> <button v-if="startUncertain && uncertainReconciled" class="inline-button" type="button" @click="confirmNoActiveCombat">Confirm no combat was created</button></p>
       <form v-if="formOpen" class="editor-panel" @submit.prevent="saveEncounter"><h2>{{ editingId ? 'Rename encounter' : 'New encounter' }}</h2><label class="field-label" for="encounter-name">Name</label><input id="encounter-name" v-model="name" class="text-input" maxlength="160" required /><div class="form-actions"><button class="secondary-button" type="button" @click="formOpen = false">Cancel</button><button class="primary-button" type="submit">Save encounter</button></div></form>
       <div v-if="encounters.length" class="encounter-layout">
         <aside class="encounter-sidebar" aria-label="Prepared encounters"><button v-for="encounter in encounters" :key="encounter.id" class="spellbook-tab" :class="{ selected: encounter.id === selectedId }" type="button" :disabled="setupStarting" @click="selectEncounter(encounter.id)">{{ encounter.name }}<small>{{ encounter.id === selectedId ? entries.length + ' creature types' : '' }}</small></button></aside>
@@ -974,6 +1321,18 @@ function rememberPrintPosition() {
             :dice-error="diceError"
             :can-start="plannedCombatants.length > 0"
             :hp-source-for="hpFromSource"
+            :pending="combatWritePending"
+            :uncertain="combatWriteUncertain"
+            :participant-errors="participantErrors"
+            :participant-conflicts="participantConflicts"
+            :group-error="groupRollError"
+            :tracker-error="combatTrackerError"
+            :add-error="addParticipantError"
+            :tracker-pending="combatTrackerPending"
+            :tracker-uncertain="combatTrackerUncertain"
+            :refresh-required="liveRefreshRequired"
+            :add-pending="addParticipantPending"
+            :add-uncertain="addParticipantUncertain"
             @start="startCombat"
             @reset="resetCombat"
             @end="endCombat"
@@ -983,12 +1342,15 @@ function rememberPrintPosition() {
             @add-character="addCharacter"
             @add-custom="addCustomCombatant"
             @save-combatant="saveCombatant"
+            @adjust-hp="adjustCombatantHP"
             @preview-hp="previewHP"
             @confirm-hp="confirmHP"
             @remove-combatant="removeCombatant"
             @roll-one="rollOneInitiative"
             @set-tie-order="setTieOrder"
             @save-display-setting="saveDisplaySetting"
+            @refresh-live="refreshAll"
+            @resolve-conflict="resolveParticipantConflict"
           />
           </template>
         </section>

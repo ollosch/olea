@@ -461,9 +461,11 @@ test('sets up 5e initiative, average/rolled HP and staged participants before th
     const guardTwo = page.locator('.combatant-card').filter({ hasText: `${creature.name} 2` })
     await expect(guardTwo).toContainText('HP 2/2')
     const heroCard = page.locator('.combatant-card').filter({ hasText: character.name })
+    await heroCard.locator('.combatant-summary').click()
     await expect(heroCard.getByLabel('Current HP')).toHaveValue('10')
     await expect(heroCard.getByLabel('Max HP')).toHaveValue('10')
     const customCard = page.locator('.combatant-card').filter({ hasText: 'Setup torchbearer' })
+    await customCard.locator('.combatant-summary').click()
     await expect(customCard.getByLabel('Current HP')).toHaveValue('')
     await expect(page.locator('.turn-controls')).toContainText('Active:')
   } finally {
@@ -526,6 +528,7 @@ test('requires both HP fields or neither and preserves an entered zero', async (
     await page.getByRole('button', { name: 'Start combat' }).click()
     await expect(page.getByRole('heading', { name: 'Combat in progress' })).toBeVisible()
     const card = page.locator('.combatant-card').first()
+    await card.locator('.combatant-summary').click()
     await expect(card.getByLabel('Current HP')).toHaveValue('0')
     await expect(card.getByLabel('Max HP')).toHaveValue('10')
 

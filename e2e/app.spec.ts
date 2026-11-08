@@ -102,9 +102,10 @@ test('updates the player encounter and respects its visibility setting', async (
     await expect(playerPage.getByText('HP 7/7')).toBeVisible()
 
     const goblin = page.locator('.combatant-card').filter({ hasText: 'E2E Goblin Scout' })
+    await goblin.locator('.combatant-summary').click()
     await goblin.getByLabel('Current HP').fill('4')
     await goblin.getByLabel('Conditions').fill('Prone')
-    await goblin.getByRole('button', { name: 'Save' }).click()
+    await goblin.getByRole('button', { name: 'Save participant' }).click()
     await expect(playerPage.getByText('HP 4/7')).toBeVisible()
     await expect(playerPage.getByText('Prone')).toBeVisible()
 

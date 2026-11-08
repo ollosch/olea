@@ -573,7 +573,46 @@ select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .select-combatant input { accent-color: var(--accent); }
 .hp-roll-controls { margin-top: 11px; padding-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; border-top: 1px solid #ffffff12; color: #a7b3a5; font-size: 10px; }
 .preview-confirm { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
-@media (max-width: 600px) { .participant-add { grid-template-columns: 1fr; }.turn-controls { flex-wrap: wrap; }.combatant-title, .setup-row-head { align-items: flex-start; flex-direction: column; }.combatant-title .row-actions, .setup-row-head .row-actions { width: 100%; justify-content: flex-start; }.group-roll { align-items: flex-start; flex-direction: column; } }
+.combatant-roster-row { min-width: 0; display: flex; align-items: stretch; gap: 8px; }
+.combatant-roster-row > .select-combatant { align-self: center; padding: 0 2px; }
+.combatant-summary { min-width: 0; min-height: 52px; flex: 1; padding: 7px 9px; display: flex; align-items: center; gap: 10px; color: #e8eee6; text-align: left; border: 1px solid transparent; border-radius: 9px; background: transparent; }
+.combatant-summary:hover { background: #ffffff08; }
+.combatant-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.combatant-active-marker { width: 4px; align-self: stretch; flex: none; border-radius: 3px; background: transparent; }
+.combatant-card.active .combatant-active-marker { background: var(--accent); }
+.combatant-copy { min-width: 0; flex: 1; }
+.combatant-copy strong, .combatant-copy small { display: block; }
+.combatant-copy strong { font-size: 13px; overflow-wrap: anywhere; }
+.combatant-copy small { margin-top: 3px; color: #97a597; font-size: 10px; }
+.combatant-badges { min-width: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px; }
+.hp-pill, .condition-pill { max-width: 190px; padding: 5px 8px; overflow: hidden; color: #b6c1b4; text-overflow: ellipsis; white-space: nowrap; border: 1px solid #ffffff20; border-radius: 99px; font-size: 10px; }
+.hp-pill.is-unknown, .condition-pill.is-empty { color: #97a597; border-style: dashed; }
+.hp-pill.is-zero { color: #ffb9a8; border-color: #d87c6350; background: #8e3b2a1c; }
+.condition-pill.is-error { color: #ffb9a8; border-style: solid; border-color: #d87c6350; background: #8e3b2a1c; }
+.live-action-error { margin-top: 10px; }
+.conflict-actions { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 8px; }
+.combatant-chevron { width: 18px; flex: none; color: #97a597; text-align: center; font-size: 11px; }
+.combatant-details { margin-top: 11px; padding-top: 12px; border-top: 1px solid #ffffff14; }
+.hp-adjust { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.hp-adjust .filter-field { flex: 1 1 160px; min-width: 120px; }
+.hp-adjust .text-input { margin-top: 5px; min-height: 42px; }
+.participant-secondary { margin-top: 11px; display: flex; align-items: center; flex-wrap: wrap; gap: 9px; color: #97a597; font-size: 10px; }
+.live-tools { margin-top: 13px; border: 1px solid #ffffff16; border-radius: 10px; background: #ffffff04; }
+.live-tools summary { min-height: 44px; padding: 0 12px; display: flex; align-items: center; color: var(--accent); cursor: pointer; font-size: 11px; font-weight: 700; }
+.live-tools-body { padding: 0 12px 12px; }
+.turn-summary { min-width: 0; text-align: center; }
+.turn-summary small { display: block; margin-top: 2px; color: #97a597; font-size: 10px; }
+.live-group-roll { flex-wrap: wrap; }
+.live-group-roll span { flex: 1 1 220px; }
+@media (max-width: 600px) {
+  .participant-add { grid-template-columns: 1fr; }.turn-controls { flex-wrap: wrap; }.combatant-title, .setup-row-head { align-items: flex-start; flex-direction: column; }.combatant-title .row-actions, .setup-row-head .row-actions { width: 100%; justify-content: flex-start; }.group-roll { align-items: flex-start; flex-direction: column; }
+  .combatant-roster-row { align-items: flex-start; }
+  .combatant-summary { flex-wrap: wrap; align-items: flex-start; }
+  .combatant-badges { width: 100%; justify-content: flex-start; padding-left: 14px; }
+  .combatant-chevron { display: none; }
+  .hp-adjust > .secondary-button { flex: 1 1 140px; }
+  .turn-summary { flex: 1 1 100%; order: -1; text-align: left; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
