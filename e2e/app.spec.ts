@@ -65,6 +65,7 @@ test('rejects stale quantity, container, and coin edits and refreshes authoritat
     await secondItem.getByRole('button', { name: 'Save' }).click()
 
     await expect(secondPage.getByRole('alert')).toContainText('This item changed or moved elsewhere')
+    await secondItem.getByRole('button', { name: 'Discard draft' }).click()
     await expect(secondItem).toContainText('× 5')
 
     await primaryItem.getByRole('button', { name: 'Edit' }).click()
@@ -74,8 +75,9 @@ test('rejects stale quantity, container, and coin edits and refreshes authoritat
     await secondItem.getByLabel('Quantity').fill('11')
     await secondItem.getByRole('button', { name: 'Save' }).click()
     await expect(secondPage.getByRole('alert')).toContainText('This item changed or moved elsewhere')
+    await secondItem.getByRole('button', { name: 'Discard draft' }).click()
     await expect(secondItem).toContainText('× 5')
-    await expect(secondItem).toContainText('↳ E2E Potion')
+    await expect(secondItem).toContainText('Inside E2E Satchel')
 
     const firstCoin = page.getByLabel('GP', { exact: true })
     const staleCoin = secondPage.getByLabel('GP', { exact: true })
