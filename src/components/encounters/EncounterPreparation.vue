@@ -12,6 +12,7 @@ const props = defineProps<{
   system: SystemCapabilities
   printTarget: RouteLocationRaw
   combatActive: boolean
+  busy: boolean
 }>()
 
 const emit = defineEmits<{
@@ -54,7 +55,7 @@ function submitCustom() {
       </div>
       <div class="row-actions">
         <RouterLink class="secondary-link" :to="printTarget" @click="emit('print')">Print monster cards</RouterLink>
-        <ActionMenu :label="`Encounter actions for ${encounter.name}`">
+        <ActionMenu :label="`Encounter actions for ${encounter.name}`" :disabled="busy">
           <ActionMenuItem @select="emit('rename')">Rename encounter</ActionMenuItem>
           <ActionMenuItem @select="emit('duplicate')">Duplicate encounter</ActionMenuItem>
           <ActionMenuItem danger @select="emit('delete')">Delete encounter</ActionMenuItem>
@@ -63,20 +64,20 @@ function submitCustom() {
     </div>
     <p v-if="combatActive" class="preparation-active-note" role="note">An active combat has its own participants and values. Editing this preparation does not change that combat; live changes are made in the live-play section below.</p>
     <div class="heading-actions">
-      <button class="primary-button" type="button" @click="emit('add-catalog')">＋ Add catalog creature</button>
-      <button class="secondary-button" type="button" @click="customOpen = !customOpen">＋ Add custom participant</button>
+      <button class="primary-button" type="button" :disabled="busy" @click="emit('add-catalog')">＋ Add catalog creature</button>
+      <button class="secondary-button" type="button" :disabled="busy" @click="customOpen = !customOpen">＋ Add custom participant</button>
     </div>
     <form v-if="customOpen" class="editor-panel" @submit.prevent="submitCustom">
       <h2>Custom participant</h2>
       <label class="field-label" for="custom-creature-name">Name</label>
-      <input id="custom-creature-name" v-model="customName" class="text-input" maxlength="255" required />
+      <input id="custom-creature-name" v-model="customName" class="text-input" maxlength="255" required :disabled="busy" />
       <label class="field-label" for="custom-creature-quantity">Quantity</label>
-      <input id="custom-creature-quantity" v-model.number="customQuantity" class="text-input" type="number" min="1" max="100" step="1" required />
+      <input id="custom-creature-quantity" v-model.number="customQuantity" class="text-input" type="number" min="1" max="100" step="1" required :disabled="busy" />
       <label class="field-label" for="custom-creature-notes">Notes</label>
-      <textarea id="custom-creature-notes" v-model="customNotes" class="text-area" />
+      <textarea id="custom-creature-notes" v-model="customNotes" class="text-area" :disabled="busy" />
       <div class="form-actions">
-        <button class="secondary-button" type="button" @click="customOpen = false">Cancel</button>
-        <button class="primary-button" type="submit" :disabled="!customValid">Add participant</button>
+        <button class="secondary-button" type="button" :disabled="busy" @click="customOpen = false">Cancel</button>
+        <button class="primary-button" type="submit" :disabled="busy || !customValid">Add participant</button>
       </div>
     </form>
     <div v-if="entries.length" class="encounter-entry-list">
@@ -86,12 +87,12 @@ function submitCustom() {
           <small>{{ entryLabel(entry) }}</small>
         </div>
         <div class="encounter-entry-edit">
-          <label class="filter-field">Quantity<input v-model.number="drafts[entry.id]!.quantity" class="text-input" type="number" min="1" max="100" step="1" /></label>
-          <label class="filter-field">Notes<input v-model="drafts[entry.id]!.notes" class="text-input" maxlength="100000" /></label>
+          <label class="filter-field">Quantity<input v-model.number="drafts[entry.id]!.quantity" class="text-input" type="number" min="1" max="100" step="1" :disabled="busy" /></label>
+          <label class="filter-field">Notes<input v-model="drafts[entry.id]!.notes" class="text-input" maxlength="100000" :disabled="busy" /></label>
         </div>
         <div class="row-actions">
-          <button class="secondary-button" type="button" @click="emit('save-entry', entry)">Save</button>
-          <button class="danger-button" type="button" @click="emit('remove-entry', entry)">Remove</button>
+          <button class="secondary-button" type="button" :disabled="busy" @click="emit('save-entry', entry)">Save</button>
+          <button class="danger-button" type="button" :disabled="busy" @click="emit('remove-entry', entry)">Remove</button>
         </div>
       </article>
     </div>
@@ -99,7 +100,7 @@ function submitCustom() {
       <div class="empty-state-icon" aria-hidden="true">⚔</div>
       <h2>No creatures prepared</h2>
       <p>Add catalog creatures or custom participants. This grouping can be kept for reuse or deleted after printing.</p>
-      <button class="primary-button empty-action" type="button" @click="emit('add-catalog')">＋ Add catalog creature</button>
+      <button class="primary-button empty-action" type="button" :disabled="busy" @click="emit('add-catalog')">＋ Add catalog creature</button>
     </div>
   </section>
 </template>

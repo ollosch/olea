@@ -10,9 +10,11 @@ withDefaults(
   defineProps<{
     label: string
     align?: 'start' | 'center' | 'end'
+    disabled?: boolean
   }>(),
   {
     align: 'end',
+    disabled: false,
   },
 )
 </script>
@@ -20,7 +22,7 @@ withDefaults(
 <template>
   <DropdownMenuRoot>
     <DropdownMenuTrigger as-child>
-      <button class="icon-button action-menu-trigger" type="button" :aria-label="label" :title="label">
+      <button class="icon-button action-menu-trigger" type="button" :aria-label="label" :title="label" :disabled="disabled">
         <span aria-hidden="true">⋯</span>
       </button>
     </DropdownMenuTrigger>

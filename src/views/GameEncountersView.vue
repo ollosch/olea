@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { LocationQueryRaw, RouteLocationRaw } from 'vue-router'
 import CatalogPicker from '../components/CatalogPicker.vue'
+import EncounterCombatSetup from '../components/encounters/EncounterCombatSetup.vue'
 import EncounterLivePanel from '../components/encounters/EncounterLivePanel.vue'
 import EncounterPreparation from '../components/encounters/EncounterPreparation.vue'
 import { pb } from '../lib/pocketbase'
@@ -16,6 +17,7 @@ import type {
   Combat,
   Combatant,
   CombatDraft,
+  CombatSetupDraft,
   DisplaySettingField,
   Encounter,
   Entry,
@@ -24,6 +26,7 @@ import type {
   HPPreview,
   HPMode,
   PickerFeedback,
+  PlannedCombatant,
 } from '../lib/encounterModel'
 import { prepareEncounterPrintReturn, rememberEncounterPrintReturn } from '../composables/useEncounterPrintReturn'
 import type { EncounterPrintRestore } from '../composables/useEncounterPrintReturn'
@@ -59,11 +62,48 @@ const hpPreview = ref<Record<string, HPPreview>>({})
 const initiativeModifiers = ref<Record<string, number | ''>>({})
 const combatSnapshots = ref<Record<string, Combatant>>({})
 const selectedForGroup = ref<string[]>([])
+const setupDrafts = ref<Record<string, CombatSetupDraft>>({})
+const setupSelectedForGroup = ref<string[]>([])
+const setupCharacters = ref<string[]>([])
+const setupCustoms = ref<Array<{ key: string; name: string }>>([])
+const setupStarting = ref(false)
+const startRecoveryRequired = ref(false)
+const startUncertain = ref(false)
+const uncertainReconciled = ref(false)
+let setupCustomSequence = 0
+let startInFlight = false
+let pendingRouteSync = false
 const diceError = ref('')
 const system = computed(() => systemForGame(game.value))
 const rules = computed(() => system.value.encounter)
 const orderedCombatants = computed(() => orderParticipants(combatants.value, combat.value?.tie_order ?? '', rules.value))
 const activeCombatant = computed(() => activeParticipant(orderedCombatants.value, combat.value?.active_participant ?? '', combat.value?.turn ?? 0))
+const plannedCombatants = computed<PlannedCombatant[]>(() => {
+  const planned: PlannedCombatant[] = []
+  let sortOrder = 0
+  for (const entry of entries.value) {
+    for (let count = 0; count < entry.quantity; count++) {
+      planned.push({
+        key: `prepared:${entry.id}:${count}`,
+        prepared: entry.id,
+        character: '',
+        name: entry.quantity > 1 ? `${entry.name} ${count + 1}` : entry.name,
+        enemy: true,
+        notes: entry.notes ?? '',
+        sortOrder: sortOrder++,
+      })
+    }
+  }
+  for (const id of setupCharacters.value) {
+    const character = gameCharacters.value.find((entry) => entry.id === id)
+    if (!character) continue
+    planned.push({ key: `character:${character.id}`, prepared: '', character: character.id, name: character.name, enemy: false, notes: '', sortOrder: sortOrder++ })
+  }
+  for (const custom of setupCustoms.value) {
+    planned.push({ key: custom.key, prepared: '', character: '', name: custom.name, enemy: false, notes: '', sortOrder: sortOrder++ })
+  }
+  return planned
+})
 const printTarget = computed<RouteLocationRaw>(() => ({
   name: 'print-monsters',
   params: { gameId: gameId.value },
@@ -113,6 +153,7 @@ async function subscribe() {
 }
 async function refreshAfterReconnect() { await refreshLiveCombat(); await subscribe() }
 async function refreshLiveCombat() {
+  if (startInFlight) return
   const generation = selectionGeneration
   const encounterId = selectedId.value
   try {
@@ -137,6 +178,7 @@ async function refreshLiveCombat() {
 }
 
 async function load() {
+  if (startInFlight) return
   const generation = ++loadGeneration
   const selection = selectionGeneration
   loading.value = true
@@ -157,6 +199,13 @@ async function load() {
     if (!await loadEntries(selection)) return
     if (generation !== loadGeneration) return
     if (!await loadCombat(selection)) return
+    if (startUncertain.value) {
+      uncertainReconciled.value = true
+      startRecoveryRequired.value = true
+      error.value = 'No active combat was found on recheck, but the earlier start was not confirmed and may still complete. Confirm below only after checking the table, or wait and recheck before retrying.'
+    } else {
+      startRecoveryRequired.value = false
+    }
     pickerPending.value = false
     pickerFeedback.value = null
   } catch {
@@ -201,6 +250,17 @@ async function loadCombat(generation = selectionGeneration) {
   if (activeCombat) {
     combatants.value = result
     syncCombatDrafts()
+    if (!startInFlight) {
+      setupCharacters.value = []
+      setupCustoms.value = []
+      setupSelectedForGroup.value = []
+    }
+    if (startUncertain.value) {
+      startUncertain.value = false
+      uncertainReconciled.value = false
+      startRecoveryRequired.value = false
+      error.value = 'An active combat was found during reconciliation; review it before starting again.'
+    }
   } else combatants.value = []
   gameCharacters.value = characters
   return true
@@ -218,6 +278,46 @@ function hpFromSource(participant: Combatant) {
   const source = prepared?.expand?.creature?.original_json
   return rules.value.creatureHP(source)
 }
+
+function sourceForPlanned(participant: PlannedCombatant) {
+  if (!participant.enemy || !participant.prepared) return {}
+  const prepared = entries.value.find((entry) => entry.id === participant.prepared)
+  const source = prepared?.expand?.creature?.original_json
+  return source && typeof source === 'object' ? source as Record<string, unknown> : {}
+}
+
+function hpSourceForPlanned(participant: PlannedCombatant) {
+  if (!participant.enemy || !participant.prepared) return { average: null, formula: null }
+  return rules.value.creatureHP(sourceForPlanned(participant))
+}
+
+function modifierForPlanned(participant: PlannedCombatant) {
+  if (!participant.enemy || !participant.prepared) return null
+  return rules.value.initiative?.modifier(sourceForPlanned(participant)) ?? null
+}
+
+function initialSetupDraft(participant: PlannedCombatant): CombatSetupDraft {
+  return {
+    initiative: '',
+    initiativeModifier: rules.value.initiative ? modifierForPlanned(participant) ?? '' : '',
+    currentHp: '',
+    maxHp: '',
+  }
+}
+
+function syncSetupDrafts() {
+  if (startInFlight) return
+  if (combat.value?.active) {
+    setupDrafts.value = {}
+    setupSelectedForGroup.value = []
+    return
+  }
+  const keys = new Set(plannedCombatants.value.map((participant) => participant.key))
+  setupDrafts.value = Object.fromEntries(plannedCombatants.value.map((participant) => [participant.key, setupDrafts.value[participant.key] ?? initialSetupDraft(participant)]))
+  setupSelectedForGroup.value = setupSelectedForGroup.value.filter((key) => keys.has(key))
+}
+
+watch([plannedCombatants, () => combat.value?.active], syncSetupDrafts, { immediate: true })
 
 function previewHP(participant: Combatant, mode: HPMode) {
   diceError.value = ''
@@ -249,30 +349,244 @@ async function confirmHP(participant: Combatant) {
   } catch (cause) { diceError.value = isConflict(cause) ? 'Combatant changed elsewhere; current values were refreshed.' : 'HP could not be saved.'; await loadCombat() }
 }
 
-async function startCombat() {
-  if (!selected.value || !entries.value.length) return
-  let created: Combat | null = null
+async function activeCombatExists(encounterId: string) {
   try {
-    const active = await pb.collection('combats').getList<Combat>(1, 1, { filter: pb.filter('active = true && encounter.game = {:game}', { game: gameId.value }), requestKey: null })
-    if (active.totalItems) { error.value = 'End the active combat in this game before starting another.'; return }
-    created = await pb.collection('combats').create<Combat>({ encounter: selected.value.id, active: true, round: 1, turn: 0, tie_order: '[]', name: selected.value.name })
-    combat.value = created
-    for (const [index, entry] of entries.value.entries()) {
-      for (let count = 0; count < entry.quantity; count++) {
-        const label = entry.quantity > 1 ? `${entry.name} ${count + 1}` : entry.name
-        const creature = entry.expand?.creature
-        const source = creature?.original_json && typeof creature.original_json === 'object' ? creature.original_json as Record<string, unknown> : {}
-        const hp = rules.value.creatureHP(source)
-        const modifier = rules.value.initiative?.modifier(source) ?? null
-        await pb.collection('combatants').create({ combat: created.id, prepared: entry.id, name: label, enemy: true, notes: entry.notes ?? '', sort_order: index * 100 + count, hp_formula: hp.formula ?? '', ...(modifier === null ? {} : { dexterity_modifier: modifier, dexterity_known: true }) })
-      }
-    }
-    await loadCombat()
-    if (combat.value && activeCombatant.value) await updateCombat({ active_participant: activeCombatant.value.id })
+    const active = await pb.collection('combats').getList<Combat>(1, 1, { filter: pb.filter('encounter = {:encounter} && active = true', { encounter: encounterId }), sort: 'id', requestKey: null })
+    return { ok: true, active: active.totalItems > 0 }
   } catch {
-    if (created) { try { await pb.collection('combats').delete(created.id) } catch { /* Report the partially started combat below. */ } }
-    error.value = 'Combat could not be started. Refresh to check whether a partial combat remains.'
+    return { ok: false, active: false }
   }
+}
+
+async function combatantsFor(combatId: string) {
+  return await pb.collection('combatants').getFullList<Combatant>({ filter: pb.filter('combat = {:combat}', { combat: combatId }), sort: 'sort_order,name', requestKey: null })
+}
+
+async function presentActiveCombat(encounter: Encounter, startGameId: string, message: string) {
+  let activeShown = false
+  if (startGameId === gameId.value && encounter.id === selectedId.value) {
+    try { activeShown = await loadCombat() } catch { /* The message below still requires review. */ }
+  }
+  startUncertain.value = false
+  uncertainReconciled.value = false
+  startRecoveryRequired.value = !activeShown
+  error.value = message + (activeShown ? '' : ' Refresh this game to review it.')
+}
+
+async function handleUncertainCreate(encounter: Encounter, startGameId: string) {
+  const reconciled = await activeCombatExists(encounter.id)
+  if (reconciled.ok && reconciled.active) {
+    await presentActiveCombat(encounter, startGameId, `Combat creation could not be confirmed, but an active combat now exists for ${encounter.name}; review it and end or reset it before trying again.`)
+    return
+  }
+  startUncertain.value = true
+  uncertainReconciled.value = false
+  startRecoveryRequired.value = true
+  error.value = reconciled.ok
+    ? 'Combat creation could not be confirmed. The server may still complete the write, so retry is blocked. Wait for the connection to recover, then Refresh; confirm no combat was created only after checking.'
+    : 'Combat start could not be confirmed or reconciled. Refresh this game to check for an active or partial combat before trying again.'
+}
+
+function validateSetup(planned: PlannedCombatant[]) {
+  for (const participant of planned) {
+    const draft = setupDrafts.value[participant.key]
+    if (!draft) continue
+    if (draft.initiative !== '' && !Number.isFinite(Number(draft.initiative))) return `Initiative for ${participant.name} must be a number.`
+    const currentBlank = draft.currentHp === ''
+    const maxBlank = draft.maxHp === ''
+    if (currentBlank !== maxBlank) return `HP for ${participant.name} needs both current and max values, or leave both unset.`
+    if (!currentBlank) {
+      const currentHP = Number(draft.currentHp)
+      const maxHP = Number(draft.maxHp)
+      if (!Number.isFinite(currentHP) || !Number.isFinite(maxHP) || currentHP < 0 || maxHP < 0) return `HP for ${participant.name} must use nonnegative numbers.`
+    }
+    const initiative = rules.value.initiative
+    if (initiative && draft.initiativeModifier !== '' && (!Number.isInteger(Number(draft.initiativeModifier)) || Number(draft.initiativeModifier) < initiative.modifierMin || Number(draft.initiativeModifier) > initiative.modifierMax)) {
+      return `Initiative modifier for ${participant.name} must be a whole number from ${initiative.modifierMin} to ${initiative.modifierMax}.`
+    }
+  }
+  return ''
+}
+
+function confirmNoActiveCombat() {
+  if (!startUncertain.value || !uncertainReconciled.value) return
+  startUncertain.value = false
+  uncertainReconciled.value = false
+  startRecoveryRequired.value = false
+  error.value = ''
+}
+
+async function startCombat() {
+  if (startInFlight || startRecoveryRequired.value || !selected.value) return
+  const startRules = rules.value
+  const startGameId = gameId.value
+  const encounter = selected.value
+  const startSelection = selectionGeneration
+  const planned = plannedCombatants.value
+  const drafts = setupDrafts.value
+  if (!planned.length) return
+  const validation = validateSetup(planned)
+  if (validation) { error.value = validation; return }
+  error.value = ''
+
+  const participants = planned.map((participant) => {
+    const draft = drafts[participant.key] ?? initialSetupDraft(participant)
+    const source = sourceForPlanned(participant)
+    const hp = startRules.creatureHP(source)
+    const dexterity = startRules.initiative?.modifier(source) ?? null
+    const modifier = draft.initiativeModifier === '' ? dexterity : Number(draft.initiativeModifier)
+    const useModifier = startRules.initiative && modifier !== null
+    return {
+      prepared: participant.prepared,
+      character: participant.character,
+      name: participant.name,
+      enemy: participant.enemy,
+      notes: participant.notes,
+      sortOrder: participant.sortOrder,
+      hpFormula: hp.formula ?? '',
+      dexterity,
+      modifier: useModifier ? modifier : null,
+      modifierOverride: useModifier ? (dexterity === null || modifier !== dexterity) : false,
+      initiative: draft.initiative === '' ? 0 : Number(draft.initiative),
+      initiativeKnown: draft.initiative !== '',
+      currentHp: draft.currentHp === '' ? 0 : Number(draft.currentHp),
+      maxHp: draft.maxHp === '' ? 0 : Number(draft.maxHp),
+      hpKnown: draft.currentHp !== '' && draft.maxHp !== '',
+    }
+  })
+
+  startInFlight = true
+  setupStarting.value = true
+  try {
+  let created: Combat | null = null
+  let written: Combatant[] = []
+  let createdCount = 0
+  let allParticipantsPresent = false
+  try {
+    const active = await pb.collection('combats').getList<Combat>(1, 1, { filter: pb.filter('active = true && encounter.game = {:game}', { game: startGameId }), requestKey: null })
+    if (active.totalItems) { error.value = 'End the active combat in this game before starting another.'; return }
+    created = await pb.collection('combats').create<Combat>({ encounter: encounter.id, active: true, round: 1, turn: 0, tie_order: '[]', name: encounter.name })
+    for (const participant of participants) {
+      const createdCombatant = await pb.collection('combatants').create<Combatant>({
+        combat: created.id,
+        ...(participant.prepared ? { prepared: participant.prepared } : {}),
+        ...(participant.character ? { character: participant.character } : {}),
+        name: participant.name,
+        enemy: participant.enemy,
+        notes: participant.notes,
+        sort_order: participant.sortOrder,
+        hp_formula: participant.hpFormula,
+        ...(participant.dexterity === null ? {} : { dexterity_modifier: participant.dexterity, dexterity_known: true }),
+        ...(participant.modifier === null ? {} : { initiative_modifier: participant.modifier, initiative_modifier_override: participant.modifierOverride }),
+        initiative: participant.initiative,
+        initiative_known: participant.initiativeKnown,
+        current_hp: participant.currentHp,
+        max_hp: participant.maxHp,
+        hp_known: participant.hpKnown,
+      })
+      written.push(createdCombatant)
+      createdCount++
+    }
+    allParticipantsPresent = true
+  } catch {
+    if (!created) {
+      await handleUncertainCreate(encounter, startGameId)
+      return
+    }
+    let actual: Combatant[] | null = null
+    try { actual = await combatantsFor(created.id) } catch { actual = null }
+    if (actual) {
+      written = actual
+      createdCount = actual.length
+      allParticipantsPresent = actual.length >= participants.length
+    }
+    if (!allParticipantsPresent) {
+      if (!actual) {
+        startUncertain.value = false
+        uncertainReconciled.value = false
+        startRecoveryRequired.value = true
+        error.value = `Combat setup could not be reconciled after ${createdCount} of ${participants.length} participants. Refresh this game and check for a partial combat before trying again.`
+        return
+      }
+      let cleanupFailed = false
+      try { await pb.collection('combats').delete(created.id) } catch { cleanupFailed = true }
+      const reconciled = await activeCombatExists(encounter.id)
+      if (!reconciled.ok) {
+        startUncertain.value = false
+        uncertainReconciled.value = false
+        startRecoveryRequired.value = true
+        error.value = `Combat setup stopped after ${createdCount} of ${participants.length} participants and could not be reconciled. Refresh this game before trying again.`
+      } else if (reconciled.active) {
+        await presentActiveCombat(encounter, startGameId, `Combat setup stopped after ${createdCount} of ${participants.length} participants. An active combat now exists for ${encounter.name}; review it and end or reset it before trying again.`)
+      } else {
+        startUncertain.value = false
+        uncertainReconciled.value = false
+        startRecoveryRequired.value = false
+        if (cleanupFailed) error.value = `Combat setup stopped after ${createdCount} of ${participants.length} participants. Cleanup reported an error, but the authoritative state shows no active combat. Review setup and try again.`
+        else error.value = `Combat setup stopped after ${createdCount} of ${participants.length} participants. The authoritative state shows no active combat. Review setup and try again.`
+      }
+      return
+    }
+  }
+
+  let activeUpdateFailed = false
+  try {
+    const first = orderParticipants(written, '[]', startRules)[0]
+    if (first) await guardedUpdate('combats', created!, { active_participant: first.id })
+  } catch {
+    activeUpdateFailed = true
+  }
+
+  const sameSelection = startGameId === gameId.value && startSelection === selectionGeneration && encounter.id === selectedId.value
+  const routeStillHere = !route.query.encounter || String(route.query.encounter) === encounter.id
+  let liveLoaded = false
+  if (sameSelection && routeStillHere) {
+    try { liveLoaded = await loadCombat() } catch { liveLoaded = false }
+  }
+  setupCharacters.value = []
+  setupCustoms.value = []
+  setupSelectedForGroup.value = []
+  setupDrafts.value = {}
+  startUncertain.value = false
+  uncertainReconciled.value = false
+  if (activeUpdateFailed) {
+    startRecoveryRequired.value = !liveLoaded
+    error.value = `Combat and all ${participants.length} participants were created, but the active turn could not be confirmed.${liveLoaded ? ' Review the active combat and choose the turn if needed.' : ' Refresh this game to review the active combat before continuing.'}`
+  } else if (sameSelection && routeStillHere && !liveLoaded) {
+    startRecoveryRequired.value = true
+    error.value = `Combat and all ${participants.length} participants were created, but the live state could not be refreshed. Refresh this game before continuing.`
+  } else {
+    startRecoveryRequired.value = false
+  }
+  } finally {
+    startInFlight = false
+    setupStarting.value = false
+    if (pendingRouteSync) {
+      pendingRouteSync = false
+      await syncSelectedFromRoute()
+    }
+  }
+}
+
+function addSetupCharacter(characterId: string) {
+  if (startInFlight || !characterId || setupCharacters.value.includes(characterId) || combatants.value.some((entry) => entry.character === characterId)) return
+  setupCharacters.value = [...setupCharacters.value, characterId]
+}
+
+function addSetupCustom(name: string) {
+  if (startInFlight) return
+  const trimmed = name.trim()
+  if (!trimmed) return
+  setupCustoms.value = [...setupCustoms.value, { key: `custom:${++setupCustomSequence}`, name: trimmed }]
+}
+
+function removeSetupParticipant(participant: PlannedCombatant) {
+  if (startInFlight) return
+  if (participant.character) {
+    setupCharacters.value = setupCharacters.value.filter((id) => id !== participant.character)
+    return
+  }
+  setupCustoms.value = setupCustoms.value.filter((custom) => custom.key !== participant.key)
 }
 
 async function addCharacter(characterId: string) {
@@ -298,9 +612,12 @@ async function saveCombatant(participant: Combatant) {
   const draft = combatDrafts.value[participant.id]
   if (!draft) return
   if (draft.initiative !== '' && !Number.isFinite(Number(draft.initiative))) { error.value = 'Initiative must be a number.'; return }
-  const hpKnown = draft.current_hp !== '' || draft.max_hp !== ''
-  const currentHP = draft.current_hp === '' ? 0 : Number(draft.current_hp)
-  const maxHP = draft.max_hp === '' ? 0 : Number(draft.max_hp)
+  const currentBlank = draft.current_hp === ''
+  const maxBlank = draft.max_hp === ''
+  if (currentBlank !== maxBlank) { error.value = 'Enter both current and max HP, or leave both unset.'; return }
+  const hpKnown = !currentBlank
+  const currentHP = currentBlank ? 0 : Number(draft.current_hp)
+  const maxHP = maxBlank ? 0 : Number(draft.max_hp)
   if (hpKnown && (!Number.isFinite(currentHP) || !Number.isFinite(maxHP) || currentHP < 0 || maxHP < 0)) { error.value = 'HP values must be nonnegative numbers.'; return }
   const rawModifier = rules.value.initiative ? initiativeModifiers.value[participant.id] : undefined
   const modifierOverride = rawModifier !== '' && rawModifier !== undefined && rawModifier !== (participant.dexterity_known ? participant.dexterity_modifier : '')
@@ -414,10 +731,15 @@ function clearSelectionData() {
   hpPreview.value = {}
   initiativeModifiers.value = {}
   selectedForGroup.value = []
+  setupDrafts.value = {}
+  setupSelectedForGroup.value = []
+  setupCharacters.value = []
+  setupCustoms.value = []
   diceError.value = ''
 }
 
 async function applyEncounterSelection(id: string) {
+  if (startInFlight) { pendingRouteSync = true; return }
   const generation = ++selectionGeneration
   selectedId.value = id
   switching.value = true
@@ -457,15 +779,26 @@ async function syncSelectedFromRoute() {
 }
 
 async function selectEncounter(id: string) {
+  if (startInFlight) return
   replaceEncounterQuery(id)
   await applyEncounterSelection(id)
 }
 
-function beginCreate() { editingId.value = ''; name.value = ''; formOpen.value = true }
-function beginRename(encounter: Encounter) { editingId.value = encounter.id; name.value = encounter.name; formOpen.value = true }
+function beginCreate() {
+  if (startInFlight) return
+  editingId.value = ''
+  name.value = ''
+  formOpen.value = true
+}
+function beginRename(encounter: Encounter) {
+  if (startInFlight) return
+  editingId.value = encounter.id
+  name.value = encounter.name
+  formOpen.value = true
+}
 
 async function saveEncounter() {
-  if (!name.value.trim()) return
+  if (startInFlight || !name.value.trim()) return
   try {
     if (editingId.value) await pb.collection('encounters').update(editingId.value, { name: name.value.trim() })
     else {
@@ -479,6 +812,7 @@ async function saveEncounter() {
 }
 
 async function duplicateEncounter(encounter: Encounter) {
+  if (startInFlight) return
   try {
     const copy = await pb.collection('encounters').create<Encounter>({ game: gameId.value, name: `${encounter.name} (copy)` })
     const sourceEntries = await pb.collection('encounter_creatures').getFullList<Entry>({ filter: pb.filter('encounter = {:id}', { id: encounter.id }), requestKey: null })
@@ -492,6 +826,7 @@ async function duplicateEncounter(encounter: Encounter) {
 }
 
 async function deleteEncounter(encounter: Encounter) {
+  if (startInFlight) return
   if (!window.confirm(`Delete “${encounter.name}” and its prepared creatures? This cannot be undone.`)) return
   try {
     await pb.collection('encounters').delete(encounter.id)
@@ -505,12 +840,13 @@ async function deleteEncounter(encounter: Encounter) {
 }
 
 function openPicker() {
+  if (startInFlight) return
   if (!pickerPending.value) pickerFeedback.value = null
   pickerOpen.value = true
 }
 
 async function addCreature(creature: CatalogRecord) {
-  if (!selected.value || pickerPending.value) return
+  if (startInFlight || !selected.value || pickerPending.value) return
   pickerPending.value = true
   pickerFeedback.value = { tone: 'status', message: `Adding ${creature.name}…` }
   try {
@@ -538,7 +874,7 @@ async function addCreature(creature: CatalogRecord) {
 }
 
 async function addCustom() {
-  if (!selected.value || !customName.value.trim() || !Number.isInteger(customQuantity.value) || customQuantity.value < 1 || customQuantity.value > 100) return
+  if (startInFlight || !selected.value || !customName.value.trim() || !Number.isInteger(customQuantity.value) || customQuantity.value < 1 || customQuantity.value > 100) return
   try {
     await pb.collection('encounter_creatures').create({ encounter: selected.value.id, name: customName.value.trim(), quantity: customQuantity.value, notes: customNotes.value, custom: true })
     customName.value = ''; customQuantity.value = 1; customNotes.value = ''; customOpen.value = false
@@ -547,6 +883,7 @@ async function addCustom() {
 }
 
 async function saveEntry(entry: Entry) {
+  if (startInFlight) return
   const draft = entryDrafts.value[entry.id]
   if (!draft || !Number.isInteger(draft.quantity) || draft.quantity < 1 || draft.quantity > 100) { error.value = 'Quantity must be a whole number from 1 to 100.'; return }
   try {
@@ -556,6 +893,7 @@ async function saveEntry(entry: Entry) {
 }
 
 async function removeEntry(entry: Entry) {
+  if (startInFlight) return
   try { await pb.collection('encounter_creatures').delete(entry.id); await loadEntries() }
   catch { error.value = 'The creature entry could not be removed.' }
 }
@@ -570,11 +908,11 @@ function rememberPrintPosition() {
     <div v-if="loading" class="loading-state" role="status">Loading encounters…</div>
     <template v-else-if="game">
       <RouterLink class="text-link" :to="{ name: 'game-characters', params: { gameId: game.id } }">← {{ game.name }}</RouterLink>
-      <div class="screen-heading"><div><p class="eyebrow"><span class="eyebrow-line" /> {{ game.expand?.system?.name ?? 'GAME' }}</p><h1 id="page-title">Encounters</h1><p class="screen-description">Prepare reusable creature groupings for {{ game.name }}. Preparation stays separate from live combat.</p></div><div class="row-actions"><button class="primary-button" type="button" @click="beginCreate">＋ New encounter</button></div></div>
-      <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Refresh</button></p>
+      <div class="screen-heading"><div><p class="eyebrow"><span class="eyebrow-line" /> {{ game.expand?.system?.name ?? 'GAME' }}</p><h1 id="page-title">Encounters</h1><p class="screen-description">Prepare reusable creature groupings for {{ game.name }}. Preparation stays separate from live combat.</p></div><div class="row-actions"><button class="primary-button" type="button" :disabled="setupStarting" @click="beginCreate">＋ New encounter</button></div></div>
+      <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" :disabled="setupStarting" @click="load">Refresh</button> <button v-if="startUncertain && uncertainReconciled" class="inline-button" type="button" @click="confirmNoActiveCombat">Confirm no combat was created</button></p>
       <form v-if="formOpen" class="editor-panel" @submit.prevent="saveEncounter"><h2>{{ editingId ? 'Rename encounter' : 'New encounter' }}</h2><label class="field-label" for="encounter-name">Name</label><input id="encounter-name" v-model="name" class="text-input" maxlength="160" required /><div class="form-actions"><button class="secondary-button" type="button" @click="formOpen = false">Cancel</button><button class="primary-button" type="submit">Save encounter</button></div></form>
       <div v-if="encounters.length" class="encounter-layout">
-        <aside class="encounter-sidebar" aria-label="Prepared encounters"><button v-for="encounter in encounters" :key="encounter.id" class="spellbook-tab" :class="{ selected: encounter.id === selectedId }" type="button" @click="selectEncounter(encounter.id)">{{ encounter.name }}<small>{{ encounter.id === selectedId ? entries.length + ' creature types' : '' }}</small></button></aside>
+        <aside class="encounter-sidebar" aria-label="Prepared encounters"><button v-for="encounter in encounters" :key="encounter.id" class="spellbook-tab" :class="{ selected: encounter.id === selectedId }" type="button" :disabled="setupStarting" @click="selectEncounter(encounter.id)">{{ encounter.name }}<small>{{ encounter.id === selectedId ? entries.length + ' creature types' : '' }}</small></button></aside>
         <section v-if="selected" class="encounter-content">
           <div v-if="switching" class="encounter-switching" role="status" aria-live="polite">
             <p class="eyebrow">PREPARATION · REUSABLE</p>
@@ -593,6 +931,7 @@ function rememberPrintPosition() {
             :system="system"
             :print-target="printTarget"
             :combat-active="Boolean(combat?.active)"
+            :busy="setupStarting"
             @add-catalog="openPicker"
             @add-custom="addCustom"
             @save-entry="saveEntry"
@@ -602,7 +941,25 @@ function rememberPrintPosition() {
             @delete="deleteEncounter(selected)"
             @print="rememberPrintPosition"
           />
+          <EncounterCombatSetup
+            v-if="!combat?.active"
+            v-model:drafts="setupDrafts"
+            v-model:selected-for-group="setupSelectedForGroup"
+            :planned="plannedCombatants"
+            :rules="rules"
+            :characters="gameCharacters"
+            :hp-source-for="hpSourceForPlanned"
+            :modifier-for="modifierForPlanned"
+            :can-start="plannedCombatants.length > 0 && !startRecoveryRequired"
+            :starting="setupStarting"
+            :recovery-required="startRecoveryRequired"
+            @start="startCombat"
+            @add-character="addSetupCharacter"
+            @add-custom="addSetupCustom"
+            @remove-planned="removeSetupParticipant"
+          />
           <EncounterLivePanel
+            v-else
             v-model:drafts="combatDrafts"
             v-model:selected-for-group="selectedForGroup"
             v-model:initiative-modifiers="initiativeModifiers"
@@ -615,7 +972,7 @@ function rememberPrintPosition() {
             :active-combatant="activeCombatant"
             :hp-preview="hpPreview"
             :dice-error="diceError"
-            :can-start="entries.length > 0"
+            :can-start="plannedCombatants.length > 0"
             :hp-source-for="hpFromSource"
             @start="startCombat"
             @reset="resetCombat"

@@ -71,6 +71,24 @@ export type Combatant = {
 
 export type EntryDraft = { quantity: number; notes: string }
 
+/** A participant staged for the next combat but not written until Start. */
+export type PlannedCombatant = {
+  key: string
+  prepared: string
+  character: string
+  name: string
+  enemy: boolean
+  notes: string
+  sortOrder: number
+}
+
+export type CombatSetupDraft = {
+  initiative: number | ''
+  initiativeModifier: number | ''
+  currentHp: number | ''
+  maxHp: number | ''
+}
+
 export type CombatDraft = {
   initiative: number | ''
   current_hp: number | ''
