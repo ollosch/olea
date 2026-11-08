@@ -3,9 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import type { RouteLocationNamedRaw } from 'vue-router'
 import CardPrintPreview, { type PrintCard } from '../components/CardPrintPreview.vue'
+import PrintSelectionPanel, { type PrintSelectionOption } from '../components/PrintSelectionPanel.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
-import { systemForGame, systemByKey } from '../lib/systems'
+import { systemForGame } from '../lib/systems'
 import { CARD_LAYOUTS } from '../lib/cardPrint'
 import { monsterPrintCard } from '../lib/printCards'
 
@@ -33,6 +34,19 @@ const returnTarget = computed<RouteLocationNamedRaw>(() => {
     ...(encounterId ? { state: { oleaEncounterReturn: true } } : {}),
   }
 })
+const returnLabel = computed(() => {
+  const encounter = encounters.value.find((entry) => entry.id === returnEncounterId())
+  return encounter && game.value ? `← Back to ${encounter.name} in ${game.value.name}` : `← ${game.value?.name ?? 'Game'} encounters`
+})
+const entryCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const entry of entries.value) counts.set(entry.encounter, (counts.get(entry.encounter) ?? 0) + 1)
+  return counts
+})
+const encounterOptions = computed<PrintSelectionOption[]>(() => encounters.value.map((encounter) => {
+  const count = entryCounts.value.get(encounter.id) ?? 0
+  return { id: encounter.id, name: encounter.name, meta: `${count} participant${count === 1 ? '' : 's'}` }
+}))
 
 function returnEncounterId() {
   const valid = (id: string) => Boolean(id) && encounters.value.some((encounter) => encounter.id === id)
@@ -76,6 +90,15 @@ const cards = computed<PrintCard[]>(() => choiceMap.value.filter((choice) => sel
       back: { title: choice.custom ? 'Custom creature' : 'Missing source', note: choice.encounterNames.join(' · '), content: choice.notes.length ? choice.notes.join('\n') : 'No additional notes or flavour text are available.' },
       warnings: choice.custom ? ['Custom participants have no imported stats; add manual notes before printing.'] : ['Catalog creature is missing.'],
     }))
+const cardOptions = computed<PrintSelectionOption[]>(() => choiceMap.value.map((choice) => ({
+  id: choice.id,
+  name: choice.name,
+  meta: choice.record ? system.value.catalog.resultLabel(choice.record) : choice.custom ? 'Custom participant · manual card' : 'Catalog record missing',
+  detail: `${choice.encounterNames.join(' · ')} · ${choice.notes.length ? `${choice.notes.length} note${choice.notes.length === 1 ? '' : 's'}` : 'no encounter notes'}`,
+  warning: choice.custom
+    ? 'Custom participants have no imported stats; add manual notes before printing.'
+    : choice.missing ? 'Catalog creature is missing; this card contains only the saved encounter entry.' : undefined,
+})))
 
 onMounted(load)
 
@@ -101,31 +124,43 @@ async function load() {
   finally { loading.value = false }
 }
 
-function updateEncounterSelection(event: Event) {
-  const select = event.target as HTMLSelectElement
-  selectedEncounters.value = Array.from(select.selectedOptions).map((option) => option.value)
+function setSelectedEncounters(ids: string[]) {
+  selectedEncounters.value = ids
   selectedCards.value = []
 }
-
-function toggleCard(id: string) {
-  selectedCards.value = selectedCards.value.includes(id) ? selectedCards.value.filter((entry) => entry !== id) : [...selectedCards.value, id]
-}
-
-function selectAll() { selectedCards.value = choiceMap.value.map((choice) => choice.id) }
 </script>
 
 <template>
   <section class="screen" aria-labelledby="page-title">
     <div v-if="loading" class="loading-state" role="status">Loading monster cards…</div>
     <template v-else-if="game">
-      <RouterLink class="text-link screen-only" :to="returnTarget">← {{ game.name }} encounters</RouterLink>
-      <div class="card-selection screen-only">
-        <div><p class="eyebrow">{{ game.expand?.system?.name ?? 'GAME' }}</p><h2>Choose encounters and creatures</h2><p>Select one encounter or several from this game. Catalog creature types are deduplicated by catalog record; custom participants remain separate.</p></div>
-        <label class="filter-field">Encounters (select multiple)<select class="select-input" multiple size="5" :value="selectedEncounters" @change="updateEncounterSelection"><option v-for="encounter in encounters" :key="encounter.id" :value="encounter.id">{{ encounter.name }}</option></select></label>
-        <div class="row-actions"><button class="secondary-button" type="button" @click="selectAll">Select all cards</button><button class="secondary-button" type="button" @click="selectedCards = []">Clear cards</button></div>
-        <p v-if="!choiceMap.length" class="muted-hint">No creature entries in the selected encounters.</p>
-        <label v-for="choice in choiceMap" :key="choice.id" class="card-choice"><input type="checkbox" :checked="selectedCards.includes(choice.id)" @change="toggleCard(choice.id)" /><span><strong>{{ choice.name }}<small v-if="choice.record">{{ system.catalog.resultLabel(choice.record) }}</small><small v-else>{{ choice.custom ? 'Custom participant · manual card' : 'Catalog record missing' }}</small></strong><small>{{ choice.encounterNames.join(' · ') }} · {{ choice.notes.length ? `${choice.notes.length} note${choice.notes.length === 1 ? '' : 's'}` : 'no encounter notes' }}</small></span></label>
-      </div>
+      <RouterLink class="text-link screen-only" :to="returnTarget">{{ returnLabel }}</RouterLink>
+      <PrintSelectionPanel
+        class="screen-only"
+        :eyebrow="game.expand?.system?.name ?? 'GAME'"
+        title="Choose encounters and creatures"
+        description="Select one encounter or several from this game with the checkboxes. Catalog creature types are deduplicated by catalog record; custom participants remain separate."
+        legend="Encounters"
+        name="encounters"
+        noun="encounter"
+        :options="encounterOptions"
+        :selected="selectedEncounters"
+        empty-text="This game has no encounters yet. Create an encounter before printing creature cards."
+        @update:selected="setSelectedEncounters"
+      />
+      <PrintSelectionPanel
+        class="screen-only"
+        eyebrow="CREATURE CARDS"
+        title="Choose creature cards"
+        description="Cards from the selected encounters appear here. Select the creatures you want on the sheet."
+        legend="Creature cards"
+        name="creature-cards"
+        noun="card"
+        :options="cardOptions"
+        :selected="selectedCards"
+        :empty-text="selectedEncounters.length ? 'No creature entries in the selected encounters.' : 'Choose at least one encounter to see its creature cards.'"
+        @update:selected="selectedCards = $event"
+      />
       <CardPrintPreview :title="`${game.name} · Monster cards`" :cards="cards" :layout="CARD_LAYOUTS.a6Four" :calibration-href="'/print/calibration'" />
     </template>
     <p v-else class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>

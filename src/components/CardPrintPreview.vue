@@ -74,7 +74,7 @@ function print() {
 <template>
   <section class="card-print-workspace" aria-labelledby="print-title">
     <header class="card-print-toolbar screen-only">
-      <div><p class="eyebrow"><span class="eyebrow-line" /> PRINT PREVIEW</p><h1 id="print-title">{{ title }}</h1><p class="screen-description">{{ layout.label }} · {{ cards.length }} {{ cards.length === 1 ? 'card' : 'cards' }} · {{ pages }} {{ pages === 1 ? 'sheet' : 'sheets' }}</p></div>
+      <div><p class="eyebrow"><span class="eyebrow-line" /> PRINT PREVIEW</p><h1 id="print-title">{{ title }}</h1><p class="screen-description" role="status" aria-live="polite">{{ layout.label }} · {{ cards.length }} selected {{ cards.length === 1 ? 'card' : 'cards' }} · {{ pages }} {{ pages === 1 ? 'sheet' : 'sheets' }}</p></div>
       <div class="card-print-controls">
         <label class="filter-field">Duplex flip edge<select v-model="flip" class="select-input"><option value="long-edge">Long edge</option><option value="short-edge">Short edge</option></select></label>
         <label class="check-field"><input v-model="showCalibration" type="checkbox" /> Include calibration page</label>
@@ -83,7 +83,7 @@ function print() {
       </div>
     </header>
     <p v-if="warningCount" class="print-warning screen-only" role="status">{{ warningCount }} card{{ warningCount === 1 ? '' : 's' }} may overflow its position: {{ warningNames.join(', ') }}. Edit the preferred description or use a larger card format; text is never automatically clipped or shrunk.</p>
-    <p v-if="!cards.length" class="empty-state compact-empty screen-only">There are no cards to preview.</p>
+    <p v-if="!cards.length" class="empty-state compact-empty screen-only">No cards are selected. Choose at least one card above to preview and print.</p>
 
     <template v-for="page in sheetNumbers" :key="`sheet-${page}`">
       <div class="print-sheet screen-only" :style="pageStyle" :aria-label="`Sheet ${page + 1} fronts`">

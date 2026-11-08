@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import type { RouteLocationNamedRaw } from 'vue-router'
 import CardPrintPreview, { type PrintCard } from '../components/CardPrintPreview.vue'
+import PrintSelectionPanel, { type PrintSelectionOption } from '../components/PrintSelectionPanel.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
 import { systemForGame } from '../lib/systems'
@@ -21,15 +23,31 @@ const selected = ref<string[]>([])
 const loading = ref(true)
 const error = ref('')
 const system = computed(() => systemForGame(game.value))
-const cards = computed<PrintCard[]>(() => items.value.map((item) => itemPrintCard({
-  id: item.id,
-  name: item.name,
-  record: item.expand?.catalog_item,
-  quantity: item.quantity,
-  weight: item.weight_known ? `${item.weight} ${system.value.currency.weightUnit ?? 'units'}` : '',
-  notes: item.notes ?? '',
-}, system.value)))
-const selectedCards = computed(() => cards.value.filter((card) => selected.value.includes(card.id)))
+const returnTarget = computed<RouteLocationNamedRaw>(() => ({
+  name: 'character-inventory',
+  params: { characterId: character.value?.id ?? '' },
+  state: { oleaInventoryReturn: true },
+}))
+const cardEntries = computed(() => items.value.map((item) => ({
+  item,
+  card: itemPrintCard({
+    id: item.id,
+    name: item.name,
+    record: item.expand?.catalog_item,
+    quantity: item.quantity,
+    weight: item.weight_known ? `${item.weight} ${system.value.currency.weightUnit ?? 'units'}` : '',
+    notes: item.notes ?? '',
+  }, system.value),
+})))
+const cards = computed(() => cardEntries.value.map((entry) => entry.card))
+const selectedCards = computed(() => cardEntries.value.filter((entry) => selected.value.includes(entry.card.id)).map((entry) => entry.card))
+const cardOptions = computed<PrintSelectionOption[]>(() => cardEntries.value.map(({ item, card }) => ({
+  id: card.id,
+  name: card.name,
+  meta: item.expand?.catalog_item ? system.value.catalog.resultLabel(item.expand.catalog_item) : 'Custom item',
+  detail: `Quantity ${item.quantity}${item.notes ? ' · Notes available' : ' · No notes'}`,
+  warning: card.warnings?.length ? card.warnings.join(' ') : undefined,
+})))
 
 onMounted(load)
 
@@ -45,16 +63,26 @@ async function load() {
   } catch { error.value = 'Inventory item cards could not be loaded.' }
   finally { loading.value = false }
 }
-
-function toggle(id: string) { selected.value = selected.value.includes(id) ? selected.value.filter((entry) => entry !== id) : [...selected.value, id] }
 </script>
 
 <template>
   <section class="screen" aria-labelledby="page-title">
     <div v-if="loading" class="loading-state" role="status">Loading item cards…</div>
     <template v-else-if="character && game">
-      <RouterLink class="text-link screen-only" :to="{ name: 'character-inventory', params: { characterId: character.id } }">← {{ character.name }}’s inventory</RouterLink>
-      <div class="card-selection screen-only"><div><p class="eyebrow">{{ game.expand?.system?.name ?? 'ITEMS' }}</p><h2>Choose item cards</h2><p>Cards use the confirmed A7 landscape format: eight positions per A4 sheet. Weapon damage and properties are highlighted when supplied by the catalog.</p></div><div class="row-actions"><button class="secondary-button" type="button" @click="selected = cards.map((card) => card.id)">Select all</button><button class="secondary-button" type="button" @click="selected = []">Clear</button></div><label v-for="(card, index) in cards" :key="card.id" class="card-choice"><input type="checkbox" :checked="selected.includes(card.id)" @change="toggle(card.id)" /><span><strong>{{ card.name }}<small>{{ items[index]?.expand?.catalog_item ? system.catalog.resultLabel(items[index]!.expand!.catalog_item!) : 'Custom item' }}</small></strong><small>Quantity {{ items[index]?.quantity }}<template v-if="items[index]?.notes"> · Notes available</template></small></span></label><p v-if="!cards.length" class="muted-hint">No carried items are available to print.</p></div>
+      <RouterLink class="text-link screen-only" :to="returnTarget">← {{ character.name }}’s inventory</RouterLink>
+      <PrintSelectionPanel
+        class="screen-only"
+        :eyebrow="game.expand?.system?.name ?? 'ITEMS'"
+        title="Choose item cards"
+        description="Only root carried items are printed: items inside containers and stash contents are not included. Cards use the confirmed A7 landscape format, eight positions per A4 sheet. Weapon damage and properties are highlighted when supplied by the catalog."
+        legend="Root carried item cards"
+        name="items"
+        noun="card"
+        :options="cardOptions"
+        :selected="selected"
+        empty-text="No root carried items are available to print. Stash contents and items inside containers are not included."
+        @update:selected="selected = $event"
+      />
       <CardPrintPreview :title="`${character.name} · Item cards`" :cards="selectedCards" :layout="CARD_LAYOUTS.a7Eight" :calibration-href="'/print/calibration'" />
     </template>
     <p v-else class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>

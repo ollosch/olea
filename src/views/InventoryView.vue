@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import CatalogPicker from '../components/CatalogPicker.vue'
 import PageHeader from '../components/PageHeader.vue'
+import { prepareInventoryPrintReturn, rememberInventoryPrintReturn, type InventoryPrintRestore } from '../composables/useInventoryPrintReturn'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
 import { guardedUpdate, isConflict, isDefiniteWriteRejection } from '../lib/records'
@@ -37,6 +38,7 @@ const coinTransferOpen = ref(false)
 const coinTransferPending = ref(false)
 const loading = ref(true)
 const error = ref('')
+const printReturnNotice = ref('')
 const pickerOpen = ref(false)
 const pickerPending = ref(false)
 const pickerFeedback = ref<{ tone: 'status' | 'error'; message: string } | null>(null)
@@ -137,18 +139,60 @@ const transferTargets = computed(() => [
 const subscriptions = ref<Array<() => Promise<void>>>([])
 let inventoryGeneration = 0
 let subscriptionGeneration = 0
+let printRestore: InventoryPrintRestore | null = null
+let restoringPrintSnapshot = false
 onMounted(async () => {
+  printRestore = prepareInventoryPrintReturn(String(route.params.characterId ?? ''))
   await load()
   await subscribe()
   window.addEventListener('olea-reconnected', refreshAfterReconnect)
   window.addEventListener('focus', refreshAfterReconnect)
+  if (printRestore) await restoreInventoryPrint(printRestore)
+  printRestore = null
 })
 onUnmounted(() => {
   subscriptionGeneration++
+  printRestore?.cancel()
+  printRestore = null
   window.removeEventListener('olea-reconnected', refreshAfterReconnect)
   window.removeEventListener('focus', refreshAfterReconnect)
   for (const stop of subscriptions.value) void stop()
 })
+async function restoreInventoryPrint(restore: InventoryPrintRestore) {
+  if (!restore.active() || !character.value || !inventory.value) { restore.cancel(); return }
+  const snapshot = restore.snapshot
+  if (!snapshot) { restore.restore(); return }
+
+  const stored = snapshot.storeId ? stashes.value.find((stash) => stash.id === snapshot.storeId) : null
+  if (snapshot.storeId && !stored) {
+    printReturnNotice.value = 'The stash that was open when you printed is no longer available. Showing the carried inventory instead.'
+    restore.restore()
+    return
+  }
+
+  if (stored) {
+    restoringPrintSnapshot = true
+    selectedStashId.value = stored.id
+    searchQuery.value = snapshot.search
+    collapsedContainers.value = new Set(snapshot.collapsed)
+    try {
+      await nextTick()
+    } finally {
+      restoringPrintSnapshot = false
+    }
+    if (!restore.active()) { restore.cancel(); return }
+  } else {
+    searchQuery.value = snapshot.search
+    collapsedContainers.value = new Set(snapshot.collapsed)
+  }
+  if (stored) {
+    await loadItems()
+    if (!restore.active()) { restore.cancel(); return }
+  }
+  await nextTick()
+  if (!restore.active()) { restore.cancel(); return }
+  restore.restore()
+}
 async function subscribe() {
   const generation = ++subscriptionGeneration
   for (const stop of subscriptions.value) void stop()
@@ -189,8 +233,11 @@ watch(selectedStashId, () => {
   capacityDraft.value = inventory.value?.capacity_known ? String(inventory.value.capacity) : ''
   if (!currencyUncertain.value && !currencyRefreshFailed.value) currencyFeedback.value = ''
   if (!capacityUncertain.value && !capacityRefreshFailed.value) capacityFeedback.value = ''
-  searchQuery.value = ''
-  collapsedContainers.value = new Set()
+  if (!restoringPrintSnapshot) {
+    searchQuery.value = ''
+    collapsedContainers.value = new Set()
+    printReturnNotice.value = ''
+  }
   rowFeedback.value = null
   void loadItems().catch(() => { error.value = 'Items could not be loaded.' })
 })
@@ -280,6 +327,15 @@ function toggleContainer(id: string) {
 }
 function clearInventorySearch() {
   searchQuery.value = ''
+}
+function rememberPrintPosition(event: MouseEvent) {
+  if (!character.value) return
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  rememberInventoryPrintReturn(character.value.id, {
+    storeId: selectedStashId.value,
+    search: searchQuery.value,
+    collapsed: [...collapsedContainers.value],
+  })
 }
 
 function markPending(id: string) {
@@ -916,13 +972,14 @@ function childCount(item: InventoryItem): number { return items.value.filter((en
       <RouterLink class="text-link" :to="{ name: 'character-overview', params: { characterId: character.id } }">← {{ character.name }}</RouterLink>
       <PageHeader eyebrow="CHARACTER INVENTORY" :title="`${character.name}’s items`" description="Find carried items and nested containers, then change what this character is holding.">
         <template #actions>
-          <RouterLink v-if="items.length" class="secondary-link" :to="{ name: 'print-items', params: { characterId: character.id } }">Print item cards</RouterLink>
+          <RouterLink v-if="items.length" class="secondary-link" :to="{ name: 'print-items', params: { characterId: character.id } }" title="Prints root carried items only; stash contents and items inside containers are excluded." @click="rememberPrintPosition">Print item cards</RouterLink>
           <button class="primary-button" type="button" @click="openPicker">＋ Add catalog item</button>
           <button class="secondary-button" type="button" @click="customOpen = !customOpen">Custom item</button>
         </template>
       </PageHeader>
       <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="recoverInventory">{{ needsReconciliation ? 'Refresh inventory' : 'Retry' }}</button></p>
       <p v-if="reconciliationMessage" class="muted-hint inventory-reconciliation" role="status">{{ reconciliationMessage }}</p>
+      <p v-if="printReturnNotice" class="muted-hint inventory-print-notice" role="status">{{ printReturnNotice }}</p>
 
       <section class="inventory-store-panel" aria-labelledby="inventory-store-title">
         <div class="inventory-store-copy">
