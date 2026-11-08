@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import type { RouteLocationNamedRaw } from 'vue-router'
 import CardPrintPreview, { type PrintCard } from '../components/CardPrintPreview.vue'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
@@ -23,6 +24,13 @@ const error = ref('')
 const system = computed(() => systemByKey(systemKey.value))
 const cards = computed<PrintCard[]>(() => spells.value.flatMap((entry) => entry.expand?.spell ? [spellPrintCard(entry.expand.spell, system.value)] : []))
 const selectedCards = computed(() => cards.value.filter((card) => selected.value.includes(card.id)))
+const missingSpells = computed(() => spells.value.filter((entry) => !entry.expand?.spell).length)
+const returnTarget = computed<RouteLocationNamedRaw>(() => ({
+  name: 'character-spellbooks',
+  params: { characterId: character.value?.id ?? '' },
+  query: book.value ? { book: book.value.id } : {},
+  ...(book.value ? { state: { oleaSpellbookReturn: true } } : {}),
+}))
 
 onMounted(load)
 
@@ -50,8 +58,8 @@ function toggleSpell(id: string) {
   <section class="screen" aria-labelledby="page-title">
     <div v-if="loading" class="loading-state" role="status">Loading spell cards…</div>
     <template v-else-if="character && book">
-      <RouterLink class="text-link screen-only" :to="{ name: 'character-spellbooks', params: { characterId: character.id } }">← {{ book.name }}</RouterLink>
-      <div class="card-selection screen-only"><div><p class="eyebrow">SPELLBOOK</p><h2>{{ book.name }}</h2><p>Select which cards to include. Card order follows the spellbook’s alphabetical list.</p></div><div class="row-actions"><button class="secondary-button" type="button" @click="selected = cards.map((card) => card.id)">Select all</button><button class="secondary-button" type="button" @click="selected = []">Clear</button></div><label v-for="card in cards" :key="card.id" class="card-choice"><input type="checkbox" :checked="selected.includes(card.id)" @change="toggleSpell(card.id)" /><span><strong>{{ card.name }}</strong><small>{{ card.front.fields?.map((field) => field.value).slice(0, 2).join(' · ') || 'Spell fields unavailable' }}</small></span></label></div>
+      <RouterLink class="text-link screen-only" :to="returnTarget">← {{ book.name }}</RouterLink>
+      <div class="card-selection screen-only"><div><p class="eyebrow">SPELLBOOK</p><h2>{{ book.name }}</h2><p>Select which cards to include. Card order follows the spellbook’s alphabetical list.</p><p v-if="missingSpells" class="muted-hint" role="status">{{ missingSpells }} saved spell {{ missingSpells === 1 ? 'reference is' : 'references are' }} missing from the catalog and cannot be printed.</p></div><div class="row-actions"><button class="secondary-button" type="button" @click="selected = cards.map((card) => card.id)">Select all</button><button class="secondary-button" type="button" @click="selected = []">Clear</button></div><label v-for="card in cards" :key="card.id" class="card-choice"><input type="checkbox" :checked="selected.includes(card.id)" @change="toggleSpell(card.id)" /><span><strong>{{ card.name }}</strong><small>{{ card.front.fields?.map((field) => field.value).slice(0, 2).join(' · ') || 'Spell fields unavailable' }}</small></span></label></div>
       <CardPrintPreview :title="`${character.name} · ${book.name}`" :cards="selectedCards" :layout="CARD_LAYOUTS.a6Four" :calibration-href="'/print/calibration'" />
     </template>
     <p v-else class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="load">Retry</button></p>
