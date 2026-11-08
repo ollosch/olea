@@ -170,18 +170,28 @@ test('measure synthetic usability journeys', async ({ page, request, ids, isMobi
     await page.waitForTimeout(500)
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
     await measure('player before update', '.combatant-list')
-    // Hold refresh long enough to make the loading geometry observable.
-    await page.route(`**/api/collections/games/records/${ids.gameId}**`, async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 600))
+    const beforeUpdateScroll = await page.evaluate(() => Math.round(scrollY))
+    let heldUpdate = () => {}
+    const updateRequested = new Promise<void>((resolve) => { heldUpdate = resolve })
+    // Step 11 keeps the same roster while an authoritative change arrives.
+    await page.route('**/api/collections/combatants/records?*', async (route) => {
+      if (route.request().method() === 'GET') {
+        heldUpdate()
+        await new Promise((resolve) => setTimeout(resolve, 600))
+      }
       await route.continue()
     })
     const updated = await request.post(`${e2eApiBase}/api/olea/records/combatants/${lastCombatantId}/update`, { data: { expected: { current_hp: 6 }, fields: { current_hp: 5 } } })
     expect(updated.ok(), await updated.text()).toBeTruthy()
-    await expect(page.getByText('Loading active encounter…')).toBeVisible()
-    await measure('player loading on live update', '.combatant-list')
+    await updateRequested
+    await expect(page.getByText('Loading active encounter…')).toHaveCount(0)
     await expect(page.locator('.combatant-card')).toHaveCount(15)
+    expect(await page.evaluate(() => Math.round(scrollY))).toBe(beforeUpdateScroll)
+    await measure('player update pending in place', '.combatant-list')
     await expect(page.getByText('HP 5/10')).toBeVisible()
-    await measure('player after live update', '.combatant-list')
+    await expect(page.locator('.combatant-card')).toHaveCount(15)
+    expect(await page.evaluate(() => Math.round(scrollY))).toBe(beforeUpdateScroll)
+    await measure('player update applied in place', '.combatant-list')
     await page.unrouteAll({ behavior: 'wait' })
   } finally {
     // Drop references before deleting catalog records; the shared fixture owns the game.

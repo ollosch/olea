@@ -3,15 +3,18 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { LocationQueryRaw, RouteLocationRaw } from 'vue-router'
 import CatalogPicker from '../components/CatalogPicker.vue'
+import FeedbackRegion from '../components/FeedbackRegion.vue'
 import EncounterCombatSetup from '../components/encounters/EncounterCombatSetup.vue'
 import EncounterLivePanel from '../components/encounters/EncounterLivePanel.vue'
 import EncounterPreparation from '../components/encounters/EncounterPreparation.vue'
+import { useLiveConnection } from '../composables/useLiveConnection'
 import { pb } from '../lib/pocketbase'
 import type { CatalogRecord } from '../lib/catalog'
 import { evaluateDice } from '../lib/dice'
 import { systemForGame } from '../lib/systems'
 import { activeParticipant, orderParticipants } from '../lib/encounterOrder'
 import { applyLiveHPAdjustment, liveDraftDiffers, validateLiveHPInput } from '../lib/liveCombat'
+import { subscribeAll } from '../lib/liveSubscriptions'
 import { guardedUpdate, isConflict, isDefiniteWriteRejection } from '../lib/records'
 import type {
   Character,
@@ -89,6 +92,10 @@ const groupRollError = ref('')
 const addParticipantPending = ref(false)
 const addParticipantUncertain = ref(false)
 const addParticipantError = ref('')
+const live = useLiveConnection({ refresh: requestRealtimeRefresh, resubscribe: subscribe })
+const liveTone = computed(() => live.state.value === 'unavailable' || live.state.value === 'offline' ? 'error' : 'status')
+const liveText = computed(() => live.notice.value || live.message.value)
+const liveAction = computed(() => liveTone.value === 'error' ? 'Retry live updates' : '')
 type LiveDraftField = 'initiative' | 'current_hp' | 'max_hp' | 'conditions' | 'notes' | 'initiative_modifier'
 type LiveWriteOutcome = 'ok' | 'conflict' | 'rejected' | 'uncertain' | 'refresh-failed' | 'blocked'
 type LoadCombatOptions = { preserveDirtyDrafts?: boolean; rebaseIds?: ReadonlySet<string>; shouldSkip?: (id: string) => boolean }
@@ -164,74 +171,164 @@ let printRestore: EncounterPrintRestore | null = null
 
 const unsubscribe = ref<Array<() => Promise<void>>>([])
 let realtimeGeneration = 0
+let mountedGeneration = 0
+let realtimeVersion = 0
+let realtimeRequested = false
+let realtimeLoop: Promise<boolean> | null = null
+let subscriptionActive = false
 onMounted(async () => {
   const returnEncounterId = String(route.query.encounter ?? '')
   if (returnEncounterId) printRestore = prepareEncounterPrintReturn(gameId.value, returnEncounterId)
   await load()
-  await subscribe()
+  const subscribed = await subscribe()
+  if (subscribed) {
+    const reconciled = await requestRealtimeRefresh()
+    if (reconciled) {
+      if (subscriptionActive || !selectedId.value) live.markLive()
+    } else live.markUnavailable('Live updates are connected, but the latest encounter data could not be loaded. Retry live updates.')
+  } else live.markUnavailable('Live updates are unavailable. Showing the last data; retry live updates.')
   await nextTick()
   printRestore?.restore()
   printRestore = null
-  window.addEventListener('olea-reconnected', refreshAfterReconnect)
-  window.addEventListener('focus', refreshAfterReconnect)
 })
 onUnmounted(() => {
+  mountedGeneration++
+  realtimeVersion++
+  realtimeRequested = false
+  subscriptionActive = false
   printRestore?.cancel()
   printRestore = null
   realtimeGeneration++
-  window.removeEventListener('olea-reconnected', refreshAfterReconnect)
-  window.removeEventListener('focus', refreshAfterReconnect)
+  selectionGeneration++
+  loadGeneration++
   for (const stop of unsubscribe.value) void stop()
 })
 watch(() => String(route.query.encounter ?? ''), () => { void syncSelectedFromRoute() })
 
-async function subscribe() {
+async function subscribe(): Promise<boolean> {
   const selection = selectionGeneration
   const generation = ++realtimeGeneration
-  for (const stop of unsubscribe.value) void stop()
+  subscriptionActive = false
+  const previous = unsubscribe.value
   unsubscribe.value = []
-  if (!selectedId.value) return
+  await Promise.all(previous.map((stop) => stop().catch(() => {})))
+  if (!selectedId.value) return true
   const collections = ['games', 'encounters', 'encounter_creatures', 'combats', 'combatants']
   try {
-    const stops = await Promise.all(collections.map((collection) => pb.collection(collection).subscribe('*', () => { void refreshLiveCombat() })))
-    if (generation !== realtimeGeneration || selection !== selectionGeneration) { for (const stop of stops) void stop(); return }
+    const stops = await subscribeAll(collections, (collection) => pb.collection(collection).subscribe('*', (event) => {
+      if (generation !== realtimeGeneration || selection !== selectionGeneration) return
+      handleRealtimeEvent(collection, event as RealtimeEvent)
+    }))
+    if (generation !== realtimeGeneration || selection !== selectionGeneration) {
+      await Promise.all(stops.map((stop) => stop().catch(() => {})))
+      return false
+    }
     unsubscribe.value = stops
+    subscriptionActive = true
+    return true
   } catch {
-    if (generation === realtimeGeneration && selection === selectionGeneration) error.value = 'Live updates are unavailable. Refresh to see current data.'
-  }
-}
-async function refreshAfterReconnect() { await refreshLiveCombat(); await subscribe() }
-async function refreshLiveCombat() {
-  if (startInFlight) return
-  const generation = selectionGeneration
-  const encounterId = selectedId.value
-  try {
-    const mutations = new Map(combatMutationByParticipant)
-    const pendingAtStart = { ...combatWritePending.value }
-    const gameRecord = await pb.collection('games').getOne<Game>(gameId.value, { expand: 'system', requestKey: null })
-    const encounterRecords = await pb.collection('encounters').getFullList<Encounter>({ filter: pb.filter('game = {:game}', { game: gameId.value }), sort: 'name', requestKey: null })
-    if (generation !== selectionGeneration || encounterId !== selectedId.value) return
-    game.value = gameRecord
-    encounters.value = encounterRecords
-    const shouldSkip = (id: string) => Boolean(pendingAtStart[id]) || (combatMutationByParticipant.get(id) ?? 0) !== (mutations.get(id) ?? 0)
-    if (!await loadEntries(generation) || !await loadCombat(generation, { preserveDirtyDrafts: true, shouldSkip })) return
-  } catch {
-    if (generation === selectionGeneration) error.value = 'Live encounter could not be refreshed. Check the connection.'
+    subscriptionActive = false
+    if (generation === realtimeGeneration && selection === selectionGeneration) live.markUnavailable('Live updates are unavailable. Showing the last data; retry live updates.')
+    return false
   }
 }
 
-async function load() {
+type RealtimeEvent = { action: string; record: Record<string, unknown> }
+
+function handleRealtimeEvent(collection: string, event: RealtimeEvent) {
   if (startInFlight) return
+  if (!realtimeIsRelevant(collection, event)) return
+  void requestRealtimeRefresh()
+}
+
+function realtimeIsRelevant(collection: string, event: RealtimeEvent) {
+  const record = event.record
+  switch (collection) {
+    case 'games': return String(record.id) === gameId.value
+    case 'encounters': return String(record.game) === gameId.value
+    case 'encounter_creatures': return Boolean(selectedId.value) && String(record.encounter) === selectedId.value
+    case 'combats': return Boolean(selectedId.value) && String(record.encounter) === selectedId.value
+    case 'combatants': return combat.value ? String(record.combat) === combat.value.id : false
+    default: return false
+  }
+}
+
+function requestRealtimeRefresh(): Promise<boolean> {
+  realtimeVersion++
+  realtimeRequested = true
+  return ensureRealtimeLoop()
+}
+
+function ensureRealtimeLoop(): Promise<boolean> {
+  if (!realtimeLoop) {
+    realtimeLoop = runRealtimeLoop().finally(() => { realtimeLoop = null })
+  }
+  return realtimeLoop
+}
+
+async function runRealtimeLoop(): Promise<boolean> {
+  const mount = mountedGeneration
+  do {
+    realtimeRequested = false
+    const version = realtimeVersion
+    try {
+      const result = await refreshLiveCombat(version, mount)
+      if (mount !== mountedGeneration) return true
+      if (result === 'stale') { realtimeRequested = true; continue }
+    } catch {
+      if (mount !== mountedGeneration) return true
+      live.markUnavailable('Live encounter changes could not be applied. Showing the last known state; retry live updates.')
+      return false
+    }
+  } while (realtimeRequested)
+  if (subscriptionActive && live.state.value !== 'live') live.markLive()
+  return true
+}
+
+async function refreshLiveCombat(version: number, mount: number): Promise<'ok' | 'stale'> {
+  if (startInFlight) return 'ok'
+  const generation = selectionGeneration
+  const encounterId = selectedId.value
+  const mutations = new Map(combatMutationByParticipant)
+  const pendingAtStart = { ...combatWritePending.value }
+  const gameRecord = await pb.collection('games').getOne<Game>(gameId.value, { expand: 'system', requestKey: null })
+  const encounterRecords = await pb.collection('encounters').getFullList<Encounter>({ filter: pb.filter('game = {:game}', { game: gameId.value }), sort: 'name', requestKey: null })
+  if (mount !== mountedGeneration || version !== realtimeVersion) return 'stale'
+  if (!encounterRecords.some((entry) => entry.id === selectedId.value)) {
+    const requested = String(route.query.encounter ?? '')
+    const requestedEntry = encounterRecords.find((entry) => entry.id === requested)
+    const next = requestedEntry?.id ?? encounterRecords[0]?.id ?? ''
+    if (next !== selectedId.value) {
+      clearSelectionData()
+      selectedId.value = next
+    }
+    if (requested && !requestedEntry) replaceEncounterQuery(next)
+  }
+  game.value = gameRecord
+  encounters.value = encounterRecords
+  const shouldSkip = (id: string) => Boolean(pendingAtStart[id]) || (combatMutationByParticipant.get(id) ?? 0) !== (mutations.get(id) ?? 0)
+  if (!await loadEntries(generation)) return 'stale'
+  if (mount !== mountedGeneration || version !== realtimeVersion) return 'stale'
+  if (!await loadCombat(generation, { preserveDirtyDrafts: true, shouldSkip })) return 'stale'
+  if (mount !== mountedGeneration || version !== realtimeVersion) return 'stale'
+  return 'ok'
+}
+
+async function load(options: { silent?: boolean } = {}): Promise<boolean> {
+  if (startInFlight) return false
+  if (realtimeLoop) await realtimeLoop.catch(() => {})
+  realtimeVersion++
+  const silent = Boolean(options.silent && game.value)
   const generation = ++loadGeneration
   const selection = selectionGeneration
-  loading.value = true
+  if (!silent) loading.value = true
   error.value = ''
   try {
     const gameRecord = await pb.collection('games').getOne<Game>(gameId.value, { expand: 'system' })
-    if (generation !== loadGeneration) return
+    if (generation !== loadGeneration) return false
     game.value = gameRecord
     const encounterRecords = await pb.collection('encounters').getFullList<Encounter>({ filter: pb.filter('game = {:game}', { game: gameId.value }), sort: 'name', requestKey: null })
-    if (generation !== loadGeneration) return
+    if (generation !== loadGeneration) return false
     encounters.value = encounterRecords
     if (!encounterRecords.some((entry) => entry.id === selectedId.value)) {
       const requested = String(route.query.encounter ?? '')
@@ -239,9 +336,9 @@ async function load() {
       selectedId.value = requestedEntry?.id ?? encounterRecords[0]?.id ?? ''
       if (requested && !requestedEntry) replaceEncounterQuery(selectedId.value)
     }
-    if (!await loadEntries(selection)) return
-    if (generation !== loadGeneration) return
-    if (!await loadCombat(selection, { preserveDirtyDrafts: true })) return
+    if (!await loadEntries(selection)) return false
+    if (generation !== loadGeneration) return false
+    if (!await loadCombat(selection, { preserveDirtyDrafts: true })) return false
     if (startUncertain.value) {
       uncertainReconciled.value = true
       startRecoveryRequired.value = true
@@ -251,8 +348,13 @@ async function load() {
     }
     pickerPending.value = false
     pickerFeedback.value = null
+    return true
   } catch {
-    if (generation === loadGeneration && selection === selectionGeneration) error.value = 'Encounters could not be loaded. Check the connection and try again.'
+    if (generation === loadGeneration && selection === selectionGeneration) {
+      if (silent) live.markUnavailable('The latest encounter data could not be loaded. Showing the last known state; retry live updates.')
+      else error.value = 'Encounters could not be loaded. Check the connection and try again.'
+    }
+    return false
   }
   finally {
     if (generation === loadGeneration) {
@@ -263,8 +365,22 @@ async function load() {
 }
 
 async function refreshAll() {
-  await load()
-  if (loading.value || error.value) return
+  if (game.value && !subscriptionActive) await subscribe()
+  if (!game.value) {
+    if (!await load()) return
+  } else {
+    error.value = ''
+    if (!await requestRealtimeRefresh()) return
+    if (startUncertain.value) {
+      uncertainReconciled.value = true
+      startRecoveryRequired.value = true
+      error.value = 'No active combat was found on recheck, but the earlier start was not confirmed and may still complete. Confirm below only after checking the table, or wait and recheck before retrying.'
+    } else {
+      startRecoveryRequired.value = false
+    }
+    pickerPending.value = false
+    pickerFeedback.value = null
+  }
   combatWriteUncertain.value = {}
   liveRefreshRequired.value = false
   combatTrackerUncertain.value = false
@@ -282,6 +398,7 @@ async function refreshAll() {
   combatTrackerError.value = ''
   groupRollError.value = ''
   addParticipantError.value = ''
+  if (live.state.value !== 'live' && await subscribe()) live.markLive()
 }
 
 function resolveParticipantConflict(participant: Combatant, mode: 'keep' | 'discard') {
@@ -308,8 +425,13 @@ async function loadEntries(generation = selectionGeneration) {
     filter: pb.filter('encounter = {:encounter}', { encounter: encounterId }), sort: 'name', expand: 'creature', requestKey: null,
   })
   if (generation !== selectionGeneration || encounterId !== selectedId.value) return false
+  const previousDrafts = entryDrafts.value
   entries.value = result
-  entryDrafts.value = Object.fromEntries(entries.value.map((entry) => [entry.id, { quantity: entry.quantity, notes: entry.notes ?? '' }]))
+  entryDrafts.value = Object.fromEntries(entries.value.map((entry) => {
+    const draft = previousDrafts[entry.id]
+    if (draft && (draft.quantity !== entry.quantity || draft.notes !== (entry.notes ?? ''))) return [entry.id, draft]
+    return [entry.id, { quantity: entry.quantity, notes: entry.notes ?? '' }]
+  }))
   return true
 }
 
@@ -1096,7 +1218,7 @@ async function applyEncounterSelection(id: string) {
     if (!await loadEntries(generation)) return
     if (!await loadCombat(generation)) return
     if (generation !== selectionGeneration) return
-    await subscribe()
+    if (await subscribe()) live.markLive()
   } catch {
     if (generation === selectionGeneration) error.value = 'Encounter entries could not be loaded.'
   } finally {
@@ -1251,7 +1373,7 @@ function rememberPrintPosition() {
 </script>
 
 <template>
-  <section class="screen" aria-labelledby="page-title">
+  <section class="screen" aria-labelledby="page-title" :data-live-state="live.state.value">
     <div v-if="loading" class="loading-state" role="status">Loading encounters…</div>
     <template v-else-if="game">
       <RouterLink class="text-link" :to="{ name: 'game-characters', params: { gameId: game.id } }">← {{ game.name }}</RouterLink>
@@ -1267,6 +1389,11 @@ function rememberPrintPosition() {
             <p class="muted-hint">Loading this encounter’s preparation and live state…</p>
           </div>
           <template v-else>
+          <div class="feedback-slot">
+            <FeedbackRegion v-if="liveText" :tone="liveTone" :action-label="liveAction" @action="live.retry">
+              {{ liveText }}
+            </FeedbackRegion>
+          </div>
           <EncounterPreparation
             v-model:drafts="entryDrafts"
             v-model:custom-open="customOpen"

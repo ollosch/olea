@@ -4,7 +4,7 @@
 
 From the repository root run `bun run test:e2e -- e2e/usability-baseline.spec.ts --workers=1`. Playwright starts Vite and a fresh PocketBase in a temporary directory, removed when the server exits; it does not use `pb_data/` or `data/`. The script creates an invented D&D 5e game, character, 42 test spells, 42 test items, a 22-spell book, 15 live participants, and Satchel → Pouch → Token. Names include a per-run key. It logs viewport, document height/width, `window.scrollY`, focused element, and target top/height in CSS pixels. It also deletes its catalog fixtures and their references before the shared fixture removes the game. A failure trace is retained under ignored `test-results/`.
 
-This exploratory script depends on the current interface and even waits for the current player-view loading behavior. Update or retire its assertions as the redesign changes those behaviors; do not treat them as desired UX regression checks.
+This exploratory script depends on the current interface. It no longer expects the old player-view loading replacement: after step 11 it checks that a delayed live update keeps the roster and scroll in place. Update or retire its assertions as later redesign steps change those behaviors; do not treat its layout measurements as desired UX regression checks.
 
 Measurements below are one successful headless Chromium run at 1920×1080 desktop and Playwright's Pixel 8 emulation at 412×839, with no physical device or on-screen keyboard. Numbers can vary with fonts, timing and fixture-name wrapping. Some movement occurs because Playwright scrolls controls into view before clicking; this is identified below and is not proof of an unsolicited jump. This baseline describes the current working tree, including the owner's pre-existing catalog system-selection changes.
 
@@ -26,6 +26,12 @@ Measurements below are one successful headless Chromium run at 1920×1080 deskto
 ## Step 4 update (2026-11-08)
 
 Step 4 made the catalog's system, type, query, filters and page recoverable from the URL, and added per-history-entry scroll/focus restoration after asynchronous loads. The baseline's catalog assertions above now expect search/filter/page context to return instead of resetting; they remain measurements, not layout promises. Browser restoration is asynchronous, so an immediate scroll sample after Back can still precede the final restored position. The player-loading observations were not changed and remain baseline material for step 11.
+
+## Step 11 update (2026-11-08)
+
+Encounter realtime now updates the existing GM and player workspaces in place. The baseline still runs its player sequence (open, scroll to the bottom, delay the combatant read, change the last participant's HP through the API), but it now asserts that “Loading active encounter…” never appears during the delayed update, that the 15 cards stay rendered, and that the recorded scroll position is unchanged before and after HP 5 is applied. The measured runs at 1920×1080 desktop and Pixel 8 emulation both kept `scrollY` at 916 / 1768 respectively while the update was pending and after it applied. The GM combat measurements still reflect the compact roster from step 10.
+
+After review, realtime uses a serialized complete authoritative refresh rather than independent subset refreshes. A superseded refresh aborts before committing and the pending event batch is reconciled again. Reconnects subscribe before refreshing, player visibility hides when it cannot be confirmed online, and partial subscription setup cleans up before retry. The expanded `e2e/encounter-realtime.spec.ts` covers the two-context, concurrent visibility/combatant, reconnect-gap, failed-subscription, GM-superseded-refresh, fail-closed visibility, reordering, offline/reconnect, draft-conflict and uncertain-write cases that this single exploratory journey does not isolate. Browser emulation remains the only environment; no physical device, screen reader or printer was used.
 
 ## Owner questions
 

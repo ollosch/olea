@@ -713,6 +713,7 @@ test('shows the empty preparation state and recovers from an initial load failur
     await expect(page.getByRole('heading', { name: 'No creatures prepared' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Start combat' })).toBeDisabled()
     await expect(page.locator('.spellbook-tab.selected')).toContainText('0 creature types')
+    await expect(page.locator('.screen')).toHaveAttribute('data-live-state', 'live')
 
     let requests = 0
     await page.route('**/api/collections/encounters/records**', async (route) => {
