@@ -580,7 +580,8 @@ test('creature picker holds pending through a slow refresh and blocks repeat wri
 test('table-reference picker returns focus and keeps the edit form position', async ({ page }) => {
   await page.goto(`/games/${gameId}/tables`)
   await expect(page.getByRole('heading', { name: 'Random tables' })).toBeVisible()
-  await page.getByRole('button', { name: 'Edit', exact: true }).click()
+  await page.getByRole('button', { name: /Table actions for/ }).click()
+  await page.getByRole('menuitem', { name: 'Edit table' }).click()
   await expect(page.getByRole('heading', { name: 'Edit table' })).toBeVisible()
   await page.getByLabel('Reference').selectOption('item')
   const choose = page.getByRole('button', { name: 'Choose item' })

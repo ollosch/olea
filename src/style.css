@@ -170,6 +170,49 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
 .table-results, .template-entries { margin: 18px 0; padding-left: 20px; color: #cbd6c9; line-height: 1.8; overflow-wrap: anywhere; }
 .table-outcome { margin-top: 20px; padding: 16px; border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .table-outcome p { margin: 10px 0; }
+.table-selected { display: grid; gap: 16px; }
+.table-selected > .spellbook-heading { align-items: flex-start; }
+.table-selected .spellbook-heading h2 { margin-top: 5px; overflow-wrap: anywhere; }
+.table-roll-panel { padding: 16px; border: 1px solid #ffffff16; border-radius: 12px; background: #10161180; }
+.table-roll-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.table-roll-controls .filter-field { min-width: 150px; flex: 0 1 190px; margin: 0; }
+.table-roll-controls .text-input { margin-top: 6px; }
+.table-roll-controls .primary-button, .table-roll-controls .secondary-button { min-height: 46px; }
+.table-roll-panel > .muted-hint { margin-top: 10px; }
+.table-outcome-text { color: #e8eee6; font-size: 15px; line-height: 1.6; }
+.table-outcome-reference { color: var(--accent); font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.table-result-links { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.table-result-links .secondary-link { margin: 0; }
+.table-add-creature { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 9px; }
+.table-add-creature .filter-field { min-width: 170px; margin: 0; }
+.table-add-creature .select-input { margin-top: 6px; }
+.table-add-review { flex: 1 1 100%; margin-top: 4px; padding: 12px; border: 1px solid #d6a95755; border-radius: 9px; background: #d6a95710; color: #ffe0a6; font-size: 11px; line-height: 1.6; }
+.table-add-review p { margin: 4px 0; }
+.table-add-review-list { margin: 8px 0; padding-left: 18px; color: #f0d6a4; }
+.table-add-review-list li { margin: 5px 0; overflow-wrap: anywhere; }
+.table-add-review-new { color: #ffcf7d; }
+.table-add-review-actions { margin-top: 9px; display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.table-entries { margin-top: 2px; padding-top: 4px; border-top: 1px solid #ffffff14; }
+.table-entries > summary { min-height: 44px; display: flex; align-items: center; color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 700; }
+.table-entries > summary::marker { color: var(--accent); }
+.table-entries .table-results { margin-top: 4px; }
+.table-templates { margin-top: 24px; }
+.table-templates .table-template { align-items: flex-start; }
+.table-tabs .spellbook-tab { max-width: 100%; overflow-wrap: anywhere; }
+.table-template strong { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .table-roll-controls { align-items: stretch; flex-direction: column; }
+  .table-roll-controls .filter-field { flex-basis: auto; width: 100%; }
+  .table-roll-controls .primary-button, .table-roll-controls .secondary-button { width: 100%; }
+  .table-result-links { align-items: stretch; flex-direction: column; }
+  .table-result-links .secondary-link { width: 100%; }
+  .table-add-creature { align-items: stretch; flex-direction: column; width: 100%; }
+  .table-add-creature .filter-field { width: 100%; }
+  .table-add-creature .secondary-button { width: 100%; }
+  .table-add-review-actions { align-items: stretch; flex-direction: column; }
+  .table-add-review-actions .secondary-button, .table-add-review-actions .secondary-link { width: 100%; }
+  .table-template > .secondary-button { width: 100%; }
+}
 .entry-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .secondary-button, .danger-button, .secondary-link { min-height: 42px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #ffffff25; border-radius: 9px; background: #ffffff08; color: #e8eee6; font-size: 11px; text-decoration: none; }
