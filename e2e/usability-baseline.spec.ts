@@ -97,6 +97,10 @@ test('measure synthetic usability journeys', async ({ page, request, ids, isMobi
     console.log(`explicit back query: ${JSON.stringify(await page.getByLabel('Search by name').inputValue())}`)
 
     await expect(page.getByText('Loading catalog…')).toHaveCount(0)
+    const disclosures = page.locator('.catalog-filter-disclosure')
+    if (!(await disclosures.evaluate((element) => (element as HTMLDetailsElement).open))) {
+      await disclosures.locator('summary').click()
+    }
     await expect(page.locator('.catalog-filters select').nth(1).locator('option[value="1"]')).toHaveCount(1)
     await page.getByLabel('Search by name').fill(`${prefix} Spell`)
     await page.locator('.catalog-filters select').nth(1).selectOption('1')

@@ -2,9 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter, type LocationQueryRaw, type RouteLocationNamedRaw } from 'vue-router'
 import CatalogFilters from '../components/CatalogFilters.vue'
+import FeedbackRegion from '../components/FeedbackRegion.vue'
+import PageHeader from '../components/PageHeader.vue'
 import { pb } from '../lib/pocketbase'
 import { filterChoices, matchesCatalog } from '../lib/catalogFilters'
-import type { CatalogRecord, CatalogType } from '../lib/catalog'
+import { sourceIdentityLabel, type CatalogRecord, type CatalogType } from '../lib/catalog'
 import { systemByKey } from '../lib/systems'
 import { catalogPage, isCatalogType, normalizedCatalogType, queryString, readCatalogFilters } from '../lib/catalogRoute'
 import { readCatalogEntrySnapshot, saveCatalogEntrySnapshot } from '../lib/catalogHistory'
@@ -87,6 +89,12 @@ const page = computed({
   },
 })
 const displayed = computed(() => matches.value.slice((effectivePage.value - 1) * perPage, effectivePage.value * perPage))
+const appliedFilters = computed(() => filters.value.flatMap((filter) => {
+  const value = selected.value[filter.key]
+  if (!value) return []
+  return [{ key: filter.key, label: filter.label, value, display: filter.labelValue?.(value) || value }]
+}))
+const hasSearchOrFilters = computed(() => Boolean(searchQuery.value.trim()) || appliedFilters.value.length > 0)
 
 watch(() => route.query.type, (value) => {
   if (value !== undefined && !isCatalogType(queryString(value))) void updateQuery((query) => { delete query.type })
@@ -256,7 +264,33 @@ function detailLink(record: CatalogRecord): RouteLocationNamedRaw {
   }
 }
 
+function sourceName(record: CatalogRecord): string {
+  return sourceIdentityLabel(record)
+}
+
 function activateRecord(recordId: string) { activatedRecordId = recordId }
+
+async function removeFilter(key: string) {
+  await updateQuery((query) => {
+    query[key] = ''
+    delete query.page
+  })
+}
+
+async function clearFilters() {
+  await updateQuery((query) => {
+    for (const filter of filters.value) query[filter.key] = ''
+    delete query.page
+  })
+}
+
+async function clearSearchAndFilters() {
+  await updateQuery((query) => {
+    delete query.q
+    for (const filter of filters.value) query[filter.key] = ''
+    delete query.page
+  })
+}
 
 async function sanitizeState() {
   if (disposed || loading.value) return
@@ -329,12 +363,73 @@ function scheduleRestore() {
 }
 </script>
 <template>
-  <section class="screen" aria-labelledby="page-title">
-    <div class="screen-heading"><div><p class="eyebrow"><span class="eyebrow-line" /> TABLE REFERENCE</p><h1 id="page-title">Catalog</h1><p class="screen-description">Browse imported spells, creatures, and items for your game system.</p></div></div>
-    <p v-if="error" class="alert-message" role="alert">{{ error }} <button class="inline-button" type="button" @click="retry">Try again</button></p>
-    <div class="catalog-controls"><label class="field-label" for="catalog-system">System</label><select id="catalog-system" v-model="systemId" class="select-input"><option v-for="entry in systems" :key="entry.id" :value="entry.id">{{ entry.name }}</option></select><div class="catalog-type-tabs" aria-label="Catalog type"><button v-for="entry in (['spell', 'creature', 'item'] as CatalogType[])" :key="entry" type="button" :aria-pressed="selectedType === entry" :class="{ selected: selectedType === entry }" @click="chooseType(entry)">{{ entry === 'creature' ? 'Creatures' : `${entry[0].toUpperCase()}${entry.slice(1)}s` }}</button></div><label class="field-label" for="catalog-search">Search by name</label><input id="catalog-search" v-model="searchQuery" class="text-input" type="search" placeholder="Search catalog…" autocomplete="off" /><CatalogFilters v-model="selected" :filters="filters" :records="records" /></div>
-    <div v-if="loading" class="loading-state" role="status">Loading catalog…</div><p v-else class="catalog-count" role="status">{{ matches.length }} {{ matches.length === 1 ? 'entry' : 'entries' }}</p>
-    <div v-if="!loading && displayed.length" class="catalog-list"><RouterLink v-for="record in displayed" :id="`catalog-record-${record.id}`" :key="record.id" class="catalog-row" :data-catalog-record-id="record.id" :to="detailLink(record)" @click="activateRecord(record.id)"><span class="catalog-kind-icon" aria-hidden="true">{{ selectedType === 'spell' ? '✧' : selectedType === 'creature' ? '♜' : '◇' }}</span><span class="catalog-row-copy"><strong>{{ record.name }}</strong><small>{{ system.catalog.resultLabel(record) }}</small></span><span class="catalog-open" aria-hidden="true">→</span></RouterLink></div>
-    <div v-else-if="!loading && !error" class="empty-state compact-empty"><div class="empty-state-icon" aria-hidden="true">⌕</div><h2>No matching entries</h2><p>Try a different search or clear one or more filters.</p></div><nav v-if="pages > 1" class="catalog-pagination" aria-label="Catalog pages"><button class="secondary-button" type="button" :disabled="page <= 1" @click="page--">Previous</button><span>Page {{ page }} of {{ pages }}</span><button class="secondary-button" type="button" :disabled="page >= pages" @click="page++">Next</button></nav>
+  <section class="screen catalog-workspace" aria-labelledby="page-title">
+    <PageHeader
+      eyebrow="TABLE REFERENCE"
+      title="Catalog"
+      description="Find a spell, creature or item quickly, then keep the wording you want at the table."
+    >
+      <template #actions>
+        <div class="catalog-type-tabs" role="group" aria-label="Catalog type">
+          <button v-for="entry in (['spell', 'creature', 'item'] as CatalogType[])" :key="entry" type="button" :aria-pressed="selectedType === entry" :class="{ selected: selectedType === entry }" @click="chooseType(entry)">{{ entry === 'creature' ? 'Creatures' : `${entry[0].toUpperCase()}${entry.slice(1)}s` }}</button>
+        </div>
+      </template>
+    </PageHeader>
+
+    <div class="catalog-toolbar">
+      <div class="catalog-toolbar-primary">
+        <div class="field-label catalog-search-field">
+          <label for="catalog-search">Search by name</label>
+          <div class="catalog-search-input">
+            <input id="catalog-search" v-model="searchQuery" class="text-input" type="search" placeholder="Search this catalog…" autocomplete="off" spellcheck="false" />
+            <button v-if="searchQuery" class="inline-button catalog-search-clear" type="button" aria-label="Clear search" @click="searchQuery = ''">Clear</button>
+          </div>
+        </div>
+        <div class="field-label catalog-system-field">
+          <label for="catalog-system">System</label>
+          <select id="catalog-system" v-model="systemId" class="select-input"><option v-for="entry in systems" :key="entry.id" :value="entry.id">{{ entry.name }}</option></select>
+        </div>
+      </div>
+      <CatalogFilters v-model="selected" :filters="filters" :records="records" :expanded="routeFilterState.explicit" />
+      <div v-if="appliedFilters.length" class="catalog-applied" aria-label="Applied filters">
+        <span class="catalog-applied-label">Applied filters</span>
+        <button v-for="filter in appliedFilters" :key="filter.key" class="catalog-filter-chip" type="button" :aria-label="`Remove ${filter.label} filter: ${filter.display}`" @click="removeFilter(filter.key)">
+          <span>{{ filter.label }}: {{ filter.display }}</span>
+          <span aria-hidden="true">×</span>
+        </button>
+        <button class="inline-button catalog-clear-filters" type="button" @click="clearFilters">Clear filters</button>
+      </div>
+    </div>
+
+    <div class="feedback-slot catalog-feedback">
+      <FeedbackRegion v-if="error" tone="error" action-label="Try again" @action="retry">{{ error }}</FeedbackRegion>
+      <FeedbackRegion v-else-if="loading">Loading catalog…</FeedbackRegion>
+      <p v-else class="catalog-count" role="status">{{ matches.length }} {{ matches.length === 1 ? 'entry' : 'entries' }}</p>
+    </div>
+
+    <div v-if="!loading && displayed.length" class="catalog-list">
+      <RouterLink v-for="record in displayed" :id="`catalog-record-${record.id}`" :key="record.id" class="catalog-row" :data-catalog-record-id="record.id" :data-catalog-source="sourceName(record)" :to="detailLink(record)" @click="activateRecord(record.id)">
+        <span class="catalog-kind-icon" aria-hidden="true">{{ selectedType === 'spell' ? '✧' : selectedType === 'creature' ? '♜' : '◇' }}</span>
+        <span class="catalog-row-copy">
+          <strong>{{ record.name }}</strong>
+          <small>{{ system.catalog.resultLabel(record) }}</small>
+        </span>
+        <span class="catalog-row-source">{{ sourceName(record) }}</span>
+        <span class="catalog-open" aria-hidden="true">→</span>
+      </RouterLink>
+    </div>
+    <div v-else-if="!loading && !error" class="empty-state compact-empty">
+      <div class="empty-state-icon" aria-hidden="true">⌕</div>
+      <h2>{{ hasSearchOrFilters ? 'No matching entries' : 'No entries in this catalog' }}</h2>
+      <p v-if="hasSearchOrFilters">Try a different search, or clear the search and applied filters to see everything again.</p>
+      <p v-else>Choose a different system or catalog type, or import entries for this system.</p>
+      <button v-if="hasSearchOrFilters" class="secondary-button empty-action" type="button" @click="clearSearchAndFilters">Clear search and filters</button>
+    </div>
+
+    <nav v-if="pages > 1" class="catalog-pagination" aria-label="Catalog pages">
+      <button class="secondary-button" type="button" :disabled="page <= 1" @click="page--">Previous</button>
+      <span>Page {{ page }} of {{ pages }}</span>
+      <button class="secondary-button" type="button" :disabled="page >= pages" @click="page++">Next</button>
+    </nav>
   </section>
 </template>

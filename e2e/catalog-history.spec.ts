@@ -1,4 +1,5 @@
 import { e2eApiBase, expect, test } from './fixtures'
+import type { Page } from '@playwright/test'
 
 const api = `${e2eApiBase}/api/collections`
 let prefix = ''
@@ -6,6 +7,13 @@ let systemId = ''
 let firstSpellId = ''
 let firstSpellName = ''
 const catalogIds: string[] = []
+
+async function openAdvancedFilters(page: Page) {
+  const disclosure = page.locator('.catalog-filter-disclosure')
+  if (!(await disclosure.evaluate((element) => (element as HTMLDetailsElement).open))) {
+    await disclosure.locator('summary').click()
+  }
+}
 
 test.beforeAll(async ({ request }) => {
   const systems = await request.get(`${api}/systems/records?filter=${encodeURIComponent("(key='dnd5e')")}`)
@@ -67,6 +75,7 @@ test('catalog context, scroll and focus survive browser and explicit returns', a
   await search.fill(prefix)
   await expect(page.getByText('40 entries', { exact: true })).toBeVisible()
 
+  await openAdvancedFilters(page)
   const level = page.locator('.catalog-filters label').filter({ hasText: 'Level' }).locator('select')
   await level.selectOption('1')
   await page.getByRole('button', { name: 'Next', exact: true }).click()

@@ -1,7 +1,7 @@
 import { adndHitDice, adndSpellFields } from './adnd.ts'
 import { parseHPFormula } from './dice.ts'
 import { abilityModifier, rollGroupInitiative, rollInitiative } from './dnd5e.ts'
-import { compareChallengeRating, itemTypeLabel, neutralDescription, recordDescription, sourceLabel, type CatalogRecord, type CatalogType } from './catalog.ts'
+import { compareChallengeRating, itemTypeLabel, neutralDescription, recordDescription, sourceIdentityLabel, type CatalogRecord, type CatalogType } from './catalog.ts'
 import { neutralCardPresentation, type CardPresentation } from './cardPresentation.ts'
 import { dnd5eCardPresentation } from './dnd5eCardPresentation.ts'
 import { adndCardPresentation } from './adndCardPresentation.ts'
@@ -56,7 +56,7 @@ const manualOrder = (): number => 0
 const unknown: SystemCapabilities = {
   key: '',
   encounter: { compare: manualOrder, initiative: null, creatureHP: noHP },
-  catalog: { filters: { spell: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], creature: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], item: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }] }, resultLabel: (record) => record.source, detailFields: () => [], description: neutralDescription, compare: (a, b) => a.name.localeCompare(b.name), defaultFilters: () => ({}) },
+  catalog: { filters: { spell: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], creature: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }], item: [{ key: 'source', label: 'Source', field: 'source', match: 'exact' }] }, resultLabel: (record) => sourceIdentityLabel(record), detailFields: () => [], description: neutralDescription, compare: (a, b) => a.name.localeCompare(b.name), defaultFilters: () => ({}) },
   currency: { denominations: [], coinWeight: null, weightUnit: null },
   inventory: { catalogWeight: () => null },
   cards: { ...neutralCardPresentation, creature: (record) => ({ ...neutralCardPresentation.creature(record), flavour: neutralDescription(record, false) }) },
@@ -96,7 +96,7 @@ const dnd5e: SystemCapabilities = {
     item: [source, { key: 'itemType', label: 'Type', field: 'item_type', match: 'exact', normalize: (value) => value.split('|')[0]!, labelValue: itemTypeLabel }, { key: 'rarity', label: 'Rarity', field: 'rarity', match: 'exact' }],
   },
   resultLabel: (record) => {
-    const parts = [sourceLabel(record)]
+    const parts = [sourceIdentityLabel(record)]
     if (record.type === 'spell') parts.push(record.level === '0' ? 'Cantrip' : record.level ? `Level ${record.level}` : 'Level unknown', record.school)
     if (record.type === 'creature') parts.push(record.creature_type || 'Unknown type', `CR ${record.challenge_rating || '—'}`)
     if (record.type === 'item') parts.push(itemTypeLabel(record.item_type) || 'Item', record.rarity ?? '')
@@ -134,7 +134,7 @@ const adnd2e: SystemCapabilities = {
   key: 'adnd2e',
   encounter: { compare: manualOrder, initiative: null, creatureHP: (original) => ({ average: null, formula: adndHitDice(original) }) },
   catalog: { filters: { spell: [book, level, { ...school, match: 'list' }, { key: 'sphere', label: 'Sphere', field: 'sphere', match: 'list' }], creature: [book], item: [book] },
-    resultLabel: (record) => [record.book_source || record.source, ...(record.type === 'spell' ? [record.level ? `Level ${record.level}` : 'Level unknown', record.school, record.sphere] : [])].filter(Boolean).join(' · '),
+    resultLabel: (record) => [sourceIdentityLabel(record), ...(record.type === 'spell' ? [record.level ? `Level ${record.level}` : 'Level unknown', record.school, record.sphere] : [])].filter(Boolean).join(' · '),
     detailFields: (record) => record.type === 'spell' ? [{ name: 'Level', value: record.level || '—' }, { name: 'School', value: record.school || '—' }, ...(record.sphere ? [{ name: 'Sphere', value: record.sphere }] : []), ...adndSpellFields(record.original_json)] : record.type === 'creature' && adndHitDice(record.original_json) ? [{ name: 'HP roll', value: adndHitDice(record.original_json)! }] : [],
     description: recordDescription,
     compare: (a, b) => a.name.localeCompare(b.name),

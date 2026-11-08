@@ -73,6 +73,16 @@ export function sourceLabel(record: CatalogRecord): string {
   return typeof page === 'number' ? `${record.source} · p. ${page}` : record.source
 }
 
+/**
+ * Identify the imported source and, when it differs, the book it belongs to.
+ * Two imports can share a book name, so the import source stays visible.
+ */
+export function sourceIdentityLabel(record: CatalogRecord): string {
+  const importSource = sourceLabel(record)
+  const book = record.book_source?.trim()
+  return book && book !== record.source ? `${book} · ${importSource}` : importSource
+}
+
 export function itemTypeLabel(value: unknown): string {
   if (typeof value !== 'string') return ''
   const primary = value.split('|')[0]
