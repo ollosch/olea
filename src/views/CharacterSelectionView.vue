@@ -96,10 +96,5 @@ function viewCharacter(character: CharacterRecord) {
       <p>Characters appear here after a Game Master creates a game and adds characters to it.</p>
       <RouterLink class="text-link" to="/games">Go to games <span aria-hidden="true">→</span></RouterLink>
     </div>
-    <aside v-if="!selectedCharacter" class="upcoming-panel" aria-labelledby="player-tools-title">
-      <div class="upcoming-icon" aria-hidden="true">▤</div>
-      <div><h2 id="player-tools-title">Your table tools</h2><p>Character sheets, inventories, coins, and spellbooks will be available from your character overview.</p></div>
-      <span class="coming-soon">COMING SOON</span>
-    </aside>
   </section>
 </template>

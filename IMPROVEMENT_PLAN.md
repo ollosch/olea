@@ -4,12 +4,12 @@ This is an implementation plan, not a claim that the redesigned interface exists
 
 ## Current handoff
 
-- **Step 1 complete; step 2 is next.** No UI redesign has been implemented yet. See `docs/usability-baseline.md` for measured desktop/phone-emulation journeys and `e2e/usability-baseline.spec.ts` for the disposable-data exploration.
+- **Steps 1 and 2 complete; step 3 is next.** The workspace shell now has global, game and character context navigation, a persistent selected-character shortcut and a responsive mobile layout. See `docs/usability-baseline.md` for the measured pre-redesign journeys and `e2e/shell.spec.ts` for shell regression coverage.
 - The baseline reproduced lost catalog search/filter/page state on return, scroll movement as results shrink, and a player-encounter scroll jump during a delayed live refresh. The user reports jumping in catalog browsing, pickers, live encounters and other screens; their exact real-world sequences remain unspecified.
 - The baseline script asserts some **current** behavior, including the player loading state. Update or retire those assertions as redesign steps change it; replace them with tests for the desired behavior rather than preserving the problems.
-- Use **Bun**, e.g. `bun run typecheck` and `bun run test:e2e -- e2e/usability-baseline.spec.ts --workers=1`. Both passed for step 1 on desktop and mobile emulation. No physical-device testing was performed.
-- The user stopped subagent delegation because the harness spawned the wrong model. Do not spawn another subagent unless the user explicitly authorizes it and its model setup is resolved.
-- The working tree includes pre-existing user changes and untracked files. Inspect them before editing; do not overwrite or revert them. Use disposable databases, never `pb_data/` or personal source data.
+- Use **Bun**, e.g. `bun run typecheck` and `bun run test:e2e -- e2e/shell.spec.ts --workers=1`. Step 2 verification passed on desktop and mobile emulation; no physical-device or printer testing was performed. The exploratory baseline spec still passes unchanged and continues to assert pre-step-4 catalog, picker and player-loading behavior.
+- The user has explicitly requested sequential subagents, Bun, a dedicated branch and one commit per step.
+- Inspect the working tree before editing; do not overwrite or revert user changes. Use disposable databases, never `pb_data/` or personal source data.
 
 ## Decision: improve in place
 
@@ -81,6 +81,10 @@ For every step: inspect the existing implementation and user changes, keep the p
 **Scope:** Refactor `App.vue`, `router.ts`, and shell CSS for a wide, compact desktop workspace and mobile navigation. Keep game/character context obvious, expose return to selected character, and provide context navigation for game tools and character tools. Retain all existing deep links and appearance/connection behavior. Remove obsolete placeholder copy.
 
 **Done when:** At 1280px and large desktop the workspace uses available width without excessive line lengths; 320–768px has no horizontal page overflow and all destinations are reachable by touch/keyboard. Route/back/forward and existing print styles still work; a bookmarked player view remains a player view, and GM-labeled navigation is not mistaken for access control. Verify initial shell, active links, selected character, responsive navigation and print smoke.
+
+**Completion notes (2026-11-08):** `App.vue` now derives game or character context from the route, loads the stored selected character as a persistent shortcut, and keeps the player encounter route in a player-only shell with no GM tools. `router.ts` records `area`, `context` and `playerView` metadata while preserving every existing path. Shell CSS widens the desktop workspace to a 1680px frame with a 1120px content column, adds wrapping mobile navigation from 860px down, and keeps all controls at least 44px. The obsolete “more tools coming soon” navigation note and character-selection placeholder panel were removed; the navigation now states that GM/player labels are views, not access control. Shell lookups use PocketBase `requestKey: null` so a view’s matching request cannot auto-cancel the context.
+
+Verified with `bun run typecheck`, `bun run build`, `bun run test:e2e -- e2e/shell.spec.ts` (10 passed, 2 project skips across desktop and Pixel 8 emulation, including keyboard and touch navigation), `bun run test:e2e -- e2e/app.spec.ts e2e/print-foundation.spec.ts` (22 passed, 2 project skips) and `bun run test:e2e -- e2e/usability-baseline.spec.ts` (2 passed). Limitations: browser emulation only, no physical touch device or printer; the 768px shell is the mobile layout; catalog search/history and combat/player loading remain later steps.
 
 ### 3. Shared UI primitives and density rules
 
