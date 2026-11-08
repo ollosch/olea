@@ -76,3 +76,34 @@ Test new row patterns at 320px, 390px, 640px, 768px, 1280px and a large desktop,
 ## Step 3 usage and checks
 
 `GamesView.vue` is the representative screen: it uses `PageHeader`, `FeedbackRegion`, `ActionMenu` and the existing button/field classes. `e2e/ui-primitives.spec.ts` covers the menu's keyboard focus/return, the labelled appearance dialog and its focus return, reserved loading/error geometry, reduced motion, and long-name wrapping without horizontal overflow on desktop and phone emulation. This is browser emulation, not physical-device, screen-reader or printer validation.
+
+## CatalogPicker
+
+`src/components/CatalogPicker.vue` is the shared contextual catalog picker used by inventory items, spellbooks, encounter creatures and table references. It is a controlled Reka UI dialog: the caller owns `open`, decides whether a `select` handler closes it, and can pass authoritative async feedback.
+
+```vue
+<CatalogPicker
+  v-model:open="pickerOpen"
+  :system-id="systemId"
+  type="spell"
+  title="Choose a spell"
+  :taken-ids="takenSpellIds"
+  taken-label="Already in this book"
+  :pending="pickerPending"
+  :feedback="pickerFeedback"
+  @select="addSpell"
+/>
+```
+
+- Always render the picker in the screen and drive it with `v-model:open`; do not wrap it in a `v-if` editor panel. A modal dialog keeps the underlying page position stable, and Reka returns focus to the control that opened it.
+- `select` fires only after the user activates an enabled result. The picker never closes itself, so a caller that supports repeat adds can leave it open and keep the search text; a caller that wants one-shot selection closes it in the same handler.
+- Use `takenIds`/`takenLabel` when the caller enforces uniqueness (for example, a spell can only appear once in a spellbook). Taken rows are visibly disabled instead of failing silently.
+- Async callers must set `pending` for the whole write and its reconciliation, not just the click. While pending, every result is disabled, the caller's pending feedback replaces any prior success/error, and repeat selection is unavailable. Callers still keep a synchronous re-entry guard because two click events can arrive before Vue renders the disabled state; do not clear pending until the authoritative list refresh finishes.
+- Use `feedback` for the authoritative pending/success/error message from the caller. The picker does not announce a selection on its own, so a failed create never looks like a successful add. After success, clear pending and provide success feedback before allowing repeat selection.
+- Each instance generates its own search/results IDs with Vue `useId`, so mounting multiple pickers cannot duplicate input IDs.
+- Filters remain the collapsible `CatalogFilters` disclosure. Source identity comes from the system `resultLabel`, so same-name records from different imports stay distinguishable. Filter edits made while the catalog is loading are preserved; arriving default filters only apply when the user has not touched them.
+- Distinguish only explicit non-timeout client validation/authorization rejections (for example 400, 403, 404, 409 and 422) from ambiguous failures. Treat 408, 5xx, aborts and network errors as uncertain because the server may already have committed the write. For an uncertain create, say the outcome could not be confirmed and direct the user to refresh before retrying; keep selection disabled until a successful authoritative page refresh. Never claim “not added” or invite a blind retry when the response was lost.
+- A caller whose create succeeds but whose follow-up refresh fails must report “added, but refresh failed”, keep pending set, and offer a refresh retry rather than invite another create. That retry must reload instead of repeating the completed write.
+- Opening focuses the search field without scrolling the underlying page, a retry keeps the picker open, and closing (button, Escape or selection) restores the invoking control and the saved page scroll.
+
+`e2e/catalog-picker.spec.ts` covers item, spell, creature and table-reference flows on desktop Chromium and Pixel 8 emulation, including delayed loads with typed input/filter edits, catalog retry, delayed create double clicks, an explicit validation rejection with safe retry, a server-committed create whose network response is lost, a server-committed create that returns 500, refresh-before-retry recovery with no duplicate replay, successful-create/refresh-failure retry without duplicate writes, creature pending held across a slow refresh, duplicate spellbook rows, repeat creature adds, focus/scroll restoration and generated input IDs.

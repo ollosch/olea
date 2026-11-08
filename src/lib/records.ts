@@ -32,3 +32,13 @@ export async function guardedUpdate<T extends VersionedRecord>(collection: strin
 export function isConflict(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'status' in error && (error as { status?: number }).status === 409)
 }
+
+/**
+ * Only explicit client validation/authorization rejections are definite failures.
+ * 408 and 5xx responses, aborts and network errors may follow a committed write.
+ */
+const definiteWriteRejections = new Set([400, 401, 403, 404, 405, 409, 413, 415, 422, 429])
+
+export function isDefiniteWriteRejection(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'status' in error && typeof (error as { status?: unknown }).status === 'number' && definiteWriteRejections.has((error as { status: number }).status))
+}

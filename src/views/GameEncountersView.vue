@@ -7,7 +7,7 @@ import type { CatalogRecord } from '../lib/catalog'
 import { evaluateDice } from '../lib/dice'
 import { systemForGame } from '../lib/systems'
 import { activeParticipant, orderParticipants } from '../lib/encounterOrder'
-import { guardedUpdate, isConflict } from '../lib/records'
+import { guardedUpdate, isConflict, isDefiniteWriteRejection } from '../lib/records'
 
 type Game = { id: string; updated: string; name: string; system: string; encounter_visible: boolean; encounter_show_initiative: boolean; encounter_show_enemy_names: boolean; encounter_show_hp: boolean; encounter_show_conditions: boolean; expand?: { system?: { key: string; name: string } } }
 type Encounter = { id: string; game: string; name: string }
@@ -29,6 +29,8 @@ const formOpen = ref(false)
 const editingId = ref('')
 const name = ref('')
 const pickerOpen = ref(false)
+const pickerPending = ref(false)
+const pickerFeedback = ref<{ tone: 'status' | 'error'; message: string } | null>(null)
 const customOpen = ref(false)
 const customName = ref('')
 const customQuantity = ref(1)
@@ -118,6 +120,8 @@ async function load() {
     await loadEntries()
     if (generation !== loadGeneration) return
     await loadCombat()
+    pickerPending.value = false
+    pickerFeedback.value = null
   } catch { error.value = 'Encounters could not be loaded. Check the connection and try again.' }
   finally { if (generation === loadGeneration) loading.value = false }
 }
@@ -377,12 +381,37 @@ async function deleteEncounter(encounter: Encounter) {
   catch { error.value = 'The encounter could not be deleted.' }
 }
 
+function openPicker() {
+  if (!pickerPending.value) pickerFeedback.value = null
+  pickerOpen.value = true
+}
+
 async function addCreature(creature: CatalogRecord) {
-  if (!selected.value) return
+  if (!selected.value || pickerPending.value) return
+  pickerPending.value = true
+  pickerFeedback.value = { tone: 'status', message: `Adding ${creature.name}…` }
   try {
     await pb.collection('encounter_creatures').create({ encounter: selected.value.id, creature: creature.id, name: creature.name, quantity: 1, notes: '', custom: false })
-    await loadEntries()
-  } catch { error.value = 'The creature could not be added.' }
+  } catch (cause) {
+    if (!isDefiniteWriteRejection(cause)) {
+      pickerFeedback.value = { tone: 'error', message: `Could not confirm whether ${creature.name} was added because the connection failed. Refresh this screen before trying again; it may already be saved.` }
+      error.value = `Could not confirm whether ${creature.name} was added. Refresh before trying again.`
+      return
+    }
+    pickerPending.value = false
+    pickerFeedback.value = { tone: 'error', message: `${creature.name} was not added. Check the connection and try again.` }
+    error.value = 'The creature could not be added.'
+    return
+  }
+  pickerFeedback.value = { tone: 'status', message: `Added ${creature.name}. Refreshing the encounter list…` }
+  try { await loadEntries() }
+  catch {
+    pickerFeedback.value = { tone: 'error', message: `${creature.name} was added, but the encounter list could not refresh. Refresh this screen before adding another.` }
+    error.value = `${creature.name} was added, but the encounter list could not refresh. Refresh before adding another.`
+    return
+  }
+  pickerPending.value = false
+  pickerFeedback.value = { tone: 'status', message: `Added ${creature.name}. Search stays open so you can add another.` }
 }
 
 async function addCustom() {
@@ -421,7 +450,7 @@ async function removeEntry(entry: Entry) {
         <aside class="encounter-sidebar" aria-label="Prepared encounters"><button v-for="encounter in encounters" :key="encounter.id" class="spellbook-tab" :class="{ selected: encounter.id === selectedId }" type="button" @click="selectEncounter(encounter.id)">{{ encounter.name }}<small>{{ encounter.id === selectedId ? entries.length + ' creature types' : '' }}</small></button></aside>
         <section v-if="selected" class="encounter-content">
           <div class="spellbook-heading"><div><p class="eyebrow">PREPARATION</p><h2>{{ selected.name }}</h2></div><div class="row-actions"><button class="secondary-button" type="button" @click="beginRename(selected)">Rename</button><button class="secondary-button" type="button" @click="duplicateEncounter(selected)">Duplicate</button><button class="danger-button" type="button" @click="deleteEncounter(selected)">Delete</button></div></div>
-          <div class="heading-actions"><button class="primary-button" type="button" @click="pickerOpen = !pickerOpen">＋ Add catalog creature</button><button class="secondary-button" type="button" @click="customOpen = !customOpen">＋ Add custom participant</button></div>
+          <div class="heading-actions"><button class="primary-button" type="button" @click="openPicker">＋ Add catalog creature</button><button class="secondary-button" type="button" @click="customOpen = !customOpen">＋ Add custom participant</button></div>
       <section class="combat-panel">
             <div class="spellbook-heading"><div><p class="eyebrow">LIVE PLAY</p><h2>{{ combat?.active ? 'Combat in progress' : 'Manual tracker' }}</h2></div><div class="row-actions"><RouterLink v-if="combat?.active && game.encounter_visible" class="secondary-link" :to="{ name: 'player-encounter', params: { gameId: game.id } }">Player view</RouterLink><button v-if="!combat?.active" class="primary-button" type="button" :disabled="!entries.length" @click="startCombat">Start combat</button><template v-else><span class="round-pill">Round {{ combat.round }}</span><button class="secondary-button" type="button" @click="resetCombat">Reset</button><button class="danger-button" type="button" @click="endCombat">End combat</button></template></div></div>
             <template v-if="combat?.active">
@@ -434,13 +463,13 @@ async function removeEntry(entry: Entry) {
               <p v-else class="muted-hint">No live participants. Add game characters or custom participants.</p>
             </template>
           </section>
-          <div v-if="pickerOpen" class="editor-panel"><div class="catalog-panel-heading"><h2>Choose a creature</h2><button class="secondary-button" type="button" @click="pickerOpen = false">Close</button></div><CatalogPicker :system-id="game.system" type="creature" @select="addCreature" /></div>
           <form v-if="customOpen" class="editor-panel" @submit.prevent="addCustom"><h2>Custom participant</h2><label class="field-label" for="custom-creature-name">Name</label><input id="custom-creature-name" v-model="customName" class="text-input" maxlength="255" required /><label class="field-label" for="custom-creature-quantity">Quantity</label><input id="custom-creature-quantity" v-model.number="customQuantity" class="text-input" type="number" min="1" max="100" step="1" required /><label class="field-label" for="custom-creature-notes">Notes</label><textarea id="custom-creature-notes" v-model="customNotes" class="text-area" /><div class="form-actions"><button class="secondary-button" type="button" @click="customOpen = false">Cancel</button><button class="primary-button" type="submit">Add participant</button></div></form>
           <div v-if="entries.length" class="encounter-entry-list"><article v-for="entry in entries" :key="entry.id" class="inventory-row"><div class="inventory-item-copy"><strong>{{ entry.name }}</strong><small>{{ entry.custom ? 'Custom participant' : entry.expand?.creature ? systemForGame(game).catalog.resultLabel(entry.expand.creature) : 'Catalog' }}</small></div><div class="encounter-entry-edit"><label class="filter-field">Quantity<input v-model.number="entryDrafts[entry.id]!.quantity" class="text-input" type="number" min="1" max="100" step="1" /></label><label class="filter-field">Notes<input v-model="entryDrafts[entry.id]!.notes" class="text-input" maxlength="100000" /></label></div><div class="row-actions"><button class="secondary-button" type="button" @click="saveEntry(entry)">Save</button><button class="danger-button" type="button" @click="removeEntry(entry)">Remove</button></div></article></div>
-          <div v-else-if="!pickerOpen" class="empty-state compact-empty"><div class="empty-state-icon" aria-hidden="true">⚔</div><h2>No creatures prepared</h2><p>Add catalog creatures or custom participants. This grouping can be kept for reuse or deleted after printing.</p><button class="primary-button empty-action" type="button" @click="pickerOpen = true">＋ Add catalog creature</button></div>
+          <div v-else class="empty-state compact-empty"><div class="empty-state-icon" aria-hidden="true">⚔</div><h2>No creatures prepared</h2><p>Add catalog creatures or custom participants. This grouping can be kept for reuse or deleted after printing.</p><button class="primary-button empty-action" type="button" @click="openPicker">＋ Add catalog creature</button></div>
         </section>
       </div>
       <div v-else-if="!formOpen" class="empty-state"><div class="empty-state-icon" aria-hidden="true">⚔</div><h2>No encounters yet</h2><p>Create an encounter as a reusable preparation or print grouping.</p><button class="primary-button empty-action" type="button" @click="beginCreate">＋ Create encounter</button></div>
+      <CatalogPicker v-model:open="pickerOpen" :system-id="game.system" type="creature" title="Choose a creature" :pending="pickerPending" :feedback="pickerFeedback" @select="addCreature" />
     </template>
     <p v-else class="alert-message" role="alert">This game could not be found.</p>
   </section>
