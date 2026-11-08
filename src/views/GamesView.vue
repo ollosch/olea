@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import ActionMenu from '../components/ActionMenu.vue'
+import ActionMenuItem from '../components/ActionMenuItem.vue'
+import FeedbackRegion from '../components/FeedbackRegion.vue'
+import PageHeader from '../components/PageHeader.vue'
 import { pb } from '../lib/pocketbase'
 
 type SystemRecord = { id: string; key: string; name: string }
@@ -90,20 +94,22 @@ async function deleteGame(game: GameRecord) {
 
 <template>
   <section class="screen" aria-labelledby="page-title">
-    <div class="screen-heading">
-      <div>
-        <p class="eyebrow"><span class="eyebrow-line" /> GAME MASTER</p>
-        <h1 id="page-title">Your games</h1>
-        <p class="screen-description">Set up a home for your campaign and everything you bring to the table.</p>
-      </div>
-      <button class="primary-button" type="button" :disabled="systems.length === 0" @click="beginCreate">
-        <span aria-hidden="true">＋</span> Create a game
-      </button>
-    </div>
+    <PageHeader
+      eyebrow="GAME MASTER"
+      title="Your games"
+      description="Set up a home for your campaign and everything you bring to the table."
+    >
+      <template #actions>
+        <button class="primary-button" type="button" :disabled="systems.length === 0" @click="beginCreate">
+          <span aria-hidden="true">＋</span> Create a game
+        </button>
+      </template>
+    </PageHeader>
 
-    <p v-if="error" class="alert-message" role="alert">
-      {{ error }} <button class="inline-button" type="button" @click="load">Try again</button>
-    </p>
+    <div class="feedback-slot">
+      <FeedbackRegion v-if="error" tone="error" action-label="Try again" @action="load">{{ error }}</FeedbackRegion>
+      <FeedbackRegion v-else-if="loading">Loading games…</FeedbackRegion>
+    </div>
 
     <form v-if="formOpen" class="editor-panel" @submit.prevent="saveGame">
       <h2>{{ editingId ? 'Edit game' : 'Create a game' }}</h2>
@@ -121,8 +127,7 @@ async function deleteGame(game: GameRecord) {
       </div>
     </form>
 
-    <div v-if="loading" class="loading-state" role="status">Loading games…</div>
-    <div v-else-if="games.length" class="game-list" aria-label="Games">
+    <div v-if="!loading && games.length" class="game-list" aria-label="Games">
       <article v-for="game in games" :key="game.id" class="game-row">
         <div class="game-icon" aria-hidden="true">◇</div>
         <div class="game-copy">
@@ -131,12 +136,14 @@ async function deleteGame(game: GameRecord) {
         </div>
         <div class="row-actions">
           <RouterLink class="secondary-link" :to="{ name: 'game-characters', params: { gameId: game.id } }">Open</RouterLink>
-          <button class="secondary-button" type="button" @click="beginEdit(game)">Edit</button>
-          <button class="danger-button" type="button" @click="deleteGame(game)">Delete</button>
+          <ActionMenu :label="`Game actions for ${game.name}`">
+            <ActionMenuItem @select="beginEdit(game)">Edit game</ActionMenuItem>
+            <ActionMenuItem danger @select="deleteGame(game)">Delete game</ActionMenuItem>
+          </ActionMenu>
         </div>
       </article>
     </div>
-    <div v-else-if="!formOpen" class="empty-state">
+    <div v-else-if="!loading && !formOpen" class="empty-state">
       <div class="empty-state-icon" aria-hidden="true">◇</div>
       <p class="eyebrow">A NEW ADVENTURE STARTS HERE</p>
       <h2>No games yet</h2>
@@ -145,7 +152,7 @@ async function deleteGame(game: GameRecord) {
       <p v-if="!systems.length" class="muted-hint">No game systems are available yet.</p>
     </div>
 
-    <aside v-if="!games.length" class="upcoming-panel" aria-labelledby="upcoming-title">
+    <aside v-if="!loading && !games.length" class="upcoming-panel" aria-labelledby="upcoming-title">
       <div class="upcoming-icon" aria-hidden="true">✧</div>
       <div><h2 id="upcoming-title">A place for your whole campaign</h2><p>Games bring characters, encounters, and shared resources together.</p></div>
       <span class="coming-soon">YOUR TABLE</span>

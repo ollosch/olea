@@ -45,6 +45,13 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
 .footer { max-width: var(--shell-max); margin: auto; padding: 24px 48px 32px; border-top: 1px solid #ffffff12; display: flex; justify-content: space-between; gap: 20px; color: #7f9080; font-size: 10px; letter-spacing: .08em; }.footer-divider { color: var(--accent); margin: 0 6px; }
 .dialog-overlay { position: fixed; inset: 0; background: #000a; z-index: 10; }
 .dialog-content { position: fixed; z-index: 11; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(440px, calc(100vw - 32px)); padding: 24px; border: 1px solid #ffffff20; border-radius: 18px; background: #19221a; box-shadow: 0 24px 80px #0008; }
+/* Reka UI keeps menu focus, arrow-key movement and trigger focus return; these are presentation only. */
+.action-menu-content { z-index: 15; min-width: 190px; max-width: min(320px, calc(100vw - 24px)); max-height: min(320px, var(--reka-dropdown-menu-content-available-height, 320px)); padding: 6px; overflow-y: auto; border: 1px solid #ffffff20; border-radius: 12px; background: #19221a; box-shadow: 0 18px 55px #0008; }
+.action-menu-item { min-height: 44px; padding: 8px 12px; display: flex; align-items: center; gap: 8px; color: #e8eee6; border-radius: 8px; cursor: pointer; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; outline: none; user-select: none; }
+.action-menu-item[data-highlighted], .action-menu-item:focus-visible { color: #152015; background: var(--accent); }
+.action-menu-item[data-disabled] { cursor: not-allowed; opacity: .5; }
+.action-menu-item.is-danger { color: #ffb9a8; }
+.action-menu-item.is-danger[data-highlighted], .action-menu-item.is-danger:focus-visible { color: #2a110c; background: #ffb9a8; }
 .dialog-heading { display: flex; align-items: start; justify-content: space-between; }.dialog-title { font-family: Georgia, serif; font-size: 29px; margin-top: 5px; }.dialog-description { color: #a6b4a6; line-height: 1.6; margin-top: 12px; font-size: 14px; }
 .color-setting { margin: 24px 0; padding: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid #ffffff18; border-radius: 12px; }.color-setting strong, .color-setting small { display: block; }.color-setting small { color: #a6b4a6; margin-top: 4px; }.color-setting input { width: 48px; height: 44px; border: 0; background: transparent; cursor: pointer; }
 .secondary-button { min-height: 44px; padding: 0 16px; color: #e8eee6; border: 1px solid #ffffff25; border-radius: 10px; background: #ffffff08; }
@@ -74,7 +81,22 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
 .screen-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
 .screen-heading > div { min-width: 0; }
 .screen-heading h1 { margin-top: 15px; font-size: clamp(40px, 5vw, 58px); overflow-wrap: anywhere; }
-.screen-description { max-width: 525px; margin-top: 15px; color: #a6b4a6; font-size: 15px; line-height: 1.7; }
+.screen-description { max-width: 525px; margin-top: 15px; color: #a6b4a6; font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+/* Shared page header: compact at desktop sizes and naturally wraps on small screens. */
+.page-header { min-width: 0; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+.page-header-copy { min-width: 0; }
+.page-header h1 { margin-top: 12px; font-size: clamp(34px, 4vw, 46px); line-height: 1.12; overflow-wrap: anywhere; }
+.page-header .screen-description { max-width: 60ch; margin-top: 11px; }
+.page-header-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; }
+/* Feedback region: wrap it in .feedback-slot so loading/error changes do not move controls below. */
+.feedback-slot { min-height: 44px; margin-top: 18px; display: flex; align-items: center; }
+.feedback-region { width: 100%; min-height: 44px; padding: 10px 14px; display: flex; align-items: center; gap: 12px; color: #b7c2b5; border: 1px solid #ffffff16; border-radius: 10px; background: #ffffff06; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.feedback-copy { min-width: 0; flex: 1; }
+.feedback-mark { width: 12px; height: 12px; flex: none; border: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: feedback-spin 800ms linear infinite; }
+.feedback-region.feedback-error { color: #ffb9a8; border-color: #d87c6350; background: #8e3b2a1c; }
+.feedback-region.feedback-error .feedback-mark { border: 0; background: #ffb9a8; animation: none; }
+.feedback-action { min-height: 44px; flex: none; }
+@keyframes feedback-spin { to { transform: rotate(1turn); } }
 .primary-button { min-height: 46px; flex: none; padding: 0 17px; color: #152015; border: 1px solid var(--accent); border-radius: 11px; background: var(--accent); font-size: 12px; font-weight: 750; }
 .primary-button span { margin-right: 5px; font-size: 17px; vertical-align: -1px; }
 .primary-button:disabled { cursor: not-allowed; opacity: .53; }
@@ -108,6 +130,10 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
   .page { padding: 36px 20px 48px; }
   .screen-heading { align-items: flex-start; flex-direction: column; gap: 18px; }
   .screen-heading h1 { font-size: clamp(38px, 10vw, 48px); }
+  .page-header { align-items: flex-start; flex-direction: column; gap: 18px; }
+  .page-header h1 { font-size: clamp(32px, 9vw, 42px); }
+  .page-header-actions { width: 100%; justify-content: flex-start; }
+  .feedback-slot { margin-top: 14px; }
   .screen-description { margin-top: 11px; font-size: 14px; }
   .primary-button { min-height: 46px; }
   .empty-state { min-height: 290px; margin-top: 30px; padding: 30px 20px; }
@@ -130,7 +156,7 @@ h2 { font-family: Georgia, serif; font-weight: 400; font-size: 30px; letter-spac
 .inline-button { min-height: 36px; margin-left: 8px; padding: 0 10px; color: var(--accent); border: 1px solid #ffffff20; border-radius: 7px; background: transparent; }
 .loading-state { padding: 70px 20px; color: #9caa9c; text-align: center; font-size: 13px; }
 .game-list { margin-top: 30px; display: grid; gap: 12px; }
-.game-row { min-height: 90px; padding: 16px 18px; display: flex; align-items: center; gap: 14px; }
+.game-row { min-height: 74px; padding: 12px 16px; display: flex; align-items: center; gap: 14px; }
 .game-icon { width: 45px; height: 45px; flex: none; display: grid; place-items: center; border-radius: 13px; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: 23px; }
 .game-copy { min-width: 0; flex: 1; }
 .game-copy h2 { overflow-wrap: anywhere; font-family: inherit; font-size: 16px; font-weight: 700; letter-spacing: 0; }
@@ -436,3 +462,8 @@ select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .hp-roll-controls { margin-top: 11px; padding-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; border-top: 1px solid #ffffff12; color: #a7b3a5; font-size: 10px; }
 .preview-confirm { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
 @media (max-width: 600px) { .participant-add { grid-template-columns: 1fr; }.turn-controls { flex-wrap: wrap; }.combatant-title { align-items: flex-start; flex-direction: column; }.combatant-title .row-actions { width: 100%; justify-content: flex-start; }.group-roll { align-items: flex-start; flex-direction: column; } }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .nav-link, .action-menu-content, .dialog-content, .feedback-mark { transition: none; animation: none; }
+}
