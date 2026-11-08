@@ -13,11 +13,11 @@ This is a trusted-LAN application. Profiles are lightweight local labels for cha
 
 ## Develop
 
-Requirements: Node.js 20.19+ or 22.12+ (a current LTS is recommended), npm, and Go 1.27 or newer. These are development tools, not prerequisites for running a built binary.
+Requirements: Node.js 20.19+ or 22.12+ (a current LTS is recommended), bun, and Go 1.27 or newer. These are development tools, not prerequisites for running a built binary.
 
 ```sh
-npm ci
-npm run build
+bun ci
+bun run build
 ```
 
 In one terminal, start the backend from the repository root:
@@ -29,23 +29,23 @@ go -C server run . serve --http=127.0.0.1:8090 --dir=../pb_data
 In another terminal, run the frontend development server:
 
 ```sh
-npm run dev
+bun run dev
 ```
 
 To start the backend directly in the foreground with a chosen data directory, use `scripts/start-server.sh /path/to/data`. For a fresh migration check, choose a new empty directory, stop the server with Ctrl+C, and run the same command again with that directory to verify restart behavior.
 
-Open the Vite URL shown in the terminal. Vite proxies `/api` to PocketBase. `npm run build` is needed once before starting the Go server; frontend edits then update through Vite. Run `npm run typecheck` to check TypeScript.
+Open the Vite URL shown in the terminal. Vite proxies `/api` to PocketBase. `bun run build` is needed once before starting the Go server; frontend edits then update through Vite. Run `bun run typecheck` to check TypeScript.
 
 ## Browser tests
 
-Playwright runs end-to-end tests in Chromium. After installing npm dependencies, install the browser once:
+Playwright runs end-to-end tests in Chromium. After installing bun dependencies, install the browser once:
 
 ```sh
-npx playwright install chromium
-npm run test:e2e
+bunx playwright install chromium
+bun run test:e2e
 ```
 
-The test command starts Vite and a disposable Go/PocketBase server automatically, seeds invented records for each test, and removes its temporary database when the server exits. The backend always starts in a fresh temporary directory and will not reuse a server on the E2E port. Tests run on desktop Chromium with mouse input and Pixel 8 touch emulation. Use `npm run test:e2e:desktop` or `npm run test:e2e:mobile` to run one project. Browser E2E tests do not use or modify `pb_data/`.
+The test command starts Vite and a disposable Go/PocketBase server automatically, seeds invented records for each test, and removes its temporary database when the server exits. The backend always starts in a fresh temporary directory and will not reuse a server on the E2E port. Tests run on desktop Chromium with mouse input and Pixel 8 touch emulation. Use `bun run test:e2e:desktop` or `bun run test:e2e:mobile` to run one project. Browser E2E tests do not use or modify `pb_data/`.
 
 Current E2E coverage includes two-context inventory and player encounter updates, stale quantity/container/coin conflicts, inventory and coin transfers, offline/reconnect refresh, player encounter visibility, app-shell loading, mobile touch target sizing and overflow, and desktop workspace overflow. Device coverage is browser emulation; physical phones and laptops still need hands-on verification.
 
@@ -53,16 +53,32 @@ The default per-test timeout is **10 seconds**, configured by `timeout` in `play
 
 ## Build and run
 
+### Ready-to-run release packages
+
+The release script builds the Vue frontend, embeds it in Olea, and creates ZIP packages containing a self-contained executable and a short start guide. It targets Linux, Windows and macOS on both amd64 and arm64:
+
 ```sh
-npm ci
-npm run build
-go -C server build -o ../bin/olea .
-./bin/olea serve --http=0.0.0.0:8090 --dir=./pb_data
+./scripts/package-release.sh 1.0.0
 ```
 
-On Windows, build to `../bin/olea.exe` and run `bin\olea.exe` with the same arguments. Visit `http://localhost:8090` on the host or `http://<host-lan-ip>:8090` from another device on the same Wi-Fi. Allow the port through the host firewall if needed. PocketBase's admin UI is at `/_/`.
+The archives are written to `dist/release/` (or pass an output directory as the second argument). Building requires bun, Go and `zip`; the downloaded package does not require Node.js, Go, Docker or internet access to run. Cross-built packages still need a native smoke test on each target OS before a release is considered platform-verified.
 
-The binary also defaults to `serve --http=0.0.0.0:8090` if started with no arguments. PocketBase then uses its default `pb_data/` directory in the current working directory. Prefer an explicit `--dir` so the location remains predictable: the development command above uses `../pb_data` from `server/`, and the built command uses `./pb_data` from the repository root. This directory contains the SQLite database and other runtime files; it is local campaign data and must not be committed.
+Extract the matching archive and start the executable from a terminal: `./olea` on Linux/macOS, or `olea.exe` in PowerShell on Windows. Keep that terminal open. Olea prints the local browser URL and detected network addresses when it is ready. Open a printed address on another phone or computer connected to the same Wi-Fi/local network. On first run, permit Olea through the host firewall for **private/local networks only**; if a device still cannot connect, check that both devices are on the same network and that the firewall allows the selected port. Avoid exposing Olea to the public internet: this is a trusted-LAN application without authentication or game-level access controls.
+
+By default, campaign data is stored separately from the executable in the OS user configuration folder: `%AppData%\Olea` on Windows, `~/Library/Application Support/Olea` on macOS, and `$XDG_CONFIG_HOME/Olea` (normally `~/.config/Olea`) on Linux. Keep this entire `Olea` folder when upgrading or replacing the executable. For a custom writable location, pass PocketBase's `--dir` flag, for example `./olea serve --http=0.0.0.0:8090 --dir=/path/to/olea-data` (PowerShell: `./olea.exe serve --http=0.0.0.0:8090 --dir='D:\OleaData'`). The host address/port can also be changed with `--http=ADDRESS:PORT`; use `0.0.0.0` to accept connections on LAN interfaces.
+
+### Build from source
+
+```sh
+bun ci
+bun run build
+go -C server build -o ../bin/olea .
+./bin/olea serve --http=0.0.0.0:8090 --dir="$HOME/.config/Olea"
+```
+
+On Windows, build to `../bin/olea.exe` and run `bin\olea.exe` with the same arguments. PocketBase's admin UI is at `/_/`.
+
+The binary also defaults to `serve --http=0.0.0.0:8090` if started with no arguments. Its default data directory is the OS user configuration folder described above; an explicit `--dir` overrides it. The data directory contains the SQLite database and other runtime files; it is local campaign data and must not be committed.
 
 On upgrade, stop the running server, replace it with the newly built version, and start it again with the same `--dir`. Version-controlled Go migrations in `server/migrations/` are applied automatically on startup and record their applied versions in the database. Keep the data directory when upgrading. Back it up only while the server is stopped; do not copy only the live SQLite database. To initialize a fresh install, start the server with an empty data directory and PocketBase will create the schema and seed the `dnd5e` system identifier.
 
@@ -70,27 +86,27 @@ On upgrade, stop the running server, replace it with the newly built version, an
 
 Back up the **entire PocketBase data directory**, not just its SQLite database. It contains campaign records, imported catalog content, alternate descriptions and notes, uploaded files, and PocketBase metadata. Stop Olea first (Ctrl+C in the terminal running it), then copy the directory to a separate location outside the data directory. Keep backups somewhere safe and separate from the application install; the directory can contain private campaign data.
 
-On Linux or macOS, for a server started with `--dir=./pb_data` from the repository root:
+On Linux, for the default data directory:
 
 ```sh
 mkdir -p "$HOME/olea-backups"
-cp -a ./pb_data "$HOME/olea-backups/pb_data-2026-11-01"
+cp -a "$HOME/.config/Olea" "$HOME/olea-backups/Olea-2026-11-01"
 ```
 
-Create the parent backup folder first if it does not exist. On Windows, stop Olea and use File Explorer to copy the complete `pb_data` folder to a separate backup location. Do not copy only `data.db`.
+On macOS, the default data directory is `~/Library/Application Support/Olea`; copy that complete folder while Olea is stopped. Create the parent backup folder first if it does not exist. On Windows, stop Olea and use File Explorer to copy the complete `%AppData%\Olea` folder to a separate backup location. Do not copy only `data.db`.
 
 To verify or restore a backup, copy the **whole backed-up directory** to a new location whose destination path does not already exist, then start Olea with that location as `--dir`. This leaves the original data untouched and lets PocketBase apply any pending migrations during startup:
 
 ```sh
-cp -a "$HOME/olea-backups/pb_data-2026-11-01" ./pb_data-restore-check
-./bin/olea serve --http=127.0.0.1:8090 --dir=./pb_data-restore-check
+cp -a "$HOME/olea-backups/Olea-2026-11-01" ./Olea-restore-check
+./bin/olea serve --http=127.0.0.1:8090 --dir=./Olea-restore-check
 ```
 
-On Windows, copy the backed-up folder to a new folder such as `pb_data-restore-check` in File Explorer, then pass that folder to `bin\olea.exe serve --http=127.0.0.1:8090 --dir=./pb_data-restore-check`. Check that expected games and catalog records are present before relying on the restored copy. To replace the original data after verification, stop Olea, move the current data directory aside, and copy the verified restored directory into its place; never merge a restore into a running or non-empty data directory. Keep the backup until the restored instance has been checked.
+On Windows, copy the backed-up folder to a new folder such as `Olea-restore-check` in File Explorer, then pass that folder to `bin\olea.exe serve --http=127.0.0.1:8090 --dir=./Olea-restore-check`. Check that expected games and catalog records are present before relying on the restored copy. To replace the original data after verification, stop Olea, move the current data directory aside, and copy the verified restored directory into its place; never merge a restore into a running or non-empty data directory. Keep the backup until the restored instance has been checked.
 
 ## Local catalog imports
 
-Catalog imports are explicitly invoked on the host; the application does not fetch or bundle reference data. `go -C server run . --dir=/path/to/pb_data catalog-import <system-key> <json-file>` accepts the source-neutral JSON interchange format below. Omit `--dir` to use PocketBase's default directory relative to the server working directory. The importer updates records with the same system/type/source/source_id and leaves alternate descriptions and notes intact.
+Catalog imports are explicitly invoked on the host; the application does not fetch or bundle reference data. `go -C server run . --dir=/path/to/olea-data catalog-import <system-key> <json-file>` accepts the source-neutral JSON interchange format below. Omit `--dir` to use the OS user configuration folder described above. The importer updates records with the same system/type/source/source_id and leaves alternate descriptions and notes intact.
 
 ```json
 {
@@ -110,9 +126,13 @@ Catalog imports are explicitly invoked on the host; the application does not fet
 
 Supported record types are `item`, `spell`, and `creature`. Each record requires a source, stable source ID, name, and original JSON; creature type and challenge rating fields are available for later importers. The command prints created/updated totals and fails on invalid or duplicate identities. Use invented fixtures for development; do not commit personal reference files.
 
-For the supplied 5etools-style D&D 5e sources, use `go -C server run . --dir=/path/to/pb_data dnd5e-import spells ../data/dnd5e_spells_phb.json`, `go -C server run . --dir=/path/to/pb_data dnd5e-import bestiary ../data/dnd5e_bestiary-mm.json` or `go -C server run . --dir=/path/to/pb_data dnd5e-import items ../data/dnd5e_items.json`. Paths are relative to `server/` because of `go -C server`. These importers retain complete source objects, including fields not yet modeled, and report skipped records or warnings. Spell schools are normalized to names; monster imports support string/object creature type and CR, fractional CR, HP average/formula, Dexterity and actions. Item imports retain type, weight, value, rarity and resolve available `_copy` inheritance with append/insert/replace entry modifications while preserving the original `_copy` definition in source JSON. Unresolved bases and unsupported modifications are skipped with warnings. `itemGroup` bundle definitions are counted and deliberately not imported as standalone items. Missing stats are preserved in original JSON and are not invented. Source JSON remains local and is not included in the repository.
+For the supplied 5etools-style D&D 5e sources, use
+`go -C server run . --dir=pb_data dnd5e-import bestiary ../data/dnd5e_bestiary-mm.json`
+`go -C server run . --dir=pb_data dnd5e-import spells ../data/dnd5e_spells_phb.json`
+`go -C server run . --dir=/path/to/olea-data dnd5e-import items ../data/dnd5e_items.json`.
+Paths are relative to `server/` because of `go -C server`. These importers retain complete source objects, including fields not yet modeled, and report skipped records or warnings. Spell schools are normalized to names; monster imports support string/object creature type and CR, fractional CR, HP average/formula, Dexterity and actions. Item imports retain type, weight, value, rarity and resolve available `_copy` inheritance with append/insert/replace entry modifications while preserving the original `_copy` definition in source JSON. Unresolved bases and unsupported modifications are skipped with warnings. `itemGroup` bundle definitions are counted and deliberately not imported as standalone items. Missing stats are preserved in original JSON and are not invented. Source JSON remains local and is not included in the repository.
 
-AD&D 2e is available as a system after migration. Import the supplied local spell index and pages together using `go -C server run . --dev=false --dir=/path/to/pb_data adnd2e-import spells ../data/adnd_spell_list.json ../data/adnd_spell_pages.json`; import the saved creature site with `go -C server run . --dev=false --dir=/path/to/pb_data adnd2e-import bestiary ../data/adnd_monstrous_compendium`. Import counts and warnings include duplicate or missing spell pages, unrecognized infoboxes, missing creature pages and multi-column/absent stat tables. Spell page IDs and creature appendix paths are stable import identities; reimport preserves alternate descriptions and notes. Full spell wikitext and the original creature content HTML are retained locally and rendered as text and tables rather than executed. The source-book filter uses the first recognizable cited book. Complex wiki syntax and creature variants may require consulting original source data; source files can be incomplete. For simple single-column whole-number hit dice with an optional positive bonus, encounter HP can be rolled using d8s; ambiguous, fractional or variable hit dice remain manual. No reference material is bundled.
+AD&D 2e is available as a system after migration. Import the supplied local spell index and pages together using `go -C server run . --dev=false --dir=/path/to/olea-data adnd2e-import spells ../data/adnd_spell_list.json ../data/adnd_spell_pages.json`; import the saved creature site with `go -C server run . --dev=false --dir=/path/to/olea-data adnd2e-import bestiary ../data/adnd_monstrous_compendium`. Import counts and warnings include duplicate or missing spell pages, unrecognized infoboxes, missing creature pages and multi-column/absent stat tables. Spell page IDs and creature appendix paths are stable import identities; reimport preserves alternate descriptions and notes. Full spell wikitext and the original creature content HTML are retained locally and rendered as text and tables rather than executed. The source-book filter uses the first recognizable cited book. Complex wiki syntax and creature variants may require consulting original source data; source files can be incomplete. For simple single-column whole-number hit dice with an optional positive bonus, encounter HP can be rolled using d8s; ambiguous, fractional or variable hit dice remain manual. No reference material is bundled.
 
 For D&D 5e carrying weight, coins use the standard 50 coins per pound; each denomination is stored and displayed as a separate nonnegative whole-number balance. This is a fixed 5e convention in Olea, not a configurable variant rule.
 
@@ -130,7 +150,7 @@ D&D 5e uses highest initiative first and supports d20 initiative and Dexterity-d
 
 Open a game's **Random tables** to create and edit tables with inclusive integer ranges and optional `NdM` dice expressions (with an optional signed constant). Ranges cannot overlap; gaps are allowed and produce no match. Enter a manual result to use physical dice or a table with no expression. Results may include text and an item, spell, creature or encounter reference. Catalog references must match the game's system; encounters must belong to the game. A result whose reference was subsequently removed is shown as missing. Creature results can be added to a game encounter.
 
-Optional system templates are locally imported, read-only, and copied into games as independent editable tables. No templates or reference content are bundled. On the host, run `go -C server run . --dir=/path/to/pb_data table-template-import dnd5e /path/to/templates.json`. Template identity is system/source/source_id; importing again updates the template without changing copies. The import is atomic and fails if a catalog reference is missing; import catalog content first. Templates may reference system catalog entries by stable identity, but not game-specific encounters. For example, with an invented creature already imported as `SYNTHETIC` / `sample-ooze`:
+Optional system templates are locally imported, read-only, and copied into games as independent editable tables. No templates or reference content are bundled. On the host, run `go -C server run . --dir=/path/to/olea-data table-template-import dnd5e /path/to/templates.json`. Template identity is system/source/source_id; importing again updates the template without changing copies. The import is atomic and fails if a catalog reference is missing; import catalog content first. Templates may reference system catalog entries by stable identity, but not game-specific encounters. For example, with an invented creature already imported as `SYNTHETIC` / `sample-ooze`:
 
 ```json
 {

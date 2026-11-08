@@ -5,15 +5,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
+	"github.com/pocketbase/pocketbase/tools/hook"
 	"github.com/spf13/cobra"
 
 	"olea/adnd2eimport"
@@ -31,11 +38,17 @@ import (
 var frontend embed.FS
 
 func main() {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		log.Fatalf("Cannot determine the application data directory: %v", err)
+	}
+	defaultDataDir := filepath.Join(configDir, "Olea")
+
 	if len(os.Args) == 1 {
 		os.Args = append(os.Args, "serve", "--http=0.0.0.0:8090")
 	}
 
-	app := pocketbase.New()
+	app := pocketbase.NewWithConfig(pocketbase.Config{DefaultDataDir: defaultDataDir})
 	// Balance writes must use the guarded route or atomic transfer route.
 	protectBalances := func(e *core.RecordRequestEvent) error {
 		info, err := e.RequestInfo()
@@ -303,11 +316,106 @@ func main() {
 		if _, err := fs.Stat(public, "index.html"); err != nil {
 			log.Fatal("Frontend not built: run npm install and npm run build before building the server")
 		}
-		e.Router.GET("/{path...}", apis.Static(public, true))
+		staticFiles := apis.Static(public, true)
+		e.Router.GET("/{path...}", func(re *core.RequestEvent) error {
+			if re.Request.URL.Path == "/" {
+				return re.Redirect(http.StatusFound, "/games")
+			}
+			return staticFiles(re)
+		})
 		return e.Next()
+	})
+	app.OnServe().Bind(&hook.Handler[*core.ServeEvent]{
+		Id:       "oleaStartupAddresses",
+		Priority: -10000,
+		Func: func(e *core.ServeEvent) error {
+			address := e.Server.Addr
+			if address == "" {
+				address = ":http"
+			}
+			listener, err := net.Listen("tcp", address)
+			if err != nil {
+				return err
+			}
+			e.Listener = listener
+			fmt.Fprintf(os.Stdout, "Olea data directory: %s\n", e.App.DataDir())
+			printStartupAddresses(os.Stdout, address, listener.Addr())
+			return e.Next()
+		},
 	})
 
 	if err := app.Start(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func printStartupAddresses(out io.Writer, bindAddress string, listenerAddress net.Addr) {
+	tcpAddress, ok := listenerAddress.(*net.TCPAddr)
+	if !ok {
+		fmt.Fprintf(out, "Olea is listening at %s\n", listenerAddress)
+		return
+	}
+	port := strconv.Itoa(tcpAddress.Port)
+	fmt.Fprintf(out, "Olea is ready. Open http://localhost:%s on this computer.\n", port)
+
+	host, _, err := net.SplitHostPort(bindAddress)
+	if err != nil {
+		host = ""
+	}
+	addresses := make([]string, 0)
+	switch {
+	case host == "" || host == "0.0.0.0" || host == "::":
+		interfaces, err := net.Interfaces()
+		if err == nil {
+			for _, networkInterface := range interfaces {
+				if networkInterface.Flags&net.FlagUp == 0 || networkInterface.Flags&net.FlagLoopback != 0 {
+					continue
+				}
+				interfaceAddresses, err := networkInterface.Addrs()
+				if err != nil {
+					continue
+				}
+				for _, address := range interfaceAddresses {
+					ip, _, err := net.ParseCIDR(address.String())
+					if err != nil || !ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+						continue
+					}
+					addresses = append(addresses, ip.String())
+				}
+			}
+		}
+	case net.ParseIP(host) != nil:
+		if ip := net.ParseIP(host); ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified() {
+			addresses = append(addresses, ip.String())
+		}
+	default:
+		if !strings.EqualFold(host, "localhost") {
+			addresses = append(addresses, host)
+		}
+	}
+
+	sort.Strings(addresses)
+	addresses = uniqueStrings(addresses)
+	if len(addresses) == 0 {
+		fmt.Fprintln(out, "No LAN address was detected. Check that this computer is connected to Wi-Fi or Ethernet.")
+		return
+	}
+	fmt.Fprintln(out, "On the same Wi-Fi or local network, open one of these addresses:")
+	for _, address := range addresses {
+		fmt.Fprintf(out, "  http://%s\n", net.JoinHostPort(address, port))
+	}
+	fmt.Fprintln(out, "If another device cannot connect, allow Olea through the host firewall on your private network.")
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	unique := values[:1]
+	for _, value := range values[1:] {
+		if value != unique[len(unique)-1] {
+			unique = append(unique, value)
+		}
+	}
+	return unique
 }

@@ -28,9 +28,23 @@ onMounted(async () => {
   try {
     systems.value = await pb.collection('systems').getFullList<SystemRecord>({ sort: 'name' })
     let saved = ''; try { saved = localStorage.getItem('olea.catalogSystem') ?? '' } catch { /* Optional preference. */ }
-    systemId.value = systems.value.find((entry) => entry.key === saved)?.id ?? systems.value[0]?.id ?? ''
+    systemId.value = await defaultSystemId(saved)
   } catch { error.value = 'Systems could not be loaded. Check the local server and try again.' }
 })
+async function defaultSystemId(savedKey: string): Promise<string> {
+  const saved = systems.value.find((entry) => entry.key === savedKey)
+  if (saved) return saved.id
+  for (const entry of systems.value) {
+    try {
+      const result = await pb.collection('catalog').getList(1, 1, {
+        filter: pb.filter('system = {:system} && type = {:type}', { system: entry.id, type: selectedType.value }),
+        fields: 'id',
+      })
+      if (result.totalItems > 0) return entry.id
+    } catch { /* Try the next system. */ }
+  }
+  return systems.value[0]?.id ?? ''
+}
 watch([systemId, selectedType], () => { selected.value = {}; page.value = 1; void load() })
 watch([query, selected], () => { page.value = 1 })
 function saveSystem() { try { if (systemRecord.value) localStorage.setItem('olea.catalogSystem', systemRecord.value.key) } catch { /* Optional preference. */ } }

@@ -33,7 +33,7 @@ export default defineConfig({
       env: { E2E_PORT: String(port) },
     },
     {
-      command: 'npm run dev -- --host 127.0.0.1 --port 5173 --strictPort',
+      command: 'bun run dev -- --host 127.0.0.1 --port 5173 --strictPort',
       url: baseURL,
       name: 'Vite',
       reuseExistingServer: false,
