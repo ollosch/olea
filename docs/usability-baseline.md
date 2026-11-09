@@ -33,6 +33,10 @@ Encounter realtime now updates the existing GM and player workspaces in place. T
 
 After review, realtime uses a serialized complete authoritative refresh rather than independent subset refreshes. A superseded refresh aborts before committing and the pending event batch is reconciled again. Reconnects subscribe before refreshing, player visibility hides when it cannot be confirmed online, and partial subscription setup cleans up before retry. The expanded `e2e/encounter-realtime.spec.ts` covers the two-context, concurrent visibility/combatant, reconnect-gap, failed-subscription, GM-superseded-refresh, fail-closed visibility, reordering, offline/reconnect, draft-conflict and uncertain-write cases that this single exploratory journey does not isolate. Browser emulation remains the only environment; no physical device, screen reader or printer was used.
 
+## Step 18 update (2026-11-09)
+
+Step 18 added integrated acceptance journeys for GM preparation → combat setup → live play → player display and player inventory → spellbook → print, plus a 320/390/768/1280/1920 CSS-width sweep, inventory/spellbook empty states, inventory error recovery and browser print-to-PDF. The full suite passed on desktop Chromium and Pixel 8 emulation after test-only fixes: a global catalog count affected by prior test records, a programmatic-scroll race in the encounter print-return check, and spellbook fixture cleanup that now removes dependent relations before deleting tracked synthetic records. See `docs/usability-review.md` for commands, results, limitations and the remaining owner questions. The original real jumping sequence is still unspecified, so the new checks are representative acceptance checks, not a reproduction of that exact sequence.
+
 ## Owner questions
 
 Which screen and exact actions cause your search jump (typing, filter, scrolling, selecting, Back, loading, or another client updating)? What device/browser and approximate screen size? Which catalog, picker, combat, inventory and spellbook actions do you use most often at the table?

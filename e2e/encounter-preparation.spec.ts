@@ -180,6 +180,8 @@ test('switches encounters, keeps the direct query, and returns from print with t
     await expect(page).toHaveURL(new RegExp(`encounter=${first.id}`))
     await expect(page.locator('.encounter-entry-list .inventory-row')).toHaveCount(18)
     await expect.poll(async () => Math.abs((await page.evaluate(() => Math.round(window.scrollY))) - savedPosition)).toBeLessThanOrEqual(12)
+    // Let the scheduled print-return restoration run before recording a new position.
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 
     await page.evaluate(() => window.scrollTo(0, 260))
     const browserBackPosition = await page.evaluate(() => Math.round(window.scrollY))

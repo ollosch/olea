@@ -10,11 +10,61 @@ function uniqueName(label: string) {
   return `${label} ${key}-${sequence}`
 }
 
+const createdCatalogIds = new Set<string>()
+const createdBookIds = new Set<string>()
+const createdSpellbookSpellIds = new Set<string>()
+
 async function create(request: APIRequestContext, collection: string, data: Record<string, unknown>) {
   const response = await request.post(`${api}/${collection}/records`, { data })
   expect(response.ok(), `${collection}: ${await response.text()}`).toBeTruthy()
-  return await response.json() as { id: string }
+  const record = await response.json() as { id: string }
+  if (collection === 'catalog') createdCatalogIds.add(record.id)
+  else if (collection === 'spellbooks') createdBookIds.add(record.id)
+  else if (collection === 'spellbook_spells') createdSpellbookSpellIds.add(record.id)
+  return record
 }
+
+async function removeCreatedRecord(request: APIRequestContext, collection: string, id: string) {
+  const response = await request.delete(`${api}/${collection}/records/${id}`)
+  // The test may already have removed a record through the UI.
+  if (!response.ok() && response.status() !== 404) {
+    throw new Error(`${collection} cleanup ${id}: ${response.status()} ${await response.text()}`)
+  }
+}
+
+async function removeReferences(request: APIRequestContext, filter: string) {
+  const response = await request.get(`${api}/spellbook_spells/records?filter=${encodeURIComponent(filter)}&perPage=500`)
+  if (!response.ok()) throw new Error(`spellbook_spells lookup ${filter}: ${response.status()} ${await response.text()}`)
+  for (const entry of (await response.json() as { items: Array<{ id: string }> }).items) {
+    await removeCreatedRecord(request, 'spellbook_spells', entry.id)
+  }
+}
+
+async function cleanupCreatedFixtures(request: APIRequestContext) {
+  try {
+    // PocketBase protects catalog/book records while required relations still point at them,
+    // so remove only references to this spec's synthetic books and spells first.
+    for (const bookId of createdBookIds) await removeReferences(request, `spellbook='${bookId}'`)
+    for (const catalogId of createdCatalogIds) await removeReferences(request, `spell='${catalogId}'`)
+    for (const id of createdSpellbookSpellIds) await removeCreatedRecord(request, 'spellbook_spells', id)
+    for (const id of createdBookIds) await removeCreatedRecord(request, 'spellbooks', id)
+    for (const id of createdCatalogIds) await removeCreatedRecord(request, 'catalog', id)
+  } finally {
+    createdSpellbookSpellIds.clear()
+    createdBookIds.clear()
+    createdCatalogIds.clear()
+  }
+}
+
+test.afterEach(async ({ request }) => {
+  await cleanupCreatedFixtures(request)
+})
+
+test.afterAll(async ({ request }) => {
+  const response = await request.get(`${api}/catalog/records?filter=${encodeURIComponent(`source_id ~ '${key}'`)}&perPage=500`)
+  expect(response.ok(), await response.text()).toBeTruthy()
+  expect((await response.json() as { items: unknown[] }).items, 'spellbook-spec catalog fixtures should be cleaned up').toHaveLength(0)
+})
 
 async function dnd5eSystem(request: APIRequestContext) {
   const response = await request.get(`${api}/systems/records?filter=${encodeURIComponent("(key='dnd5e')")}`)
@@ -104,11 +154,9 @@ test('spell picker blocks duplicates, repeated adds and uncertain writes', async
   const alphaName = uniqueName('Repeated Alpha')
   const betaName = uniqueName('Repeated Beta')
   const gammaName = uniqueName('Uncertain Gamma')
-  const catalogIds = [
-    (await createSpell(request, systemId, alphaName)).id,
-    (await createSpell(request, systemId, betaName)).id,
-    (await createSpell(request, systemId, gammaName)).id,
-  ]
+  await createSpell(request, systemId, alphaName)
+  await createSpell(request, systemId, betaName)
+  await createSpell(request, systemId, gammaName)
   try {
     await page.goto(`/characters/${ids.characterId}/spellbooks?book=${ids.spellbookId}`)
     await expect(page.getByRole('heading', { name: 'E2E Spellbook' })).toBeVisible()
@@ -183,7 +231,7 @@ test('spell picker blocks duplicates, repeated adds and uncertain writes', async
     await expect(dialog.locator('.picker-result')).toContainText('Already in this book')
     await page.unroute('**/api/collections/spellbook_spells/records**')
   } finally {
-    for (const id of catalogIds) await request.delete(`${api}/catalog/records/${id}`)
+    // Cleanup is centralized in afterEach so dependencies are removed first.
   }
 })
 
@@ -191,11 +239,9 @@ test('keeps the selected book and scroll position through print and browser hist
   const systemId = await dnd5eSystem(request)
   const bookName = uniqueName('Scroll Book')
   const book = await create(request, 'spellbooks', { character: ids.characterId, name: bookName })
-  const catalogIds: string[] = []
   try {
     for (let index = 1; index <= 18; index++) {
       const spell = await createSpell(request, systemId, `Scroll Marker ${String(index).padStart(2, '0')}`, `Invented scroll spell ${index}.`)
-      catalogIds.push(spell.id)
       await create(request, 'spellbook_spells', { spellbook: book.id, spell: spell.id })
     }
 
@@ -242,8 +288,7 @@ test('keeps the selected book and scroll position through print and browser hist
     await expect(page.locator('.spell-entry')).toHaveCount(18)
     await expect.poll(async () => Math.abs((await scrollY(page)) - browserBackPosition)).toBeLessThanOrEqual(12)
   } finally {
-    await request.delete(`${api}/spellbooks/records/${book.id}`)
-    for (const id of catalogIds) await request.delete(`${api}/catalog/records/${id}`)
+    // Cleanup is centralized in afterEach so dependencies are removed first.
   }
 })
 
@@ -283,7 +328,7 @@ test('book administration menu renames, deletes and protects an unsaved name', a
     await expect(page.locator('.spellbook-tab').filter({ hasText: 'Menu Renamed Book' })).toHaveCount(0)
     await expect(page).toHaveURL(new RegExp(`book=${ids.spellbookId}`))
   } finally {
-    await request.delete(`${api}/spellbooks/records/${book.id}`)
+    // Cleanup is centralized in afterEach so dependencies are removed first.
   }
 })
 
@@ -320,8 +365,6 @@ test('missing catalog spell references stay understandable and removable', async
     await expect(page.getByRole('heading', { name: 'No spells in this book' })).toBeVisible()
   } finally {
     await page.unroute('**/api/collections/spellbook_spells/records**')
-    await request.delete(`${api}/spellbooks/records/${book.id}`)
-    await request.delete(`${api}/catalog/records/${spell.id}`)
   }
 })
 
@@ -329,11 +372,9 @@ test('a delayed book load cannot replace a newer selection with stale rows', asy
   const systemId = await dnd5eSystem(request)
   const slowBookName = uniqueName('Slow Book')
   const slowBook = await create(request, 'spellbooks', { character: ids.characterId, name: slowBookName })
-  const catalogIds: string[] = []
   try {
     for (let index = 1; index <= 3; index++) {
       const spell = await createSpell(request, systemId, `Slow Marker ${index}`, `Slow invented spell ${index}.`)
-      catalogIds.push(spell.id)
       await create(request, 'spellbook_spells', { spellbook: slowBook.id, spell: spell.id })
     }
 
@@ -359,8 +400,7 @@ test('a delayed book load cannot replace a newer selection with stale rows', asy
     await expect(page.locator('.spell-entry').filter({ hasText: 'Slow Marker' })).toHaveCount(0)
     await expect(page).toHaveURL(new RegExp(`book=${ids.spellbookId}`))
   } finally {
-    await request.delete(`${api}/spellbooks/records/${slowBook.id}`)
-    for (const id of catalogIds) await request.delete(`${api}/catalog/records/${id}`)
+    // Cleanup is centralized in afterEach so dependencies are removed first.
   }
 })
 
@@ -369,7 +409,7 @@ test('a pending add stays scoped to its book and blocks tab or same-route switch
   const targetName = uniqueName('Zulu Switch Book')
   const target = await create(request, 'spellbooks', { character: ids.characterId, name: targetName })
   const spellName = uniqueName('Scoped Add Spell')
-  const spell = await createSpell(request, systemId, spellName)
+  await createSpell(request, systemId, spellName)
   try {
     await page.goto(`/characters/${ids.characterId}/spellbooks?book=${target.id}`)
     await expect(page.getByRole('heading', { name: targetName, exact: true })).toBeVisible()
@@ -409,8 +449,7 @@ test('a pending add stays scoped to its book and blocks tab or same-route switch
     await expect(page.getByRole('heading', { name: 'E2E Spellbook' })).toBeVisible()
     await expect(page.locator('.spell-entry').filter({ hasText: spellName })).toHaveCount(0)
   } finally {
-    await request.delete(`${api}/spellbooks/records/${target.id}`)
-    await request.delete(`${api}/catalog/records/${spell.id}`)
+    // Cleanup is centralized in afterEach so dependencies are removed first.
   }
 })
 
@@ -474,7 +513,6 @@ test('failed add reconciliation keeps guards and a successful retry does not dup
     await expect(dialog.locator('.picker-result')).toBeDisabled()
     await expect(dialog.locator('.picker-result')).toContainText('Already in this book')
   } finally {
-    await request.delete(`${api}/spellbooks/records/${otherBook.id}`)
-    await request.delete(`${api}/catalog/records/${spell.id}`)
+    // Cleanup is centralized in afterEach so dependencies are removed first.
   }
 })

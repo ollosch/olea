@@ -24,6 +24,10 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(dimensions.document).toBeLessThanOrEqual(dimensions.viewport)
 }
 
+function workspaceRows(page: Page) {
+  return page.locator('.catalog-row').filter({ hasText: prefix })
+}
+
 test.beforeAll(async ({ request }) => {
   const systems = await request.get(`${api}/systems/records?sort=key`)
   expect(systems.ok(), await systems.text()).toBeTruthy()
@@ -184,7 +188,7 @@ test('search, default filters, applied chips and clear actions stay usable', asy
   await expect(page.getByText('No matching entries')).toBeVisible()
   await page.getByRole('button', { name: 'Clear search and filters' }).click()
   await expect(search).toHaveValue('')
-  await expect(page.getByText('6 entries', { exact: true })).toBeVisible()
+  await expect(workspaceRows(page)).toHaveCount(6)
   await expect(page.locator('.catalog-filter-chip')).toHaveCount(0)
 
   await openAdvancedFilters(page)
@@ -195,7 +199,7 @@ test('search, default filters, applied chips and clear actions stay usable', asy
   expect(new URL(page.url()).searchParams.get('source')).toBe('OTHER')
 
   await page.getByRole('button', { name: 'Remove Source filter: OTHER' }).click()
-  await expect(page.getByText('6 entries', { exact: true })).toBeVisible()
+  await expect(workspaceRows(page)).toHaveCount(6)
   expect(new URL(page.url()).searchParams.get('source')).toBe('')
 
   await source.selectOption('PHB')
@@ -205,7 +209,7 @@ test('search, default filters, applied chips and clear actions stay usable', asy
   await expect(page.getByRole('button', { name: 'Remove Level filter: 2' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Clear filters' }).click()
-  await expect(page.getByText('6 entries', { exact: true })).toBeVisible()
+  await expect(workspaceRows(page)).toHaveCount(6)
   await expect(page.locator('.catalog-filter-chip')).toHaveCount(0)
   await expectNoHorizontalOverflow(page)
 })
