@@ -6,6 +6,7 @@ let prefix = ''
 let systemId = ''
 let firstSpellId = ''
 let firstSpellName = ''
+let creatureName = ''
 const catalogIds: string[] = []
 
 async function openAdvancedFilters(page: Page) {
@@ -58,6 +59,17 @@ test.beforeAll(async ({ request }) => {
       original_json: { entries: [`Invented other-source spell ${number}.`] },
     })
   }
+  creatureName = `${prefix} Creature 01`
+  await create({
+    system: systemId,
+    type: 'creature',
+    source: 'PHB',
+    source_id: `${key}-creature-01`,
+    name: creatureName,
+    creature_type: 'beast',
+    challenge_rating: '1',
+    original_json: { fluff: { entries: ['Invented catalog state creature.'] } },
+  })
 })
 
 test.afterAll(async ({ request }) => {
@@ -147,6 +159,36 @@ test('keeps typed search and explicit filters while a delayed response arrives',
     expect(params.get('source')).toBe('PHB')
     expect(params.get('level')).toBe('1')
   } finally {
+    await page.unroute('**/api/collections/catalog/records?*', delayed)
+  }
+})
+
+test('a slow previous type request cannot replace newer results', async ({ page }) => {
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let held = false
+  const delayed = async (route: import('@playwright/test').Route) => {
+    const filter = new URL(route.request().url()).searchParams.get('filter') ?? ''
+    if (!held && filter.includes('type = "spell"')) {
+      held = true
+      await gate
+    }
+    await route.continue()
+  }
+  await page.route('**/api/collections/catalog/records?*', delayed)
+  try {
+    await page.goto('/catalog?system=dnd5e&type=spell')
+    await expect(page.getByText('Loading catalog…')).toBeVisible()
+    await page.getByRole('button', { name: 'Creatures', exact: true }).click()
+    await expect(page.locator('.catalog-row').filter({ hasText: creatureName })).toBeVisible()
+    release()
+    await page.waitForTimeout(300)
+    await expect(page.locator('.catalog-row')).toHaveCount(1)
+    await expect(page.locator('.catalog-row').filter({ hasText: creatureName })).toBeVisible()
+    await expect(page.getByText('1 entry', { exact: true })).toBeVisible()
+    await expect(page).toHaveURL(/type=creature/)
+  } finally {
+    release()
     await page.unroute('**/api/collections/catalog/records?*', delayed)
   }
 })
