@@ -1,5 +1,7 @@
 # Catalog performance measurement — 2026-11-09
 
+> Historical reference: the frontend and measurement scripts used below have since been removed for a new owner-led design.
+
 Step 17 measured catalog search with an invented, disposable large catalog. The representative synthetic localhost run showed **no material load, search or memory delay**, so no production performance change was delivered. Payload size was recorded as a diagnostic but is not by itself evidence of a material problem. No real Wi-Fi or server-CPU measurement was performed.
 
 A scoped gzip experiment was implemented and reviewed during step 17, then removed at the product owner's request. No compression production code or compression-specific tests remain; this document records the measured baseline and the reversion.

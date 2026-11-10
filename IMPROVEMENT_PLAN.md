@@ -1,5 +1,7 @@
 # Olea: usability improvement plan
 
+> Historical record: the redesigned UI and its browser tests were removed at the owner's request. A new owner-led design will replace them. The completion notes below describe the prior interface, not the current placeholder.
+
 This is an implementation plan, not a claim that the redesigned interface exists. It is based on the working tree reviewed on 2026-11-08, including local changes. Each numbered step is intended for a **fresh, focused coding prompt**. Work in order unless a step states otherwise; re-read the current code and this plan before starting because earlier work may move files.
 
 ## Current handoff

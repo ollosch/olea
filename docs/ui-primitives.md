@@ -1,5 +1,7 @@
 # Shared UI primitives
 
+> Historical reference: the components described below were removed with the previous frontend and are not currently available.
+
 These are the small building blocks introduced in step 3 of `IMPROVEMENT_PLAN.md`. They are intentionally presentation-level: keep data loading, permissions, persistence and route state in the views or focused components. Do not add a design-system dependency or a second styling system.
 
 ## PageHeader

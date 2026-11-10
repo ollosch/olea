@@ -1,13 +1,12 @@
 # Olea
 
-A local-network TTRPG companion for preparing games and managing the details at the table. Games, characters, catalog browsing, inventories, spellbooks and encounter tools are under active development; remaining features are tracked in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+A local-network TTRPG companion for preparing games and managing the details at the table. The frontend is being redesigned; the current frontend is a placeholder. The backend and campaign data are retained.
 
 ## Architecture
 
 - Vue 3, Vue Router, TypeScript, Vite, Tailwind CSS and Reka UI for a responsive web interface.
 - PocketBase embedded in a Go application for SQLite storage, the API and realtime subscriptions.
 - The production frontend is embedded in the Go executable. Players connect through a browser on the same network; no internet access is required at runtime.
-- Appearance defaults to green on dark. Before a profile is active, the accent is stored in the browser; once a character owner or game GM is active, it is saved to that local profile and follows it across devices.
 
 This is a trusted-LAN application. Profiles are lightweight local labels for character ownership and GM assignment, not login accounts. The current app does not implement authentication or game-level access controls; profile and UI restrictions do not secure data from other devices on the network.
 
@@ -20,38 +19,25 @@ bun ci
 bun run build
 ```
 
-In one terminal, start the backend from the repository root:
+From the repository root, start the backend and frontend together:
 
 ```sh
-go -C server run . serve --http=127.0.0.1:8090 --dir=../pb_data
+bun run dev:all
 ```
 
-In another terminal, run the frontend development server:
+Open **http://127.0.0.1:5173**. Press Ctrl+C to stop both services. The backend uses `pb_data/` by default; pass a directory to use a different database:
 
 ```sh
-bun run dev
+bun run dev:all -- /path/to/data
 ```
 
-To start the backend directly in the foreground with a chosen data directory, use `scripts/start-server.sh /path/to/data`. For a fresh migration check, choose a new empty directory, stop the server with Ctrl+C, and run the same command again with that directory to verify restart behavior.
+Set `OLEA_API_PORT` or `OLEA_FRONTEND_PORT` if the default ports (8090 and 5173) are occupied. The script builds the embedded frontend if it has not been built yet; frontend edits then update through Vite. Run `bun run typecheck` to check TypeScript.
 
-Open the Vite URL shown in the terminal. Vite proxies `/api` to PocketBase. `bun run build` is needed once before starting the Go server; frontend edits then update through Vite. Run `bun run typecheck` to check TypeScript.
+To run the services separately, use `go -C server run . serve --http=127.0.0.1:8090 --dir=../pb_data` and `bun run dev` in separate terminals. To start only the backend with a chosen data directory, use `scripts/start-server.sh /path/to/data`.
 
-## Browser tests
+## Tests
 
-Playwright runs end-to-end tests in Chromium. After installing bun dependencies, install the browser once:
-
-```sh
-bunx playwright install chromium
-bun run test:e2e
-```
-
-The test command starts Vite and a disposable Go/PocketBase server automatically, seeds invented records for each test, and removes its temporary database when the server exits. The backend always starts in a fresh temporary directory and will not reuse a server on the E2E port. Tests run on desktop Chromium with mouse input and Pixel 8 touch emulation. Use `bun run test:e2e:desktop` or `bun run test:e2e:mobile` to run one project. Browser E2E tests do not use or modify `pb_data/`.
-
-Current E2E coverage includes two-context inventory and player encounter updates, stale quantity/container/coin conflicts, inventory and coin transfers, offline/reconnect refresh, player encounter visibility, app-shell loading, mobile touch target sizing and overflow, and desktop workspace overflow. It also includes integrated journeys for GM preparation → combat setup → live play → player display and player inventory → spellbook → print, plus a 320/390/768/1280/1920 CSS-width sweep, catalog search/focus checks, print selection and browser print-to-PDF. Device coverage is still browser emulation: physical phones, tablets, laptops, screen readers and printers need hands-on verification. Step 18's automated journey checks are complete, but owner review and physical device/printer/screen-reader/zoom validation remain outstanding. See `docs/usability-review.md` for results, remaining questions and limitations.
-
-For an occupied port, set `E2E_PORT` for both Playwright and the disposable server and use a temporary config outside tracked files, for example a Vite port of 5174 and PocketBase port of 8092. Keep `E2E_PORT` and `E2E_API_PORT` consistent with that config, then remove the temporary config after the run. Never point browser tests at `pb_data/` or personal campaign data.
-
-The default per-test timeout is **10 seconds**, configured by `timeout` in `playwright.config.ts`. For a test or group that legitimately needs longer, set `test.setTimeout(milliseconds)` inside the test or `test.describe.configure({ timeout: milliseconds })` inside its describe block. Keep those overrides local instead of increasing the suite-wide limit.
+Run the backend tests with `go -C server test ./...`. The reusable TypeScript domain helpers have checks in `src/lib/*.test.ts`, which can be run with Bun. The previous browser suite was removed with the frontend; new interface tests will follow the new design.
 
 ## Build and run
 
@@ -150,7 +136,7 @@ D&D 5e uses highest initiative first and supports d20 initiative and Dexterity-d
 
 ## Random tables
 
-Open a game's **Random tables** to create and edit tables with inclusive integer ranges and optional `NdM` dice expressions (with an optional signed constant). Ranges cannot overlap; gaps are allowed and produce no match. Enter a manual result to use physical dice or a table with no expression. Results may include text and an item, spell, creature or encounter reference. Catalog references must match the game's system; encounters must belong to the game. A result whose reference was subsequently removed is shown as missing. Creature results can be added to a game encounter.
+Random tables support inclusive integer ranges and optional `NdM` dice expressions (with an optional signed constant). Ranges cannot overlap; gaps are allowed and produce no match. Results may include text and an item, spell, creature or encounter reference. Catalog references must match the game's system; encounters must belong to the game.
 
 Optional system templates are locally imported, read-only, and copied into games as independent editable tables. No templates or reference content are bundled. On the host, run `go -C server run . --dir=/path/to/olea-data table-template-import dnd5e /path/to/templates.json`. Template identity is system/source/source_id; importing again updates the template without changing copies. The import is atomic and fails if a catalog reference is missing; import catalog content first. Templates may reference system catalog entries by stable identity, but not game-specific encounters. For example, with an invented creature already imported as `SYNTHETIC` / `sample-ooze`:
 
@@ -168,9 +154,7 @@ Optional system templates are locally imported, read-only, and copied into games
 
 ## Paper cards
 
-The shared print preview and A4 print foundation are available, including duplex pairing, long-/short-edge flips, cut guides, local system fonts, a calibration page (open **Print calibration** at `/print/calibration`), and visible overflow warnings. The calibration page includes a 50 mm square and a ruler; print at 100% / Actual size with “Fit to page” disabled. Browser print-to-PDF was verified in Chromium. Actual printer scaling, duplex registration and cut alignment still need hands-on verification for each printer.
-
-Spell cards can be selected and printed from a character's spellbook, four per A4 sheet. Fronts include available system-specific fields and the preferred alternate description, falling back to original spell content; backs contain only the spell name. Long content and missing fields are called out in the preview. Monster cards can be selected from one or more encounters in a game with explicit checkboxes; catalog records are deduplicated by identity, while same-name creatures from different sources remain separate. Creature stats, actions, preferred at-table text, available flavour and encounter notes are included. Custom participants and missing records receive clearly labeled manual cards. Item cards can be printed from a character inventory in A7 landscape, eight per A4 sheet. Only root carried items are eligible: stash contents and items inside containers are excluded. Weapon cards emphasize available damage, range and properties; descriptions appear on the front and item notes on the back. Each print screen shows selected/total counts and card warnings, and returns to the originating encounter, book or inventory context. Card layout dimensions are data-driven to allow additional formats such as A8. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for card content and verification requirements.
+The reusable card-layout and presentation helpers remain in `src/lib/`, including A4 dimensions, duplex pairing and system-specific card content. Print screens and browser-print tests will need to be rebuilt with the new interface. Physical printer scaling and registration still need hands-on verification.
 
 ## Local data
 
@@ -190,4 +174,4 @@ Shared collections own game data, transactions and user edits. Catalog originals
 
 Catalog filters use the same definitions and matching helpers in browsing and pickers. Common imported attributes remain queryable columns; additional system-specific attributes can be read from paths under the preserved `original_json` object without adding shared schema columns. The catalog currently loads the selected system and type into the browser for filtering and pagination, so very large catalogs may need a server-side query strategy later.
 
-Frontend helper checks can be run with `node --experimental-strip-types src/lib/inventedSystem.test.ts` and the other `src/lib/*.test.ts` files. The Go suite includes fresh schema and populated pre-milestone upgrade/restart coverage. Browser and device testing was not performed for the system architecture milestone; verify desktop and phone layouts and real-time updates separately. Actual printer alignment also requires testing.
+Frontend helper checks can be run with `bun src/lib/inventedSystem.test.ts` and the other `src/lib/*.test.ts` files. The Go suite includes fresh schema and populated pre-milestone upgrade/restart coverage.

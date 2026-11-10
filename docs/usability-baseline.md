@@ -1,5 +1,7 @@
 # Usability baseline — 2026-11-08
 
+> Historical reference: the previous interface and its browser tests have been removed for a new owner-led design.
+
 ## Setup and reproduction
 
 From the repository root run `bun run test:e2e -- e2e/usability-baseline.spec.ts --workers=1`. Playwright starts Vite and a fresh PocketBase in a temporary directory, removed when the server exits; it does not use `pb_data/` or `data/`. The script creates an invented D&D 5e game, character, 42 test spells, 42 test items, a 22-spell book, 15 live participants, and Satchel → Pouch → Token. Names include a per-run key. It logs viewport, document height/width, `window.scrollY`, focused element, and target top/height in CSS pixels. It also deletes its catalog fixtures and their references before the shared fixture removes the game. A failure trace is retained under ignored `test-results/`.

@@ -1,6 +1,6 @@
 import type { CatalogRecord } from './catalog.ts'
 import type { SystemCapabilities } from './systems.ts'
-import type { PrintCard } from '../components/CardPrintPreview.vue'
+import type { PrintCard } from './printCardTypes'
 import { getCardOverflowWarnings } from './cardPrintWarnings.ts'
 
 function hasContent(value: unknown): boolean {

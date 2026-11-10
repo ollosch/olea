@@ -1,5 +1,7 @@
 # Step 18 usability review and handoff — 2026-11-09
 
+> Historical reference: the interface and browser tests reviewed below have since been removed for a new owner-led design.
+
 This is the end-to-end review for step 18 of `IMPROVEMENT_PLAN.md`. It records what was exercised, what failed, what was fixed, and what still needs a real device, printer, screen reader or the product owner. It does not claim owner review, physical-device validation or production performance work.
 
 ## Status
