@@ -54,11 +54,17 @@ type Report struct {
 	RelationTypesCreated int      `json:"relation_types_created"`
 	Relations            int      `json:"relations"`
 	Mentions             int      `json:"mentions"`
+	AssetsCopied         int      `json:"assets_copied"`
+	Maps                 int      `json:"maps"`
+	EntityPaths          int      `json:"entity_paths"`
+	EntityFTS            int      `json:"entity_fts"`
 	TimelineSkipped      int      `json:"timeline_skipped"`
 	UnknownTypes         []string `json:"unknown_types,omitempty"`
 	UnknownTemplates     []string `json:"unknown_templates,omitempty"`
 	DuplicateBasenames   []string `json:"duplicate_basenames,omitempty"`
 	RelationRenames      []string `json:"relation_renames,omitempty"`
+	MissingAssets        []string `json:"missing_assets,omitempty"`
+	CreatedRelationTypes []string `json:"created_relation_types,omitempty"`
 	UnresolvedRelations  []string `json:"unresolved_relations,omitempty"`
 	UnresolvedMentions   []string `json:"unresolved_mentions,omitempty"`
 	SkippedFiles         []string `json:"skipped_files,omitempty"`
@@ -181,6 +187,31 @@ func importVault(app core.App, root string) (Report, error) {
 		}
 	}
 
+	assets, assetWarnings, err := newAssetIndex(root, app.DataDir())
+	if err != nil {
+		return report, err
+	}
+	report.Warnings = append(report.Warnings, assetWarnings...)
+	for index := range files {
+		mapResult, err := extractLeafletMaps(unsafeApp, &files[index], assets)
+		if err != nil {
+			return report, fmt.Errorf("%s: extract maps: %w", files[index].relPath, err)
+		}
+		files[index].body = mapResult.Body
+		report.Maps += mapResult.Maps
+		report.AssetsCopied += mapResult.Copied
+		report.MissingAssets = append(report.MissingAssets, mapResult.Missing...)
+		report.Warnings = append(report.Warnings, mapResult.Warnings...)
+
+		rewriteResult, err := assets.rewriteBody(files[index].relPath, files[index].body)
+		if err != nil {
+			return report, fmt.Errorf("%s: rewrite assets: %w", files[index].relPath, err)
+		}
+		files[index].body = rewriteResult.Body
+		report.AssetsCopied += rewriteResult.Copied
+		report.MissingAssets = append(report.MissingAssets, rewriteResult.Missing...)
+	}
+
 	records := make(map[string]*core.Record, len(files))
 	for index := range files {
 		record, created, unchanged, err := upsertEntity(unsafeApp, &files[index])
@@ -251,12 +282,32 @@ func importVault(app core.App, root string) (Report, error) {
 		}
 	}
 
+	pathsRows, err := world.RebuildPaths(unsafeApp)
+	if err != nil {
+		return report, fmt.Errorf("rebuild entity paths: %w", err)
+	}
+	report.EntityPaths = pathsRows
+
+	ftsRows, err := world.RebuildFTS(unsafeApp)
+	if err != nil {
+		return report, fmt.Errorf("rebuild entity fts: %w", err)
+	}
+	report.EntityFTS = ftsRows
+
+	createdTypes := make([]string, 0, len(createdTypeKeys))
+	for key := range createdTypeKeys {
+		createdTypes = append(createdTypes, key)
+	}
+	sort.Strings(createdTypes)
+
 	report.CampaignsCreated = creator.created
-	report.RelationTypesCreated = len(createdTypeKeys)
+	report.RelationTypesCreated = len(createdTypes)
+	report.CreatedRelationTypes = createdTypes
 	report.UnknownTypes = sortedUnique(report.UnknownTypes)
 	report.UnknownTemplates = sortedUnique(report.UnknownTemplates)
 	report.DuplicateBasenames = sortedUnique(report.DuplicateBasenames)
 	report.RelationRenames = sortedUnique(report.RelationRenames)
+	report.MissingAssets = sortedUnique(report.MissingAssets)
 	report.UnresolvedRelations = sortedUnique(report.UnresolvedRelations)
 	report.UnresolvedMentions = sortedUnique(report.UnresolvedMentions)
 	report.SkippedFiles = sortedUnique(report.SkippedFiles)
@@ -609,7 +660,7 @@ func upsertEntity(app core.App, file *vaultFile) (*core.Record, bool, bool, erro
 		return nil, false, false, err
 	}
 
-	if exists && record.GetString("source_hash") == file.hash {
+	if exists && record.GetString("source_hash") == file.hash && record.GetString("body") == file.body {
 		return record, false, true, nil
 	}
 
