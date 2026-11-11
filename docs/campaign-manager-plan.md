@@ -17,7 +17,7 @@ The user will test drive the importer and a proof-of-concept editor for about an
 
 - Batches 1–4 are complete on `feat/campaign-manager`: schema migrations, the vault importer, asset/map handling, closure paths, FTS, server-side search, rebuild hooks and the world snapshot endpoint.
 - `poc_data/` is imported from the real vault and is ready for the PoC; `pb_data/` is untouched.
-- The frontend is still the placeholder. Next is Batch 5 (shell, Pinia world store, list/local search, campaign filter, detail), then Batch 6 (edit/create), then Batch 7 (acceptance, docs refresh, full verification).
+- The frontend is still the placeholder. Next is the **frontend design handoff**: the user describes the UI first. Do not start Batch 5 until that description exists; record durable UI decisions in this plan, then implement Batch 5 (shell, Pinia world store, list/local search, campaign filter, detail), Batch 6 (edit/create) and Batch 7 (acceptance, docs refresh, full verification).
 - Treat the backend as frozen for the PoC except for fixes: do not redo the schema, importer, hooks or routes, and do not remove backend capabilities before the frontend exists.
 
 ## Authoritative decisions
@@ -409,7 +409,8 @@ Do not use calendar timetables. Work in dependency order.
 2. **Importer — done.**
    - Parsing, normalization, campaigns, entities, relations, mentions, assets, maps, paths, FTS.
    - Imported into `poc_data/`; the report is clean enough to inspect.
-3. **PoC editor — next.**
+3. **PoC editor — blocked on frontend design.**
+   - First capture the user's frontend design: screens/routes, shell and navigation, list/detail layouts, editor behavior, markdown interactions, campaign switcher and visual direction. Ask before filling gaps.
    - Batch 5: shell, API client, Pinia world store hydrated from `/api/olea/world`, entity list/local search, campaign filter, detail.
    - Batch 6: edit/create, markdown rendering, save flow.
    - Wire save → server relation/path/FTS hook, then patch the in-memory store.
@@ -428,7 +429,7 @@ These are batches, not timetables. Adjust only if the code forces a different de
 - **Batch 2 — importer core (done):** vault walk and YAML parsing; normalization/campaign inference; entity upsert; relation types and relations; mentions.
 - **Batch 3 — importer finish (done):** asset copy/rewrite; leaflet map extraction; closure paths; FTS rebuild; JSON report; importer tests.
 - **Batch 4 — backend lookup (done):** search route with filters; asset serving route; relation/FTS rebuild hook; world snapshot route for the client cache; focused Go tests.
-- **Batch 5 — frontend shell and browse (next):** new Vue shell; API client; hydrate the world snapshot into a Pinia store with in-memory indexes; entity list/local search; campaign filter; detail view. Aim for 4–5 tasks.
+- **Batch 5 — frontend shell and browse (next, blocked on frontend design):** capture the user's UI design first; then new Vue shell; API client; hydrate the world snapshot into a Pinia store with in-memory indexes; entity list/local search; campaign filter; detail view. Aim for 4–5 tasks.
 - **Batch 6 — frontend edit/create (pending):** CodeMirror editor; data/links editors; save + relation sync; create entity; markdown rendering with wikilinks/images. Aim for 4–5 tasks.
 - **Batch 7 — verification and reference (pending):** re-import only if the importer changed; run acceptance checks; refresh `docs/REFERENCE.md`; run Go tests, typecheck and build. Aim for 3–4 tasks.
 
@@ -476,14 +477,19 @@ If ports are occupied, set `OLEA_API_PORT` / `OLEA_FRONTEND_PORT`.
 
 ## Fresh session prompt
 
-Use this as the first message in a new opencode session opened in `/home/ollo/Code/olea`:
+Use this as the first message in a new opencode session opened in `/home/ollo/Code/olea`.
+
+The prompt is intentionally a **design handoff**, not a build instruction. Paste your frontend description where indicated; do not expect Batch 5 to start before that.
 
 ```text
 Read docs/REFERENCE.md first for orientation, then docs/campaign-manager-plan.md. The plan is the authoritative design and implementation plan for turning Olea into a campaign manager. Follow it exactly unless I say otherwise.
 
 Work on the existing branch feat/campaign-manager. Batches 1–4 are already complete: schema, importer, assets/maps, paths/FTS, search, rebuild hooks and the world snapshot endpoint. poc_data is imported. Do not redo or rewrite that backend work.
 
-Start with Batch 5 (frontend shell/browse), then Batch 6 (edit/create), then Batch 7 (verification). The frontend is still the placeholder; build it from a clean slate.
+Do NOT start Batch 5 yet. First read the frontend design I provide below. If any screen, interaction, component, route or visual decision is missing or ambiguous, ask me before coding. Summarize the design back to me and record durable decisions in docs/campaign-manager-plan.md. Only after that, implement Batch 5 (shell/browse), then Batch 6 (edit/create), then Batch 7 (verification).
+
+Frontend design:
+[PASTE THE FRONTEND DESIGN HERE]
 
 The PoC frontend is DB-primary with a client-memory cache. Hydrate GET /api/olea/world into a Pinia world store and do browse, detail, backlinks, link resolution and search in memory, like /home/ollo/Code/olgur. Keep the backend and /api/olea/search as the fallback. Images stay /olea/assets/... URLs. Do not remove backend routes or derived tables.
 

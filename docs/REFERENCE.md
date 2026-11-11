@@ -5,9 +5,9 @@
 ## Current state
 
 - Backend and domain logic are implemented and tested.
-- Campaign-manager Batches 1–4 are implemented and tested: schema migrations, the vault importer, asset/map handling, closure paths, FTS, search, rebuild hooks and the world snapshot route. Next is Batch 5 (frontend); Batch 6 and 7 follow.
+- Campaign-manager Batches 1–4 are implemented and tested: schema migrations, the vault importer, asset/map handling, closure paths, FTS, search, rebuild hooks and the world snapshot route. Next is the user's frontend design handoff; Batch 5 starts only after that design is captured. Batches 6 and 7 follow.
 - The previous Vue UI and its browser tests were deliberately removed in commit `dbe7c65` at the owner's request. Do **not** restore them. A clean UI is being built.
-- `src/App.vue` is currently a placeholder. Batch 5 will hydrate `GET /api/olea/world` into a Pinia world store and browse/search in memory; the backend remains the source of truth.
+- `src/App.vue` is currently a placeholder. After the user's frontend design is captured, Batch 5 will hydrate `GET /api/olea/world` into a Pinia world store and browse/search in memory; the backend remains the source of truth.
 - `poc_data/` contains the imported real vault for the PoC (529 entities, 98 copied assets, 2 maps; 2 genuinely missing vault images) and is disposable; regenerate it with `import-vault` only if the importer or source vault changes. `pb_data/` is untouched by the campaign-manager work.
 - `Timeline/` notes are disposable examples; the importer skips them.
 - The campaign-manager design is in `docs/campaign-manager-plan.md`. That file is authoritative for the new work.
