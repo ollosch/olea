@@ -2,6 +2,7 @@
 /data/
 /pb_data/
 /server/pb_data/
+/poc_data/
 
 # Dependencies, generated assets, and binaries.
 /node_modules/
