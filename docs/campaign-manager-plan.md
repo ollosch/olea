@@ -28,6 +28,7 @@ The user will test drive the importer and a proof-of-concept editor for about an
 6. **Markdown, extended.** CommonMark/GFM stored as raw markdown, with a small explicit extension layer for wikilinks, embeds, maps, and deferred-entity tokens. Do not use MDX or a block-JSON editor.
 7. **Player content is mechanics-only for now.** No player-facing lore wiki. Player view covers encounters/combat.
 8. **Deferred:** branch exclusion UI (but keep `entity_paths`, `scope`, `system_id` in the model), full schema-editor UI, print/cards parity, container hierarchy parity, Excalidraw/canvas, player lore.
+9. **Timeline is disposable example content.** All notes under `Timeline/` are examples and are no longer needed. The importer must skip the `Timeline/` folder and report the skipped count; the schema still supports `event`/`thread` entities for future content.
 
 ## Workflow: subagents, git, reference, QMD
 
@@ -314,7 +315,7 @@ go -C server run . import-vault <vault-path> --dir=<data-dir>
 
 Or a subcommand on the existing Cobra root. Requirements:
 
-1. Walk all `.md` files in the vault. Skip `.obsidian`, `.trash`.
+1. Walk all `.md` files in the vault. Skip `.obsidian`, `.trash`, and `Timeline/` (disposable example notes; report the skipped count).
 2. Parse YAML frontmatter and body. Use `gopkg.in/yaml.v3`.
 3. Build a name/alias → entity map. Fail-safe on duplicate basenames (warn; first wins, report).
 4. Create campaigns from frontmatter and folder inference.
@@ -444,7 +445,7 @@ If ports are occupied, set `OLEA_API_PORT` / `OLEA_FRONTEND_PORT`.
 
 ## Acceptance criteria for the PoC
 
-- All vault markdown notes are imported (or explicitly reported as skipped).
+- All vault markdown notes outside `Timeline/` are imported (or explicitly reported as skipped); `Timeline/` is skipped as disposable example content.
 - Entities preserve raw `type`/`template`, normalized `type_class`, folder, body, data, links, aliases, campaigns.
 - Relations resolve by name/alias; unresolved targets are reported, not silently dropped.
 - Images are copied and render in the detail view.
