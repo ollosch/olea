@@ -48,13 +48,14 @@ func SyncEntityMentions(app core.App, entity *core.Record, resolver *Resolver) (
 	if resolver == nil {
 		resolver = NewResolver()
 	}
+	unsafeApp := app.UnsafeWithoutHooks()
 
 	existing, err := app.FindRecordsByFilter("mentions", "source = {:source}", "", 0, 0, dbx.Params{"source": entity.Id})
 	if err != nil {
 		return result, err
 	}
 	for _, mention := range existing {
-		if err := app.Delete(mention); err != nil {
+		if err := unsafeApp.Delete(mention); err != nil {
 			return result, err
 		}
 	}
@@ -81,7 +82,7 @@ func SyncEntityMentions(app core.App, entity *core.Record, resolver *Resolver) (
 		mention.Set("source", entity.Id)
 		mention.Set("target", resolvedID)
 		mention.Set("target_name", target)
-		if err := app.Save(mention); err != nil {
+		if err := unsafeApp.Save(mention); err != nil {
 			return result, err
 		}
 		result.Count++

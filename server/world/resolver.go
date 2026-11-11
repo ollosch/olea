@@ -88,7 +88,7 @@ func EnsureRelationType(app core.App, key string) (record *core.Record, created 
 	record.Set("label", key)
 	record.Set("inverse_label", "verweist auf")
 	record.Set("hierarchical", false)
-	if err := app.Save(record); err != nil {
+	if err := app.UnsafeWithoutHooks().Save(record); err != nil {
 		return nil, false, err
 	}
 	return record, true, nil

@@ -60,13 +60,14 @@ func SyncEntityRelations(app core.App, entity *core.Record, resolver *Resolver) 
 	if resolver == nil {
 		resolver = NewResolver()
 	}
+	unsafeApp := app.UnsafeWithoutHooks()
 
 	existing, err := app.FindRecordsByFilter("relations", "from = {:from}", "", 0, 0, dbx.Params{"from": entity.Id})
 	if err != nil {
 		return result, err
 	}
 	for _, relation := range existing {
-		if err := app.Delete(relation); err != nil {
+		if err := unsafeApp.Delete(relation); err != nil {
 			return result, err
 		}
 	}
@@ -164,7 +165,7 @@ func SyncEntityRelations(app core.App, entity *core.Record, resolver *Resolver) 
 			relation.Set("to", to)
 			relation.Set("type", relationType.Id)
 			relation.Set("unresolved_name", unresolvedName)
-			if err := app.Save(relation); err != nil {
+			if err := unsafeApp.Save(relation); err != nil {
 				return result, err
 			}
 			result.Count++
