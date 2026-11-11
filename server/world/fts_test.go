@@ -15,7 +15,7 @@ func TestPlainText(t *testing.T) {
 		"```go\nfunc main() {}\n```\n" +
 		"<span>html</span>![[Ignored.png]]\n"
 	text := PlainText(input)
-	for _, expected := range []string{"Heading", "item bold and italic", "quote", "Label", "Other", "Alt text", "link", "a b", "c d", "func main", "html"} {
+	for _, expected := range []string{"Heading", "item bold and italic", "quote", "Label", "Other", "Alt text", "link", "https://example.com", "a b", "c d", "func main", "html"} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("PlainText() = %q, missing %q", text, expected)
 		}

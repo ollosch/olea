@@ -13,7 +13,7 @@ var (
 	fencedCodeFencePattern = regexp.MustCompile("(?m)^\\s*```[^\\n]*$")
 	htmlTagPattern         = regexp.MustCompile(`<[^>]+>`)
 	markdownImagePattern   = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
-	markdownLinkPattern    = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	markdownLinkPattern    = regexp.MustCompile(`\[([^\]]*)\]\(([^)]*)\)`)
 	imageEmbedPattern      = regexp.MustCompile(`!\[\[[^\]]*\]\]`)
 	ftsWikilinkPattern     = regexp.MustCompile(`\[\[([^\]|]*)(?:\|([^\]]*))?\]\]`)
 	headingPattern         = regexp.MustCompile(`(?m)^[ \t]*#{1,6}[ \t]*`)
@@ -29,7 +29,7 @@ func PlainText(markdown string) string {
 	text = strings.ReplaceAll(text, "\r", "\n")
 	text = fencedCodeFencePattern.ReplaceAllString(text, "")
 	text = markdownImagePattern.ReplaceAllString(text, "$1")
-	text = markdownLinkPattern.ReplaceAllString(text, "$1")
+	text = markdownLinkPattern.ReplaceAllString(text, "$1 $2")
 	text = imageEmbedPattern.ReplaceAllString(text, "")
 	text = ftsWikilinkPattern.ReplaceAllStringFunc(text, func(match string) string {
 		parts := ftsWikilinkPattern.FindStringSubmatch(match)
