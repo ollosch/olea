@@ -309,8 +309,10 @@ func inTopLevelTimeline(relativePath string) bool {
 
 func buildFile(relativePath string, content []byte) (vaultFile, []string, error) {
 	frontmatter, body, err := ParseFrontmatter(content)
+	warnings := []string{}
 	if err != nil {
-		return vaultFile{}, nil, err
+		warnings = append(warnings, fmt.Sprintf("%s: %v; imported with folder inference", relativePath, err))
+		frontmatter = map[string]any{}
 	}
 
 	file := vaultFile{relPath: relativePath}
@@ -351,8 +353,9 @@ func buildFile(relativePath string, content []byte) (vaultFile, []string, error)
 		file.meta = map[string]any{}
 	}
 
-	aliases, warnings := normalizeAliases(relativePath, frontmatter["aliases"])
+	aliases, aliasWarnings := normalizeAliases(relativePath, frontmatter["aliases"])
 	file.aliases = aliases
+	warnings = append(warnings, aliasWarnings...)
 
 	file.status = stringFromValue(frontmatter["status"])
 	if strings.TrimSpace(file.status) == "" {

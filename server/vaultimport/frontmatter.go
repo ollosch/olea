@@ -27,17 +27,18 @@ func ParseFrontmatter(content []byte) (map[string]any, string, error) {
 		return map[string]any{}, normalized, nil
 	}
 
+	body := strings.Join(lines[closing+1:], "\n")
+
 	frontmatter := map[string]any{}
 	yamlText := strings.Join(lines[1:closing], "\n")
 	if strings.TrimSpace(yamlText) != "" {
 		if err := yaml.Unmarshal([]byte(yamlText), &frontmatter); err != nil {
-			return nil, "", fmt.Errorf("parse frontmatter: %w", err)
+			return nil, body, fmt.Errorf("parse frontmatter: %w", err)
 		}
 		if frontmatter == nil {
 			frontmatter = map[string]any{}
 		}
 	}
 
-	body := strings.Join(lines[closing+1:], "\n")
 	return frontmatter, body, nil
 }
