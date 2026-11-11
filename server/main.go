@@ -31,6 +31,7 @@ import (
 	"olea/recordupdate"
 	"olea/transfers"
 	"olea/vaultimport"
+	"olea/world"
 )
 
 // The placeholder keeps Go builds valid before the frontend is built.
@@ -50,6 +51,7 @@ func main() {
 	}
 
 	app := pocketbase.NewWithConfig(pocketbase.Config{DefaultDataDir: defaultDataDir})
+	world.RegisterHooks(app)
 	// Balance writes must use the guarded route or atomic transfer route.
 	protectBalances := func(e *core.RecordRequestEvent) error {
 		info, err := e.RequestInfo()
@@ -325,6 +327,50 @@ func main() {
 			}
 			return re.NoContent(204)
 		})
+		e.Router.GET("/api/olea/search", func(re *core.RequestEvent) error {
+			query := re.Request.URL.Query()
+			params := world.SearchParams{
+				Query:    query.Get("q"),
+				Type:     query.Get("type"),
+				Campaign: query.Get("campaign"),
+				Exclude:  query.Get("exclude"),
+			}
+			if raw := query.Get("limit"); raw != "" {
+				limit, err := strconv.Atoi(raw)
+				if err != nil {
+					return re.BadRequestError("Invalid limit.", nil)
+				}
+				params.Limit = limit
+			}
+			result, err := world.Search(re.App, params)
+			if err != nil {
+				return re.BadRequestError(err.Error(), nil)
+			}
+			return re.JSON(200, result)
+		})
+		e.Router.GET("/olea/assets/{path...}", func(re *core.RequestEvent) error {
+			relative := strings.TrimPrefix(re.Request.PathValue("path"), "/")
+			if relative == "" || relative == "." || !fs.ValidPath(relative) {
+				return re.NotFoundError("Asset not found.", nil)
+			}
+			return re.FileFS(os.DirFS(world.AssetsDir(re.App.DataDir())), relative)
+		})
+		e.Router.POST("/api/olea/admin/rebuild", func(re *core.RequestEvent) error {
+			var paths, fts int
+			err := re.App.RunInTransaction(func(txApp core.App) error {
+				var err error
+				paths, err = world.RebuildPaths(txApp)
+				if err != nil {
+					return err
+				}
+				fts, err = world.RebuildFTS(txApp)
+				return err
+			})
+			if err != nil {
+				return re.InternalServerError("Rebuild failed.", err)
+			}
+			return re.JSON(200, map[string]int{"entity_paths": paths, "entity_fts": fts})
+		})
 		public, err := fs.Sub(frontend, "ui/dist")
 		if err != nil {
 			return err
@@ -339,7 +385,20 @@ func main() {
 			}
 			return staticFiles(re)
 		})
-		return e.Next()
+		if err := e.Next(); err != nil {
+			return err
+		}
+		if e.Server.Handler != nil {
+			handler := e.Server.Handler
+			e.Server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, world.AssetsURLPrefix) && hasDotPathSegment(r.URL.Path) {
+					http.NotFound(w, r)
+					return
+				}
+				handler.ServeHTTP(w, r)
+			})
+		}
+		return nil
 	})
 	app.OnServe().Bind(&hook.Handler[*core.ServeEvent]{
 		Id:       "oleaStartupAddresses",
@@ -421,6 +480,15 @@ func printStartupAddresses(out io.Writer, bindAddress string, listenerAddress ne
 		fmt.Fprintf(out, "  http://%s\n", net.JoinHostPort(address, port))
 	}
 	fmt.Fprintln(out, "If another device cannot connect, allow Olea through the host firewall on your private network.")
+}
+
+func hasDotPathSegment(path string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueStrings(values []string) []string {
