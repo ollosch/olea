@@ -207,6 +207,14 @@ func TestSnapshot(t *testing.T) {
 	}
 	firstRevision := snapshot.Revision
 
+	stable, err := Snapshot(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stable.Revision != firstRevision {
+		t.Fatalf("snapshot revision is not stable: %q -> %q", firstRevision, stable.Revision)
+	}
+
 	time.Sleep(10 * time.Millisecond)
 	keep.Set("body", "# Keep\n\nA freshly revised keep.")
 	if err := app.Save(keep); err != nil {
