@@ -30,6 +30,7 @@ import (
 	"olea/randomtables"
 	"olea/recordupdate"
 	"olea/transfers"
+	"olea/vaultimport"
 )
 
 // The placeholder keeps Go builds valid before the frontend is built.
@@ -210,6 +211,21 @@ func main() {
 				Skipped  int      `json:"skipped"`
 				Warnings []string `json:"warnings"`
 			}{imported.Created, imported.Updated, parsed.Skipped, parsed.Warnings})
+		},
+	})
+	app.RootCmd.AddCommand(&cobra.Command{
+		Use:   "import-vault <vault-path>",
+		Short: "Import a markdown vault into the campaign manager",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := app.RunAppMigrations(); err != nil {
+				return err
+			}
+			report, err := vaultimport.Import(app, args[0])
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(report)
 		},
 	})
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
