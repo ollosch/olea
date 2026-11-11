@@ -348,6 +348,13 @@ func main() {
 			}
 			return re.JSON(200, result)
 		})
+		e.Router.GET("/api/olea/world", func(re *core.RequestEvent) error {
+			snapshot, err := world.Snapshot(re.App)
+			if err != nil {
+				return re.InternalServerError("World snapshot failed.", err)
+			}
+			return re.JSON(200, snapshot)
+		})
 		e.Router.GET("/olea/assets/{path...}", func(re *core.RequestEvent) error {
 			relative := strings.TrimPrefix(re.Request.PathValue("path"), "/")
 			if relative == "" || relative == "." || !fs.ValidPath(relative) {
