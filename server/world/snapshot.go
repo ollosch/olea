@@ -130,14 +130,11 @@ func Snapshot(app core.App) (WorldSnapshot, error) {
 		snapshot.MapMarkers = append(snapshot.MapMarkers, record.PublicExport())
 	}
 
-	if err := app.DB().NewQuery(revisionQuery).Row(&snapshot.Revision); err != nil {
-		snapshot.Revision = ""
-		digest, digestErr := snapshotDigest(snapshot)
-		if digestErr != nil {
-			return snapshot, digestErr
-		}
-		snapshot.Revision = digest
+	digest, err := snapshotDigest(snapshot)
+	if err != nil {
+		return snapshot, err
 	}
+	snapshot.Revision = digest
 	return snapshot, nil
 }
 
@@ -157,13 +154,3 @@ func lessText(left, right string) bool {
 	}
 	return leftFolded < rightFolded
 }
-
-const revisionQuery = `SELECT COALESCE(MAX(updated), '') FROM (
-	SELECT updated FROM campaigns
-	UNION ALL SELECT updated FROM entities
-	UNION ALL SELECT updated FROM relation_types
-	UNION ALL SELECT updated FROM relations
-	UNION ALL SELECT updated FROM mentions
-	UNION ALL SELECT updated FROM maps
-	UNION ALL SELECT updated FROM map_markers
-)`
