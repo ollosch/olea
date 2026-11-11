@@ -74,9 +74,6 @@ func newAssetIndex(root, dataDir string) (*assetIndex, []string, error) {
 			}
 			return nil
 		}
-		if inTopLevelTimeline(relativePath) {
-			return nil
-		}
 		if !imageExtensions[strings.ToLower(filepath.Ext(entry.Name()))] {
 			return nil
 		}
