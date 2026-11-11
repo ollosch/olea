@@ -29,6 +29,8 @@ The user will test drive the importer and a proof-of-concept editor for about an
 7. **Player content is mechanics-only for now.** No player-facing lore wiki. Player view covers encounters/combat.
 8. **Deferred:** branch exclusion UI (but keep `entity_paths`, `scope`, `system_id` in the model), full schema-editor UI, print/cards parity, container hierarchy parity, Excalidraw/canvas, player lore.
 9. **Timeline is disposable example content.** All notes under `Timeline/` are examples and are no longer needed. The importer must skip the `Timeline/` folder and report the skipped count; the schema still supports `event`/`thread` entities for future content.
+10. **Client-memory cache, DB and backend unchanged.** The database remains the source of truth. The PoC frontend hydrates the whole world — campaigns, entities (including bodies), relation types, relations, mentions, maps, map markers; images stay lazy via `/olea/assets/` — through `GET /api/olea/world` into a Pinia world store. Browse, detail, backlinks, link resolution, type/campaign filters and search run in memory, as in Olgur. Keep the importer, hooks, `entity_paths`, `entity_fts` and `/api/olea/search` as the server-side fallback and for future scale. Edits still go through PocketBase; after a save, patch the store from the response and refresh or use realtime for other clients.
+11. **Do not remove backend capabilities for the PoC.** The snapshot is an additional read-only hydration path, not a replacement. Do not delete `/api/olea/search`, `/olea/assets/{path...}`, the admin rebuild route, FTS or closure tables while the frontend is being built; the frontend has not yet proved what is unused. Revisit dead-code removal after Batches 6–7.
 
 ## Workflow: subagents, git, reference, QMD
 
@@ -353,18 +355,19 @@ A minimal new Vue app, not the final UI. It should be isolated enough to replace
 Screens:
 
 - `/` → redirect to `/entities`.
-- `/entities`: search input (FTS5 route), type filter, campaign filter; list rows with name, type/template, campaign chips, folder.
+- `/entities`: search input (in-memory search over the hydrated store; `/api/olea/search` remains a fallback), type filter, campaign filter; list rows with name, type/template, campaign chips, folder.
 - `/entities/:id`: read view — title, infobox (source type/template, `data`, resolved `links`), rendered markdown body with internal links and images, edit button.
 - `/entities/:id/edit`: form — name, type_class select, template, status, campaigns multiselect, `data` JSON editor, `links` JSON editor, body CodeMirror editor; save.
 - Create button: blank entity form.
 
 Behavior:
 
-- Use Pinia for current campaign and entity search/list state.
-- Use VueUse for debounced search, localStorage for the selected campaign.
+- Hydrate the world once from `GET /api/olea/world` into a Pinia world store. Build in-memory indexes: entity by id, name/alias, type, campaign, folder; relations by from/to; mentions by source/target. Detail views read from the store, not per-note GET requests.
+- Use Pinia for current campaign, world snapshot and entity search/list state.
+- Use VueUse for debounced local search, localStorage for the selected campaign.
 - Use Reka UI for dialogs/menus if needed; native controls are fine for the PoC.
-- Render markdown with markdown-it; resolve `[[Name]]` to internal links via a name/alias map; sanitize with DOMPurify.
-- On save, update the entity and trigger a relation sync from `links`, then rebuild `entity_paths` and the FTS row for that entity.
+- Render markdown with markdown-it; resolve `[[Name]]` to internal links via the in-memory name/alias map; sanitize with DOMPurify. Compute backlinks from the loaded bodies and relations.
+- On save, update the entity through PocketBase, patch the in-memory entity, then refresh the snapshot or the affected entity; the server hook syncs relations/mentions and rebuilds `entity_paths` and FTS.
 - Show a visible save result and error message. Keep it simple.
 - Do not build the final navigation, campaign manager, maps, or mechanics UI in the PoC.
 
@@ -374,12 +377,13 @@ Campaign filtering:
 - Campaign switcher in the header; persist selection.
 - "All campaigns" toggle optional.
 - Global entities get a badge.
-- Do not write per-component filter logic; centralize it in a Pinia/composable query builder.
+- Do not write per-component filter or search logic; centralize it in the Pinia world store/composable query builder.
 
 ## Custom backend routes
 
-- `GET /api/olea/search?q=&type=&campaign=&exclude=&limit=` — FTS5 search plus filters; returns summaries and snippets.
-- `GET /api/olea/entities/{id}/relations` — optional; PB filters are enough for the PoC.
+- `GET /api/olea/world` — one-shot world snapshot for the Pinia cache: campaigns, entities (bodies included), relation types, relations, mentions, maps, map markers, plus a content revision digest.
+- `GET /api/olea/search?q=&type=&campaign=&exclude=&limit=` — FTS5 fallback for server-side search; not required by the cached PoC UI.
+- `GET /api/olea/entities/{id}/relations` — optional; PB filters and the snapshot are enough for the PoC.
 - `POST /api/olea/admin/rebuild` — rebuild paths/FTS (dev-only or trusted LAN).
 - `GET /olea/assets/{path...}` — serve copied assets.
 
@@ -414,8 +418,8 @@ These are batches, not timetables. Adjust only if the code forces a different de
 - **Batch 1 — schema foundation (sequential, one subagent):** migrations for `campaigns`, `entities`, `relation_types`, `relations`, `mentions`, `maps`, `map_markers`; raw `entity_paths` and `entity_fts`; seed relation types/systems. This must finish before anything depends on it.
 - **Batch 2 — importer core (one subagent):** vault walk and YAML parsing; normalization/campaign inference; entity upsert; relation types and relations; mentions. Aim for 4–5 tightly coupled tasks.
 - **Batch 3 — importer finish (one subagent):** asset copy/rewrite; leaflet map extraction; closure paths; FTS rebuild; JSON report; importer tests. Aim for 4–5 tasks.
-- **Batch 4 — backend lookup (one subagent):** search route with filters; asset serving route; relation/FTS rebuild hook; focused Go tests. Aim for 3–4 tasks.
-- **Batch 5 — frontend shell and browse (one subagent):** new Vue shell; Pinia stores; API client; entity list/search; campaign filter; detail view. Aim for 4–5 tasks.
+- **Batch 4 — backend lookup (one subagent):** search route with filters; asset serving route; relation/FTS rebuild hook; world snapshot route for the client cache; focused Go tests. Aim for 4–5 tasks.
+- **Batch 5 — frontend shell and browse (one subagent):** new Vue shell; API client; hydrate the world snapshot into a Pinia store with in-memory indexes; entity list/local search; campaign filter; detail view. Aim for 4–5 tasks.
 - **Batch 6 — frontend edit/create (one subagent):** CodeMirror editor; data/links editors; save + relation sync; create entity; markdown rendering with wikilinks/images. Aim for 4–5 tasks.
 - **Batch 7 — verification and reference (one subagent):** import the real vault into `poc_data/`; run acceptance checks; update `docs/REFERENCE.md`; run Go tests, typecheck and build. Aim for 3–4 tasks.
 
@@ -450,6 +454,9 @@ If ports are occupied, set `OLEA_API_PORT` / `OLEA_FRONTEND_PORT`.
 - Relations resolve by name/alias; unresolved targets are reported, not silently dropped.
 - Images are copied and render in the detail view.
 - Search returns expected results; type and campaign filters work.
+- The frontend hydrates the world once; entity browse, search, backlinks and detail work without per-note GET requests.
+- The server-side search route, asset serving, snapshot and rebuild hooks still pass their tests.
+- No custom GET route or derived table is deleted while the frontend is being built; cleanup is revisited after Batches 6–7.
 - Branch exclusion is not implemented, but the schema supports it (`entity_paths`).
 - Editing an entity saves name/data/links/body; relations and paths update.
 - Creating a new NPC/location works and appears in search/list immediately.
