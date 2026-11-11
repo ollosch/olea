@@ -13,6 +13,13 @@ Turn Olea into the single tool for the user's D&D campaign:
 
 The user will test drive the importer and a proof-of-concept editor for about an hour before the rest is built. The PoC is not the final UI.
 
+## Current progress
+
+- Batches 1–4 are complete on `feat/campaign-manager`: schema migrations, the vault importer, asset/map handling, closure paths, FTS, server-side search, rebuild hooks and the world snapshot endpoint.
+- `poc_data/` is imported from the real vault and is ready for the PoC; `pb_data/` is untouched.
+- The frontend is still the placeholder. Next is Batch 5 (shell, Pinia world store, list/local search, campaign filter, detail), then Batch 6 (edit/create), then Batch 7 (acceptance, docs refresh, full verification).
+- Treat the backend as frozen for the PoC except for fixes: do not redo the schema, importer, hooks or routes, and do not remove backend capabilities before the frontend exists.
+
 ## Authoritative decisions
 
 1. **DB-primary.** All content lives in Olea's SQLite database. Obsidian is no longer a live source. A one-time importer reads the existing vault; markdown export is a portability feature.
@@ -60,7 +67,7 @@ Use subagents for all implementation tasks, not only large ones. The main agent 
   4. stay inside the named scope and files;
   5. make atomic conventional commits;
   6. run the relevant verification;
-  7. do not touch `pb_data/` or `data/`;
+  7. do not touch `pb_data/`, `data/` or `poc_data/`;
   8. do not restore the removed frontend;
   9. ask before changing an authoritative decision.
 - The main agent reviews each subagent's commits before starting the next batch. Do not let a subagent "fix everything"; keep the batch scoped.
@@ -73,9 +80,9 @@ Use subagents for all implementation tasks, not only large ones. The main agent 
 
 ### QMD MCP
 
-- QMD MCP is available and up to date. Use it when semantic lookup of code or docs is faster than broad file exploration.
+- If QMD MCP is configured in the session, use it when semantic lookup of code or docs is faster than broad file exploration.
 - Treat QMD hits as leads, not truth: verify the relevant source before editing.
-- Do not use QMD as a substitute for reading this plan or `docs/REFERENCE.md`.
+- If QMD is not configured, use the normal search/read tools. Do not use QMD as a substitute for reading this plan or `docs/REFERENCE.md`.
 
 ## Stack
 
@@ -91,6 +98,7 @@ Frontend:
 - **markdown-it** + plugins for rendering; **DOMPurify** for sanitizing rendered HTML.
 - **Leaflet** later for image maps; keep it out of the PoC unless trivial.
 - PocketBase SDK `0.28.1`.
+- Current `package.json` contains only Vue, Vue Router, Reka UI and PocketBase. Add Pinia, VueUse, CodeMirror 6, markdown-it and DOMPurify during Batches 5–6; do not assume they are installed.
 
 Backend:
 
@@ -184,10 +192,12 @@ Indexes: `source`, `target`, `target_name`.
 
 - `map` relation to `maps`, required
 - `entity` relation to `entities`
-- `x` number, required (normalized 0–100 or image coordinates; document the choice)
-- `y` number, required
+- `x` number, required (normalized 0–100 percentage)
+- `y` number, required (normalized 0–100 percentage)
 - `label` text
 - public rules
+
+Map marker coordinates are stored as normalized 0–100 percentages; the renderer converts them to image/leaflet coordinates. This keeps markers independent of the source image dimensions.
 
 ### Raw SQLite tables
 
@@ -312,7 +322,7 @@ Normalize obvious duplicates during import only if safe: `in` → `In`, `Quest`/
 Add a Go command:
 
 ```sh
-go -C server run . import-vault <vault-path> --dir=<data-dir>
+go -C server run . --dir=<data-dir> import-vault <vault-path>
 ```
 
 Or a subcommand on the existing Cobra root. Requirements:
@@ -336,9 +346,9 @@ Or a subcommand on the existing Cobra root. Requirements:
    - rewrite image embeds to `![alt](/olea/assets/<file>)`;
    - report missing images.
 10. Parse ` ```leaflet ` blocks:
-    - create a `maps` record with config and the image asset;
-    - for the PoC, leave the body block or replace it with `:::map{mapId=...}`; map rendering can come later;
-    - report the two maps.
+    - create/update a `maps` record with config and the image asset;
+    - replace the block with `:::map{mapId=<map record id>}`; rendering can come later;
+    - report the maps.
 11. Build `entity_paths` from hierarchical relation types.
 12. Rebuild `entity_fts` from all entities (plain text).
 13. Print a JSON report to stdout: counts (entities, relations, mentions, assets, maps), warnings, unresolved names, unknown types/templates, duplicate basenames, missing assets.
@@ -383,7 +393,6 @@ Campaign filtering:
 
 - `GET /api/olea/world` — one-shot world snapshot for the Pinia cache: campaigns, entities (bodies included), relation types, relations, mentions, maps, map markers, plus a content revision digest.
 - `GET /api/olea/search?q=&type=&campaign=&exclude=&limit=` — FTS5 fallback for server-side search; not required by the cached PoC UI.
-- `GET /api/olea/entities/{id}/relations` — optional; PB filters and the snapshot are enough for the PoC.
 - `POST /api/olea/admin/rebuild` — rebuild paths/FTS (dev-only or trusted LAN).
 - `GET /olea/assets/{path...}` — serve copied assets.
 
@@ -393,20 +402,20 @@ Keep `pb_data/` untouched; use `poc_data/`.
 
 Do not use calendar timetables. Work in dependency order.
 
-1. **Schema reset for the PoC**
-   - Add migrations for `campaigns`, `entities`, `relation_types`, `relations`, `mentions`, `maps`, `map_markers`.
-   - Add raw migrations for `entity_paths` and `entity_fts`.
-   - Seed systems if missing; seed relation types.
-2. **Importer**
-   - Implement parsing, normalization, campaigns, entities, relations, mentions, assets, maps, paths, FTS.
-   - Run against the vault into `poc_data/`.
-   - Fix data issues until the report is clean enough to inspect.
-3. **PoC editor**
-   - Build the new Vue shell, Pinia, API client, entity list/search, detail, edit, create.
-   - Wire save → relation sync → path/FTS rebuild.
+1. **Schema reset for the PoC — done.**
+   - Migrations for `campaigns`, `entities`, `relation_types`, `relations`, `mentions`, `maps`, `map_markers`.
+   - Raw migrations for `entity_paths` and `entity_fts`.
+   - Systems and relation types seeded.
+2. **Importer — done.**
+   - Parsing, normalization, campaigns, entities, relations, mentions, assets, maps, paths, FTS.
+   - Imported into `poc_data/`; the report is clean enough to inspect.
+3. **PoC editor — next.**
+   - Batch 5: shell, API client, Pinia world store hydrated from `/api/olea/world`, entity list/local search, campaign filter, detail.
+   - Batch 6: edit/create, markdown rendering, save flow.
+   - Wire save → server relation/path/FTS hook, then patch the in-memory store.
 4. **Verification**
-   - Go tests and `bun run typecheck`.
-   - Manual test drive: import, open 10 random entities, search, filter by campaign, edit/save, create an NPC.
+   - Go tests, `bun run typecheck`, `bun run build`.
+   - Manual test drive: open random entities, search, filter by campaign, edit/save, create an NPC.
 5. **Stop and hand off**
    - The user test drives for about an hour.
    - Then build the rest together.
@@ -415,13 +424,13 @@ Do not use calendar timetables. Work in dependency order.
 
 These are batches, not timetables. Adjust only if the code forces a different dependency order.
 
-- **Batch 1 — schema foundation (sequential, one subagent):** migrations for `campaigns`, `entities`, `relation_types`, `relations`, `mentions`, `maps`, `map_markers`; raw `entity_paths` and `entity_fts`; seed relation types/systems. This must finish before anything depends on it.
-- **Batch 2 — importer core (one subagent):** vault walk and YAML parsing; normalization/campaign inference; entity upsert; relation types and relations; mentions. Aim for 4–5 tightly coupled tasks.
-- **Batch 3 — importer finish (one subagent):** asset copy/rewrite; leaflet map extraction; closure paths; FTS rebuild; JSON report; importer tests. Aim for 4–5 tasks.
-- **Batch 4 — backend lookup (one subagent):** search route with filters; asset serving route; relation/FTS rebuild hook; world snapshot route for the client cache; focused Go tests. Aim for 4–5 tasks.
-- **Batch 5 — frontend shell and browse (one subagent):** new Vue shell; API client; hydrate the world snapshot into a Pinia store with in-memory indexes; entity list/local search; campaign filter; detail view. Aim for 4–5 tasks.
-- **Batch 6 — frontend edit/create (one subagent):** CodeMirror editor; data/links editors; save + relation sync; create entity; markdown rendering with wikilinks/images. Aim for 4–5 tasks.
-- **Batch 7 — verification and reference (one subagent):** import the real vault into `poc_data/`; run acceptance checks; update `docs/REFERENCE.md`; run Go tests, typecheck and build. Aim for 3–4 tasks.
+- **Batch 1 — schema foundation (done):** migrations for `campaigns`, `entities`, `relation_types`, `relations`, `mentions`, `maps`, `map_markers`; raw `entity_paths` and `entity_fts`; seed relation types/systems.
+- **Batch 2 — importer core (done):** vault walk and YAML parsing; normalization/campaign inference; entity upsert; relation types and relations; mentions.
+- **Batch 3 — importer finish (done):** asset copy/rewrite; leaflet map extraction; closure paths; FTS rebuild; JSON report; importer tests.
+- **Batch 4 — backend lookup (done):** search route with filters; asset serving route; relation/FTS rebuild hook; world snapshot route for the client cache; focused Go tests.
+- **Batch 5 — frontend shell and browse (next):** new Vue shell; API client; hydrate the world snapshot into a Pinia store with in-memory indexes; entity list/local search; campaign filter; detail view. Aim for 4–5 tasks.
+- **Batch 6 — frontend edit/create (pending):** CodeMirror editor; data/links editors; save + relation sync; create entity; markdown rendering with wikilinks/images. Aim for 4–5 tasks.
+- **Batch 7 — verification and reference (pending):** re-import only if the importer changed; run acceptance checks; refresh `docs/REFERENCE.md`; run Go tests, typecheck and build. Aim for 3–4 tasks.
 
 The main agent owns integration between batches. Parallelize only with separate worktrees and branches; never let two subagents write the same worktree concurrently.
 
@@ -433,11 +442,13 @@ bun run build
 go -C server test ./...
 ```
 
-For the importer:
+For the importer (run from the repository root; `go -C server` sets the working directory to `server/`):
 
 ```sh
-go -C server run . import-vault /home/ollo/Documents/Share/Obsidian/DnD --dir=./poc_data
+go -C server run . --dir=../poc_data import-vault /home/ollo/Documents/Share/Obsidian/DnD
 ```
+
+`poc_data/` is already imported. Re-run only when the importer or the source vault changes.
 
 For development:
 
@@ -470,13 +481,17 @@ Use this as the first message in a new opencode session opened in `/home/ollo/Co
 ```text
 Read docs/REFERENCE.md first for orientation, then docs/campaign-manager-plan.md. The plan is the authoritative design and implementation plan for turning Olea into a campaign manager. Follow it exactly unless I say otherwise.
 
-Create and work on the branch feat/campaign-manager. Make atomic conventional commits on that branch. Do not amend or force-push.
+Work on the existing branch feat/campaign-manager. Batches 1–4 are already complete: schema, importer, assets/maps, paths/FTS, search, rebuild hooks and the world snapshot endpoint. poc_data is imported. Do not redo or rewrite that backend work.
 
-Use subagents for all implementation tasks. Give each subagent a batch of 3–5 related tasks, then start a fresh subagent for the next batch. The main agent orchestrates, reviews each batch, and integrates. Do not parallelize work that touches the same files, migrations, or shared modules; if parallelizing, use separate git worktrees and branches and integrate serially. Every subagent prompt must tell it to read docs/REFERENCE.md and docs/campaign-manager-plan.md first, stay in scope, make atomic conventional commits, run the relevant verification, not touch pb_data/ or data/, and not restore the removed frontend.
+Start with Batch 5 (frontend shell/browse), then Batch 6 (edit/create), then Batch 7 (verification). The frontend is still the placeholder; build it from a clean slate.
 
-QMD MCP is available. Use it when semantic code/docs lookup saves time; verify hits in source. Do not use it instead of reading the plan and reference.
+The PoC frontend is DB-primary with a client-memory cache. Hydrate GET /api/olea/world into a Pinia world store and do browse, detail, backlinks, link resolution and search in memory, like /home/ollo/Code/olgur. Keep the backend and /api/olea/search as the fallback. Images stay /olea/assets/... URLs. Do not remove backend routes or derived tables.
 
-Start with Batch 1 (schema migrations for campaigns/entities/relation_types/relations/mentions/maps/map_markers + raw entity_paths/entity_fts + seeds), then Batch 2 (importer core), Batch 3 (importer finish), Batch 4 (backend lookup), Batch 5 (frontend shell/browse), Batch 6 (frontend edit/create), Batch 7 (verification/reference). Use a fresh poc_data directory; do not touch pb_data. Run the importer against /home/ollo/Documents/Share/Obsidian/DnD and report counts, unresolved links, unknown types/templates, and missing assets.
+Make atomic conventional commits on feat/campaign-manager. Do not amend or force-push. Do not commit data/, pb_data/, poc_data/, generated frontend output, binaries or personal content.
 
-Do not restore the removed frontend. Keep the existing tested Go domain packages. Use Pinia, VueUse, Reka UI selectively, CodeMirror 6, markdown-it, and DOMPurify. Run go -C server test ./..., bun run typecheck, and bun run build. Report verification, commits, and anything you changed from the plan.
+Use subagents for all implementation tasks. Give each subagent a batch of 3–5 related tasks, then start a fresh subagent for the next batch. The main agent orchestrates, reviews each batch, and integrates. Do not parallelize work that touches the same files or shared modules; if parallelizing, use separate git worktrees and branches and integrate serially. Every subagent prompt must tell it to read docs/REFERENCE.md and docs/campaign-manager-plan.md first, stay in scope, make atomic conventional commits, run the relevant verification, not touch pb_data/, data/ or poc_data/, and not restore the removed frontend.
+
+If QMD MCP is configured, use it when semantic code/docs lookup saves time; verify hits in source. If it is not configured, use the normal search tools. Do not use it instead of reading the plan and reference.
+
+Use Pinia, VueUse, Reka UI selectively, CodeMirror 6, markdown-it and DOMPurify. Pinia, VueUse, CodeMirror 6, markdown-it and DOMPurify are not installed yet; add them in the frontend batches. Run go -C server test ./..., bun run typecheck and bun run build. Report verification, commits, and anything you changed from the plan.
 ```

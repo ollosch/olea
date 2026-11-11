@@ -5,10 +5,10 @@
 ## Current state
 
 - Backend and domain logic are implemented and tested.
-- Campaign-manager Batches 1–4 are implemented and tested: schema migrations, the vault importer, asset/map handling, closure paths, FTS, search, rebuild hooks and the world snapshot route.
+- Campaign-manager Batches 1–4 are implemented and tested: schema migrations, the vault importer, asset/map handling, closure paths, FTS, search, rebuild hooks and the world snapshot route. Next is Batch 5 (frontend); Batch 6 and 7 follow.
 - The previous Vue UI and its browser tests were deliberately removed in commit `dbe7c65` at the owner's request. Do **not** restore them. A clean UI is being built.
 - `src/App.vue` is currently a placeholder. Batch 5 will hydrate `GET /api/olea/world` into a Pinia world store and browse/search in memory; the backend remains the source of truth.
-- `poc_data/` contains the imported real vault for the PoC (529 entities, 98 copied assets) and is disposable; regenerate it with `import-vault`. `pb_data/` is untouched by the campaign-manager work.
+- `poc_data/` contains the imported real vault for the PoC (529 entities, 98 copied assets, 2 maps; 2 genuinely missing vault images) and is disposable; regenerate it with `import-vault` only if the importer or source vault changes. `pb_data/` is untouched by the campaign-manager work.
 - `Timeline/` notes are disposable examples; the importer skips them.
 - The campaign-manager design is in `docs/campaign-manager-plan.md`. That file is authoritative for the new work.
 
@@ -52,7 +52,7 @@ bun ci
 bun run build             # vue-tsc + vite build into server/ui/dist
 bun run typecheck
 bun run dev               # Vite only
-bun run dev:all [DATA]    # Go backend + Vite, default pb_data
+bun run dev:all [DATA]    # Go backend + Vite; default pb_data, pass ./poc_data for the PoC
 go -C server test ./...
 go -C server run . serve --http=127.0.0.1:8090 --dir=../pb_data
 go -C server run . --dir=<data> catalog-import <system-key> <json>
@@ -68,7 +68,7 @@ Migrations live in `server/migrations/`; read the relevant migration for exact f
 
 | Collection | Purpose |
 |---|---|
-| `systems` | Rulesets (`dnd5e`, `adnd2e`). |
+| `systems` | Rulesets (`dnd5e`, `adnd2e`, `ose`). |
 | `profiles` | Local display labels and accent; not accounts. |
 | `games` | Mechanics container: name, system, GM profile, encounter visibility. |
 | `characters` | Character name, game, owner profile. |
@@ -91,7 +91,7 @@ Campaign-manager collections and raw tables (migrations `20261111000000`/`202611
 | `relation_types` | Relation key/labels/inverse labels and hierarchy flag; seeded, unknown keys auto-created by the importer. |
 | `relations` | Directed entity relations; unresolved targets keep `unresolved_name`. |
 | `mentions` | Body wikilinks with optional resolved target. |
-| `maps` / `map_markers` | Leaflet map config/image and normalized marker coordinates. |
+| `maps` / `map_markers` | Leaflet map config/image and marker coordinates stored as normalized 0–100 percentages. |
 | `entity_paths` (raw) | Closure table for hierarchical relations; rebuilt after import/saves. |
 | `entity_fts` (raw) | FTS5 index of plain-text entity name/body/type/template/folder; rebuilt after import/saves. |
 
@@ -113,6 +113,7 @@ Do not create one collection per world template.
   - `/api/olea/records/{collection}/{id}/update`
 - `vaultimport.Import`: walks the vault (skips `.obsidian`, `.trash`, `Timeline/`), parses frontmatter, normalizes types/campaigns, upserts entities by `source_path`, syncs relations/mentions, copies assets, extracts leaflet maps, rebuilds paths/FTS and prints a JSON report. Malformed frontmatter is reported and imported with folder inference.
 - `world`: normalization/slugify/folder inference, name/alias resolver, relation/mention sync, asset path helpers, `RebuildPaths`, `RebuildFTS`, `Search`, `Snapshot`, and `RegisterHooks`.
+- `world.Snapshot` (`GET /api/olea/world`) returns full records for all seven world collections and a revision digest. Response keys: `campaigns`, `entities`, `relation_types`, `relations`, `mentions`, `maps`, `map_markers`, `revision`. Records use PocketBase `PublicExport` shapes; entity `campaigns` and relation `from`/`to`/`type` are record IDs, so the frontend resolves them against the loaded lists. The migrated base collections have no `created`/`updated` fields, so `revision` is a SHA-256 digest of the canonical snapshot JSON; do not reintroduce a `MAX(updated)` revision unless timestamp fields are added by a migration.
 - `world.RegisterHooks(app)`: entity saves sync relations/mentions and rebuild paths/FTS; entity deletes rebuild paths and remove the FTS row; relation and relation-type changes rebuild paths. Importer writes use `UnsafeWithoutHooks`.
 - `catalogimport.Import`: upserts by `system/type/source/source_id`, preserves record IDs, alternate descriptions and notes on reimport.
 - `randomtables`: validates dice/range overlap/references; saves and copies transactionally.
@@ -139,6 +140,8 @@ Do not create one collection per world template.
 
 The frontend framework is Vue 3 + TypeScript + Vite + Tailwind CSS 4. The old views/components are gone; the helpers remain. No world store/UI exists yet: Batch 5 adds a Pinia world store hydrated from `GET /api/olea/world`, with in-memory indexes for browse, detail, backlinks and search; `/api/olea/search` stays as the server-side fallback.
 
+Current `package.json` contains only Vue, Vue Router, Reka UI and PocketBase. Pinia, VueUse, CodeMirror 6, markdown-it and DOMPurify are planned for Batches 5–6 and are not installed yet.
+
 ## Conventions
 
 - Versioned migrations; never mutate an applied migration.
@@ -151,7 +154,7 @@ The frontend framework is Vue 3 + TypeScript + Vite + Tailwind CSS 4. The old vi
 - Imported assets live in `<dataDir>/olea-assets/` and are served under `/olea/assets/`; images are not embedded in the snapshot.
 - Use conventional commits and atomic changes; work on the implementation branch specified in the plan.
 - Use Context7 for current library docs when a task depends on a library API.
-- QMD MCP is available. Use it for fast semantic lookup of code/docs when it saves broad exploration; verify results in source.
+- If QMD MCP is configured, use it for fast semantic lookup of code/docs when it saves broad exploration; verify results in source. Otherwise use the normal search/read tools.
 
 ## Orientation reading order
 
